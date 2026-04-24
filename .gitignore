@@ -1,0 +1,54 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Claude Code
+.claude/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# Gradle (lc-checker-api)
+lc-checker-api/.gradle/
+lc-checker-api/build/
+lc-checker-api/out/
+!lc-checker-api/.gradle/.gitkeep
+!lc-checker-api/build/.gitkeep
+
+# Python venvs (local dev)
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# Test output
+test-results/
+coverage/
+
+# Temp files
+*.tmp
+*.swp
+*.swo
+~

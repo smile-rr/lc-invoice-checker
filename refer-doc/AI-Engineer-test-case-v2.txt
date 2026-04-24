@@ -1,0 +1,92 @@
+Case Study: Letter of Credit Document Checker
+
+Background
+----------------
+A Trade Finance platform processes Letters of Credit (LC) issued under UCP 600 rules, supplemented by ISBP 821 guidelines. When an exporter presents documents for payment, a compliance officer must manually verify each document against the LC terms — a process that is time-consuming and error-prone.
+Your task is to build an automated Invoice Checker that ingests an LC (in SWIFT MT700 plain text format) and an Invoice (PDF), then produces a structured discrepancy report.
+
+Problem Statement
+----------------
+Build a backend service / application that:
+- API to accepts both LC (in SWIFT MT700 plain text format) and Invoice (in PDF format) as a file upload input
+- Checks the Invoice against the LC terms using applicable UCP 600 / ISBP 821 rules
+- Returns a JSON discrepancy report
+
+Architectural Requirements
+----------------
+1. Come up with your own architecture design for the solution and preseted it as architectural diagrams and justify your choices during the interview.
+2. Tips: The solution should be modular, allowing for easy extension or modification of the rules and checks implemented, and enabling access to or visualization of intermediate results during processing.
+
+Input Specifications
+-----------------
+1. LC — SWIFT MT700 Plain Text
+   The LC will be provided as a plain text string in standard SWIFT block/field format.
+   (tips: please search this - "sample LC mt700 swift plain text" from your browser and you can select to any sample provide)
+
+2. Invoice — PDF Document
+    A scanned or digitally generated PDF invoice submitted by the beneficiary (exporter). The invoice will contain fields such as:
+    Invoice number & date
+    Seller (beneficiary) name & address
+    Buyer (applicant) name & address
+    Description of goods
+    Quantity and unit price
+    Total amount and currency
+    LC reference number (if stated)
+    Port of loading / destination (if stated)
+
+    (Tips: please search this - "sample beneficiary invoice pdf LC" from your borwser and you can use that pdf for your testing)
+
+Output Specification
+----------------
+The service must return a JSON response in the following format:
+{
+  "compliant": false,
+  "discrepancies": [
+    {
+      "field": "invoice_amount",
+      "lc_value": "USD 50,000.00",
+      "presented_value": "USD 55,000.00",
+      "rule_reference": "UCP 600 Art. 18(b)",
+      "description": "Invoice amount USD 55,000.00 exceeds the LC amount of USD 50,000.00 and tolerance of 10% is not applicable for unit price goods."
+    },
+    {
+      "field": "goods_description",
+      "lc_value": "SUPPLY OF 1000 UNITS OF INDUSTRIAL WIDGETS MODEL NO. IW-2024, CIF SINGAPORE",
+      "presented_value": "500 UNITS OF INDUSTRIAL WIDGETS MODEL IW-2024",
+      "rule_reference": "UCP 600 Art. 18(c) / ISBP 821 Para. C3",
+      "description": "Goods description on invoice does not mirror the LC. Quantity stated is 500 units, LC requires 1000 units."
+    },
+    {
+      "field": "lc_number_reference",
+      "lc_value": "LC2024-000123",
+      "presented_value": null,
+      "rule_reference": "ISBP 821 Para. C1",
+      "description": "Invoice does not indicate the LC number as required by field 46A of the LC."
+    }
+  ]
+}
+
+Checks to Implement
+------------------
+Implement checks based on the following UCP 600 / ISBP 821 rules. (see External References for the link to download full documents)
+
+Constraints & Rules
+------------------
+- The LC must be parsed programmatically from raw SWIFT MT700 text — do not hardcode field values
+- The Invoice must be extracted from the PDF — do not accept pre-parsed JSON as invoice input
+- All discrepancies found must cite the relevant UCP 600 Article or ISBP 821 paragraph
+- The service must handle graceful errors (e.g. unreadable PDF, missing LC fields)
+- No UI is required — a REST API endpoint or a runnable CLI is acceptable
+
+Notes to Candidate
+------------------
+- You are required to use Java, using either Spring AI (https://github.com/spring-projects/spring-ai) or Embabel (https://github.com/embabel) (agentic) framework.
+- You may use open-source LLM / OCR / PDF libraries
+- UCP 600 and ISBP 821 are publicly available documents — familiarity with them is part of the assessment (please see external reference for details)
+- Do not over-engineer — a clean, correct, and testable solution scores higher than an impressive but broken one
+
+External References
+------------------
+please refer to the attached Markdown (.md) file for UCP 600 and ISBP 821 policy that focus on Invoice checking.
+
+Good luck. We are looking forward to seeing how you approach a real-world Trade Finance automation problem.

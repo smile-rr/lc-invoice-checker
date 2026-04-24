@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradeVerify &mdash; LC Invoice Checker</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --navy:   #0d1b2e;
+  --navy2:  #142236;
+  --navy3:  #1c3050;
+  --teal:   #0a7e6a;
+  --teal2:  #0e9e86;
+  --gold:   #c9933a;
+  --red:    #c0392b;
+  --red2:   #e74c3c;
+  --green:  #1a7a52;
+  --green2: #22a06b;
+  --slate:  #e8edf4;
+  --slate2: #f4f6fa;
+  --muted:  #8899aa;
+  --bdark:  rgba(255,255,255,0.08);
+  --blight: #d8e2ec;
+  --warn-bg:#fff8ec;
+  --warn-bd:#f0c060;
+  --pass-bg:#edfaf4;
+  --pass-bd:#7ecba1;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html { font-size:14px; }
+body {
+  font-family:'DM Sans',sans-serif;
+  background:var(--slate2);
+  color:#1a2a3a;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+/* NAV */
+.topnav {
+  background:var(--navy);
+  height:54px;
+  display:flex; align-items:center;
+  padding:0 28px; gap:16px;
+  border-bottom:1px solid var(--bdark);
+  flex-shrink:0;
+}
+.logo {
+  font-family:'DM Serif Display',serif;
+  font-size:18px; color:#fff;
+  display:flex; align-items:center; gap:10px;
+}
+.logo-badge {
+  background:var(--teal);
+  color:#fff;
+  font-family:'DM Sans',sans-serif;
+  font-size:9px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase;
+  padding:2px 7px; border-radius:3px;
+}
+.nav-sep { flex:1; }
+.pills { display:flex; gap:4px; }
+.pill {
+  font-size:12px; font-weight:500;
+  padding:5px 14px; border-radius:20px;
+  cursor:pointer; border:1px solid transparent;
+  transition:all .18s; color:var(--muted);
+}
+.pill.on { background:rgba(255,255,255,.12); color:#fff; border-color:rgba(255,255,255,.18); }
+.pill:hover { color:#fff; background:rgba(255,255,255,.06); }
+
+/* LAYOUT */
+.layout { display:flex; flex:1; overflow:hidden; }
+
+/* SIDEBAR */
+.sidebar {
+  width:258px; background:var(--navy2);
+  flex-shrink:0; overflow-y:auto;
+  padding:20px 0;
+  border-right:1px solid var(--bdark);
+}
+.sb-head {
+  font-size:9px; font-weight:600; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted);
+  padding:0 18px 8px;
+  border-bottom:1px solid var(--bdark);
+  margin-bottom:12px;
+}
+.sb-sec { padding:0 18px 14px; }
+.sb-row { margin-bottom:9px; }
+.sb-lbl { font-size:10px; color:var(--muted); letter-spacing:.04em; margin-bottom:2px; }
+.sb-val {
+  font-size:11.5px; color:#ddeeff;
+  font-family:'DM Mono',monospace;
+  line-height:1.5; word-break:break-all;
+}
+.sb-val.g { color:#5dd9a0; }
+.sb-val.r { color:#f08080; }
+.sb-val.y { color:#f5c842; }
+.sb-div { height:1px; background:var(--bdark); margin:4px 18px 12px; }
+
+/* MAIN */
+.main { flex:1; overflow-y:auto; }
+
+/* UPLOAD SCREEN */
+#su { padding:32px 36px; }
+.pg-title {
+  font-family:'DM Serif Display',serif;
+  font-size:26px; color:var(--navy); margin-bottom:6px;
+}
+.pg-sub { font-size:13px; color:#6a7e90; margin-bottom:28px; }
+
+.upload-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:22px; }
+.ucard {
+  background:#fff; border-radius:10px;
+  border:1.5px dashed var(--blight);
+  padding:26px 22px; cursor:pointer;
+  transition:border-color .2s, box-shadow .2s;
+  position:relative;
+}
+.ucard:hover { border-color:var(--teal2); box-shadow:0 0 0 3px rgba(10,126,106,.08); }
+.ucard.filled { border-style:solid; border-color:var(--teal2); background:#f5fdf9; }
+.uc-icon { font-size:26px; margin-bottom:9px; }
+.uc-title { font-weight:600; font-size:14px; margin-bottom:4px; color:var(--navy); }
+.uc-desc { font-size:11.5px; color:#8899aa; margin-bottom:14px; line-height:1.5; }
+.uc-tag {
+  display:inline-block; font-family:'DM Mono',monospace;
+  font-size:10px; padding:3px 8px; border-radius:4px;
+  background:var(--slate); color:#4a6278;
+}
+.uc-tag.done { background:rgba(10,126,106,.1); color:var(--teal); }
+.uc-check {
+  position:absolute; top:14px; right:14px;
+  width:22px; height:22px; border-radius:50%;
+  background:var(--teal2); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700;
+  opacity:0; transition:opacity .2s;
+}
+.ucard.filled .uc-check { opacity:1; }
+
+.opts-row { display:flex; gap:12px; margin-bottom:20px; align-items:center; }
+.opt-lbl { font-size:12px; color:#6a7e90; }
+.opt-sel {
+  font-family:'DM Sans',sans-serif; font-size:12px;
+  padding:6px 12px; border:1.5px solid var(--blight);
+  border-radius:6px; background:#fff; color:var(--navy);
+  cursor:pointer; outline:none;
+}
+.opt-sel:focus { border-color:var(--teal2); }
+
+.run-btn {
+  width:100%; padding:13px;
+  background:var(--navy); color:#fff;
+  border:none; border-radius:8px;
+  font-family:'DM Sans',sans-serif;
+  font-size:14px; font-weight:600;
+  cursor:pointer; transition:background .2s;
+}
+.run-btn:hover { background:var(--navy3); }
+.run-btn:disabled { opacity:.6; cursor:not-allowed; }
+
+/* PROCESS BAR */
+.proc-bar {
+  background:#fff; border-radius:10px;
+  padding:18px 22px; margin-top:16px;
+  display:none; border:1px solid var(--blight);
+}
+.proc-steps { display:flex; flex-direction:column; gap:9px; }
+.proc-step { display:flex; align-items:center; gap:12px; font-size:12.5px; color:#9aabb8; }
+.proc-step.done { color:var(--green2); }
+.proc-step.run  { color:var(--navy); font-weight:500; }
+.pdot {
+  width:8px; height:8px; border-radius:50%;
+  background:var(--blight); flex-shrink:0;
+}
+.proc-step.done .pdot { background:var(--green2); }
+.proc-step.run  .pdot { background:var(--gold); animation:blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+/* RESULTS SCREEN */
+#sr { display:none; padding:26px 36px; }
+
+.res-hdr {
+  display:flex; align-items:flex-start; gap:18px;
+  background:#fff; border-radius:10px;
+  padding:18px 22px; margin-bottom:18px;
+  border:1px solid var(--blight);
+}
+.verdict {
+  padding:7px 16px; border-radius:6px;
+  font-weight:700; font-size:13px; letter-spacing:.04em;
+  flex-shrink:0; margin-top:2px;
+}
+.verdict.fail { background:#fdecea; color:var(--red2); border:1.5px solid #f5c0b8; }
+.verdict.pass { background:var(--pass-bg); color:var(--green2); border:1.5px solid var(--pass-bd); }
+.res-info { flex:1; }
+.res-info h2 { font-family:'DM Serif Display',serif; font-size:20px; color:var(--navy); margin-bottom:4px; }
+.res-info p  { font-size:12px; color:#6a7e90; line-height:1.7; }
+.res-acts { display:flex; flex-direction:column; gap:6px; margin-left:auto; }
+
+.stats { display:flex; gap:12px; margin-bottom:4px; }
+.stat {
+  background:#fff; border-radius:8px;
+  padding:13px 16px; border:1px solid var(--blight);
+  flex:1; text-align:center;
+}
+.stat-n { font-size:26px; font-weight:700; font-family:'DM Mono',monospace; }
+.stat-l { font-size:11px; color:#8899aa; margin-top:2px; }
+.stat.blue .stat-n { color:#2e86c1; }
+.stat.red  .stat-n { color:var(--red2); }
+.stat.grn  .stat-n { color:var(--green2); }
+
+/* TABS */
+.tabs { display:flex; border-bottom:2px solid var(--blight); margin:18px 0 0; }
+.tab {
+  padding:9px 18px; font-size:13px; font-weight:500;
+  color:#8899aa; cursor:pointer;
+  border-bottom:2px solid transparent; margin-bottom:-2px;
+  transition:all .15s;
+}
+.tab:hover { color:var(--navy); }
+.tab.on { color:var(--navy); border-bottom-color:var(--navy); }
+.cnt {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:18px; height:18px; border-radius:50%;
+  font-size:10px; font-weight:700; margin-left:6px;
+  background:#e0e8f0; color:#6a7e90;
+}
+.tab.on .cnt { background:var(--red2); color:#fff; }
+.tab.on.tpass .cnt { background:var(--green2); color:#fff; }
+
+.panel { display:none; padding:14px 0; }
+.panel.on { display:block; }
+
+/* DISC CARDS */
+.dc {
+  background:#fff; border-radius:8px;
+  margin-bottom:11px; border:1px solid var(--blight);
+  border-left:4px solid var(--red2);
+  overflow:hidden;
+  animation:fadein .22s ease both;
+}
+@keyframes fadein { from{opacity:0;transform:translateY(5px)} }
+.dc:nth-child(1){animation-delay:.04s}
+.dc:nth-child(2){animation-delay:.08s}
+.dc:nth-child(3){animation-delay:.12s}
+.dc:nth-child(4){animation-delay:.16s}
+.dc:nth-child(5){animation-delay:.20s}
+.dc:nth-child(6){animation-delay:.24s}
+.dc-hdr {
+  display:flex; align-items:center; gap:11px;
+  padding:11px 15px; cursor:pointer;
+}
+.dc-hdr:hover { background:#fafbfc; }
+.dc-num {
+  width:24px; height:24px; border-radius:50%;
+  background:var(--red2); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; flex-shrink:0;
+}
+.dc-fname { font-weight:600; font-size:13px; color:var(--navy); flex:1; }
+.dc-rule {
+  font-family:'DM Mono',monospace; font-size:10px; color:var(--teal);
+  background:rgba(10,126,106,.08); padding:3px 8px; border-radius:4px;
+}
+.dc-arr { color:#aaa; font-size:11px; transition:transform .18s; }
+.dc.open .dc-arr { transform:rotate(90deg); }
+.dc-body {
+  display:none; padding:0 15px 13px 50px;
+  border-top:1px solid #f0f4f8;
+}
+.dc.open .dc-body { display:block; }
+.cmp {
+  display:grid; grid-template-columns:1fr 1fr;
+  gap:10px; margin:10px 0;
+}
+.cbox { border-radius:6px; padding:10px 11px; }
+.cbox.lc  { background:#f0f7ff; border:1px solid #c5ddf5; }
+.cbox.inv { background:var(--warn-bg); border:1px solid var(--warn-bd); }
+.clbl {
+  font-size:9px; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; margin-bottom:4px; color:#8a9eb0;
+}
+.cval { font-family:'DM Mono',monospace; font-size:11.5px; color:var(--navy); word-break:break-word; }
+.cval.missing { color:var(--red); font-style:italic; }
+.ddesc { font-size:12px; color:#4a6278; line-height:1.6; margin-top:6px; }
+.sev {
+  display:inline-block; font-size:9px; font-weight:700;
+  letter-spacing:.1em; text-transform:uppercase;
+  padding:2px 7px; border-radius:3px; margin-right:6px;
+  background:#fdecea; color:var(--red2);
+}
+
+/* PASS CARDS */
+.pc {
+  background:#fff; border-radius:8px; margin-bottom:8px;
+  border:1px solid var(--blight); border-left:4px solid var(--green2);
+  padding:11px 14px;
+  display:flex; align-items:flex-start; gap:11px;
+  animation:fadein .2s ease both;
+}
+.picon { color:var(--green2); font-size:14px; margin-top:1px; flex-shrink:0; }
+.pfld  { font-weight:600; font-size:12px; color:var(--navy); }
+.pnote { font-size:11px; color:#7a8ea0; margin-top:2px; line-height:1.5; }
+.prule {
+  font-family:'DM Mono',monospace; font-size:10px; color:var(--teal);
+  background:rgba(10,126,106,.07); padding:2px 7px; border-radius:4px;
+  margin-left:auto; align-self:flex-start; white-space:nowrap;
+}
+
+/* BUTTONS */
+.abtn {
+  padding:7px 16px; border-radius:6px;
+  font-family:'DM Sans',sans-serif; font-size:12px; font-weight:500;
+  cursor:pointer; border:1.5px solid var(--blight);
+  background:#fff; color:var(--navy); transition:all .15s;
+}
+.abtn:hover { border-color:var(--teal2); color:var(--teal); }
+.abtn.pri { background:var(--navy); color:#fff; border-color:var(--navy); }
+.abtn.pri:hover { background:var(--navy3); }
+
+/* JSON PANEL */
+#json-pre {
+  background:#0d1b2e; color:#a8d8a0;
+  font-family:'DM Mono',monospace; font-size:11.5px;
+  padding:20px; border-radius:8px;
+  overflow-x:auto; line-height:1.65;
+  white-space:pre;
+}
+
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-thumb { background:rgba(0,0,0,.15); border-radius:4px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="logo">&#x2B21; TradeVerify <span class="logo-badge">UCP 600</span></div>
+  <div class="nav-sep"></div>
+  <div class="pills">
+    <div class="pill on" id="pnew" onclick="gotoUpload()">New Check</div>
+    <div class="pill"    id="pres" onclick="gotoResults()">Last Results</div>
+  </div>
+</nav>
+
+<div class="layout">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sb-head">LC Parsed Fields</div>
+  <div class="sb-sec">
+    <div class="sb-row"><div class="sb-lbl">LC Number (:20:)</div><div class="sb-val g" id="s0">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Issue Date (:31C:)</div><div class="sb-val" id="s1">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Expiry (:31D:)</div><div class="sb-val" id="s2">&mdash;</div></div>
+  </div>
+  <div class="sb-div"></div>
+  <div class="sb-sec">
+    <div class="sb-row"><div class="sb-lbl">Amount (:32B:)</div><div class="sb-val g" id="s3">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Tolerance (:39A:)</div><div class="sb-val" id="s4">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Rules (:40E:)</div><div class="sb-val" id="s5">&mdash;</div></div>
+  </div>
+  <div class="sb-div"></div>
+  <div class="sb-sec">
+    <div class="sb-row"><div class="sb-lbl">Applicant (:50:)</div><div class="sb-val" id="s6">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Beneficiary (:59:)</div><div class="sb-val" id="s7">&mdash;</div></div>
+  </div>
+  <div class="sb-div"></div>
+  <div class="sb-sec">
+    <div class="sb-row"><div class="sb-lbl">Goods (:45A:)</div><div class="sb-val" id="s8">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Ports (:44A:/44B:)</div><div class="sb-val" id="s9">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Partial Ship (:43P:)</div><div class="sb-val r" id="s10">&mdash;</div></div>
+  </div>
+  <div class="sb-div"></div>
+  <div class="sb-sec">
+    <div class="sb-row"><div class="sb-lbl">Docs Required (:46A:)</div><div class="sb-val y" id="s11">&mdash;</div></div>
+    <div class="sb-row"><div class="sb-lbl">Presentation (:48:)</div><div class="sb-val" id="s12">&mdash;</div></div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+
+  <!-- UPLOAD SCREEN -->
+  <div id="su">
+    <div class="pg-title">Invoice Compliance Check</div>
+    <div class="pg-sub">Upload an LC (SWIFT MT700) and a commercial invoice PDF to run automated UCP 600 / ISBP 821 checks.</div>
+
+    <div class="upload-grid">
+      <div class="ucard" id="clc" onclick="loadLC()">
+        <div class="uc-check">&#10003;</div>
+        <div class="uc-icon">&#128196;</div>
+        <div class="uc-title">Letter of Credit</div>
+        <div class="uc-desc">SWIFT MT700 plain text.<br>Fields 20, 32B, 45A, 46A, 47A&hellip;</div>
+        <span class="uc-tag" id="tlc">+ Upload .txt</span>
+      </div>
+      <div class="ucard" id="cinv" onclick="loadInv()">
+        <div class="uc-check">&#10003;</div>
+        <div class="uc-icon">&#129534;</div>
+        <div class="uc-title">Commercial Invoice</div>
+        <div class="uc-desc">PDF &mdash; scanned or digital.<br>Beneficiary invoice for presentation.</div>
+        <span class="uc-tag" id="tinv">+ Upload .pdf</span>
+      </div>
+    </div>
+
+    <div class="opts-row">
+      <span class="opt-lbl">LLM:</span>
+      <select class="opt-sel">
+        <option>Spring AI &middot; GPT-4o</option>
+        <option>Spring AI &middot; Claude 3.5</option>
+        <option>Embabel &middot; Llama-3</option>
+      </select>
+      <span class="opt-lbl" style="margin-left:8px">Mode:</span>
+      <select class="opt-sel">
+        <option>Full (14 checks)</option>
+        <option>Art. 18 only</option>
+        <option>Custom&hellip;</option>
+      </select>
+    </div>
+
+    <button class="run-btn" id="rbtn" onclick="startCheck()">&#9654; Run Compliance Check</button>
+
+    <div class="proc-bar" id="pbar">
+      <div class="proc-steps">
+        <div class="proc-step" id="ps1"><div class="pdot"></div>Parsing SWIFT MT700 fields&hellip;</div>
+        <div class="proc-step" id="ps2"><div class="pdot"></div>Extracting invoice text from PDF (PDFBox)&hellip;</div>
+        <div class="proc-step" id="ps3"><div class="pdot"></div>Structuring invoice fields via LLM&hellip;</div>
+        <div class="proc-step" id="ps4"><div class="pdot"></div>Running UCP 600 / ISBP 821 rule checks&hellip;</div>
+        <div class="proc-step" id="ps5"><div class="pdot"></div>Generating discrepancy report&hellip;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTS SCREEN -->
+  <div id="sr">
+    <div class="res-hdr">
+      <div class="verdict fail">NON-COMPLIANT</div>
+      <div class="res-info">
+        <h2>INV-2024-0089 &nbsp;vs&nbsp; LC2024-000123</h2>
+        <p>Checked: 15 Nov 2024 09:32 UTC &nbsp;&middot;&nbsp; Widget Exports Pte Ltd &#8594; Sino Imports Co Ltd &nbsp;&middot;&nbsp; LC: USD 50,000 &nbsp;&middot;&nbsp; Invoice: USD 27,500</p>
+      </div>
+      <div class="res-acts">
+        <button class="abtn pri" onclick="dlJSON()">&#8659; Export JSON</button>
+        <button class="abtn" onclick="gotoUpload()">&#8592; New Check</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat blue"><div class="stat-n">14</div><div class="stat-l">Checks Run</div></div>
+      <div class="stat red" ><div class="stat-n">6</div><div class="stat-l">Discrepancies</div></div>
+      <div class="stat grn" ><div class="stat-n">8</div><div class="stat-l">Passed</div></div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab on"    id="td" onclick="tab('d')">Discrepancies <span class="cnt" id="cntd">6</span></div>
+      <div class="tab tpass" id="tp" onclick="tab('p')">Passed Checks <span class="cnt" id="cntp">8</span></div>
+      <div class="tab"       id="tr" onclick="tab('r')">Raw JSON</div>
+    </div>
+
+    <div class="panel on" id="pd"></div>
+    <div class="panel"    id="pp"></div>
+    <div class="panel"    id="pr"><pre id="json-pre"></pre></div>
+  </div>
+
+</main>
+</div>
+
+<script>
+/* ── DATA ─────────────────────────────────────────────── */
+var SB = [
+  ["s0","LC2024-000123"],
+  ["s1","2024-03-15"],
+  ["s2","2024-12-15 / SINGAPORE"],
+  ["s3","USD 50,000.00"],
+  ["s4","+/- 10%"],
+  ["s5","UCP LATEST VERSION"],
+  ["s6","SINO IMPORTS CO LTD\n123 NATHAN ROAD, KOWLOON\nHONG KONG"],
+  ["s7","WIDGET EXPORTS PTE LTD\n88 INDUSTRIAL AVE\nSINGAPORE 638888"],
+  ["s8","1000 UNITS INDUSTRIAL WIDGETS\nMODEL NO. IW-2024\nCIF SINGAPORE / USD 50.00/UNIT"],
+  ["s9","PORT KLANG -> SINGAPORE"],
+  ["s10","NOT ALLOWED"],
+  ["s11","SIGNED INV x3 + B/L FULL SET\n+ CERT OF ORIGIN + PACKING LIST"],
+  ["s12","21 days after B/L date"]
+];
+
+var DISCS = [
+  {
+    seq:1, field:"LC Reference Number",
+    rule:"ISBP 821 Para. C1",
+    lc:"LC2024-000123\n(required by Field 46A)",
+    inv:null,
+    desc:"Field 46A of the LC explicitly requires the invoice to state LC number LC2024-000123. The presented invoice does not reference any LC number."
+  },
+  {
+    seq:2, field:"Trade Terms (Incoterms)",
+    rule:"UCP 600 Art. 18(c) / ISBP 821 Para. C8",
+    lc:"CIF SINGAPORE\n(Field 45A)",
+    inv:"FOB SINGAPORE",
+    desc:"The LC stipulates CIF SINGAPORE in Field 45A. The invoice presents FOB SINGAPORE. CIF and FOB are materially different Incoterms with entirely different risk and cost implications."
+  },
+  {
+    seq:3, field:"Country of Origin",
+    rule:"UCP 600 Art. 18(c) / ISBP 821 Para. C7",
+    lc:"SINGAPORE\n(required by Field 47A)",
+    inv:null,
+    desc:"Field 47A requires the invoice to state country of origin as SINGAPORE. No country of origin is stated on the presented invoice."
+  },
+  {
+    seq:4, field:"Goods Quantity",
+    rule:"UCP 600 Art. 18(c) / ISBP 821 Para. C3",
+    lc:"1000 UNITS\n(Field 45A)",
+    inv:"500 PCS",
+    desc:"The LC requires 1000 units. Invoice presents 500 units, a 50% shortfall. Partial shipments are prohibited per Field 43P and the deviation far exceeds the 10% tolerance under Art. 30(b)."
+  },
+  {
+    seq:5, field:"Unit Price",
+    rule:"UCP 600 Art. 18(b) / ISBP 821 Para. C4",
+    lc:"USD 50.00 PER UNIT\n(Field 45A)",
+    inv:"USD 55.00 PER UNIT",
+    desc:"The LC stipulates unit price USD 50.00 per unit. The invoice states USD 55.00 per unit. A unit price deviation is a standalone discrepancy under ISBP C4, regardless of total invoice amount."
+  },
+  {
+    seq:6, field:"Invoice Signature",
+    rule:"UCP 600 Art. 18(a) / ISBP 821 Para. C2",
+    lc:"SIGNED COMMERCIAL INVOICE\n(required by Field 46A)",
+    inv:"Not signed",
+    desc:"Field 46A calls for a SIGNED commercial invoice. The presented invoice bears no signature, stamp or authentication. Per ISBP C2, when a signed invoice is explicitly required, an unsigned invoice is discrepant."
+  }
+];
+
+var PASSES = [
+  { field:"Beneficiary Name",              note:"'Widget Exports Pte Ltd' matches LC Field 59. Minor capitalisation acceptable per ISBP A14.",      rule:"UCP Art. 18(a) / ISBP C6" },
+  { field:"Applicant Name",                note:"'Sino Imports Co Ltd' matches LC Field 50. Acceptable abbreviation per ISBP A14.",                  rule:"UCP Art. 18(a) / ISBP C5" },
+  { field:"Invoice Currency",              note:"Invoice denominated in USD, matching LC Field 32B currency code.",                                   rule:"UCP Art. 18(b)" },
+  { field:"Amount Within LC Limit",        note:"Invoice total USD 27,500 does not exceed LC maximum USD 50,000. Underdrawing is permissible per Art. 30(c).", rule:"UCP Art. 18(b) / 30(c)" },
+  { field:"Beneficiary Country",           note:"Beneficiary address is in Singapore, matching LC Field 59 country.",                                rule:"UCP Art. 14(e) / ISBP C6" },
+  { field:"Applicant Country",             note:"Applicant address is in Hong Kong, matching LC Field 50 country.",                                  rule:"UCP Art. 14(e) / ISBP C5" },
+  { field:"Invoice Date vs Presentation",  note:"Invoice date 15-Nov-2024 equals presentation date. Not later than presentation date.",              rule:"UCP Art. 14(i) / ISBP A19" },
+  { field:"Presentation within 21 Days",   note:"B/L date 10-Nov-2024 to presentation 15-Nov-2024 = 5 days. Within the 21-day window.",             rule:"UCP Art. 14(c)" }
+];
+
+var JSON_OUT = {
+  request_id:"CHK-20241115-0089",
+  checked_at:"2024-11-15T09:32:14Z",
+  compliant:false,
+  summary:{ total_checks_performed:14, discrepancies_found:6, passed:8 },
+  lc_meta:{
+    lc_number:"LC2024-000123",
+    lc_issue_date:"2024-03-15",
+    lc_expiry_date:"2024-12-15",
+    lc_amount:"USD 50,000.00",
+    tolerance:"10/10",
+    applicant:"SINO IMPORTS CO LTD, 123 NATHAN ROAD, KOWLOON, HONG KONG",
+    beneficiary:"WIDGET EXPORTS PTE LTD, 88 INDUSTRIAL AVENUE, SINGAPORE 638888"
+  },
+  invoice_meta:{
+    invoice_number:"INV-2024-0089",
+    invoice_date:"2024-11-15",
+    presentation_date:"2024-11-15",
+    extracted_seller:"Widget Exports Pte Ltd, Singapore",
+    extracted_buyer:"Sino Imports Co Ltd, Hong Kong",
+    extracted_total:"USD 27,500.00"
+  },
+  discrepancies:[
+    { seq:1, field:"lc_number_reference",  status:"DISCREPANT", lc_value:"LC2024-000123 (required by Field 46A)", presented_value:null,               rule_reference:"ISBP 821 Para. C1",                       severity:"MAJOR", description:"Invoice does not state the LC number as required by Field 46A." },
+    { seq:2, field:"trade_terms_incoterms",status:"DISCREPANT", lc_value:"CIF SINGAPORE (Field 45A)",             presented_value:"FOB SINGAPORE",      rule_reference:"UCP 600 Art. 18(c) / ISBP 821 Para. C8",  severity:"MAJOR", description:"Invoice trade term FOB SINGAPORE contradicts LC requirement CIF SINGAPORE." },
+    { seq:3, field:"country_of_origin",    status:"DISCREPANT", lc_value:"SINGAPORE (required by Field 47A)",     presented_value:null,               rule_reference:"UCP 600 Art. 18(c) / ISBP 821 Para. C7",  severity:"MAJOR", description:"Invoice does not state country of origin as required by Field 47A." },
+    { seq:4, field:"goods_quantity",       status:"DISCREPANT", lc_value:"1000 UNITS (Field 45A)",                presented_value:"500 PCS",            rule_reference:"UCP 600 Art. 18(c) / ISBP 821 Para. C3",  severity:"MAJOR", description:"Invoice quantity 500 units is 50% of LC requirement 1000 units. Partial shipment not allowed." },
+    { seq:5, field:"unit_price",           status:"DISCREPANT", lc_value:"USD 50.00 PER UNIT (Field 45A)",        presented_value:"USD 55.00 PER UNIT", rule_reference:"UCP 600 Art. 18(b) / ISBP 821 Para. C4",  severity:"MAJOR", description:"Unit price on invoice USD 55.00 deviates from LC stipulated USD 50.00." },
+    { seq:6, field:"invoice_signature",    status:"DISCREPANT", lc_value:"SIGNED INVOICE (Field 46A)",            presented_value:"Not signed",         rule_reference:"UCP 600 Art. 18(a) / ISBP 821 Para. C2",  severity:"MAJOR", description:"Invoice is not signed as required by Field 46A." }
+  ],
+  passed_checks:[
+    { field:"beneficiary_name",               rule_reference:"UCP Art. 18(a) / ISBP C6", note:"Corresponds with LC Field 59." },
+    { field:"applicant_name",                 rule_reference:"UCP Art. 18(a) / ISBP C5", note:"Corresponds with LC Field 50." },
+    { field:"currency",                       rule_reference:"UCP Art. 18(b)",            note:"USD matches LC Field 32B." },
+    { field:"amount_within_lc_limit",         rule_reference:"UCP Art. 18(b) / 30(c)",   note:"USD 27,500 does not exceed USD 50,000." },
+    { field:"beneficiary_country",            rule_reference:"UCP Art. 14(e) / ISBP C6", note:"Singapore matches LC Field 59." },
+    { field:"applicant_country",              rule_reference:"UCP Art. 14(e) / ISBP C5", note:"Hong Kong matches LC Field 50." },
+    { field:"invoice_date_vs_presentation",   rule_reference:"UCP Art. 14(i) / ISBP A19",note:"Invoice date not later than presentation date." },
+    { field:"presentation_within_21_days",    rule_reference:"UCP Art. 14(c)",            note:"5 days after B/L date, within 21-day window." }
+  ]
+};
+
+/* ── STATE ───────────────────────────────────────────── */
+var lcLoaded = false, invLoaded = false, resultsBuilt = false;
+
+/* ── SIDEBAR ─────────────────────────────────────────── */
+function populateSidebar() {
+  for (var i = 0; i < SB.length; i++) {
+    document.getElementById(SB[i][0]).textContent = SB[i][1];
+  }
+}
+
+/* ── NAV ─────────────────────────────────────────────── */
+function gotoUpload() {
+  document.getElementById('su').style.display = '';
+  document.getElementById('sr').style.display = 'none';
+  document.getElementById('pnew').classList.add('on');
+  document.getElementById('pres').classList.remove('on');
+}
+function gotoResults() {
+  if (!resultsBuilt) { buildResults(); }
+  document.getElementById('su').style.display = 'none';
+  document.getElementById('sr').style.display = 'block';
+  document.getElementById('pnew').classList.remove('on');
+  document.getElementById('pres').classList.add('on');
+}
+
+/* ── UPLOAD SIMULATION ───────────────────────────────── */
+function loadLC() {
+  lcLoaded = true;
+  document.getElementById('clc').classList.add('filled');
+  document.getElementById('tlc').textContent = 'sample_lc_mt700.txt';
+  document.getElementById('tlc').classList.add('done');
+  populateSidebar();
+}
+function loadInv() {
+  invLoaded = true;
+  document.getElementById('cinv').classList.add('filled');
+  document.getElementById('tinv').textContent = 'sample_invoice.pdf';
+  document.getElementById('tinv').classList.add('done');
+}
+
+/* ── PROCESSING ANIMATION ────────────────────────────── */
+function setPS(n, cls) {
+  document.getElementById('ps' + n).className = 'proc-step ' + cls;
+}
+
+function wait(ms) {
+  return new Promise(function(res) { setTimeout(res, ms); });
+}
+
+async function startCheck() {
+  if (!lcLoaded)  { loadLC(); }
+  if (!invLoaded) { loadInv(); }
+
+  var btn = document.getElementById('rbtn');
+  btn.disabled = true;
+  btn.textContent = 'Processing\u2026';
+  document.getElementById('pbar').style.display = 'block';
+
+  var seq = [
+    {on:1, off:null, ms:550},
+    {on:2, off:1,    ms:820},
+    {on:3, off:2,    ms:950},
+    {on:4, off:3,    ms:1050},
+    {on:5, off:4,    ms:750}
+  ];
+
+  for (var i = 0; i < seq.length; i++) {
+    await wait(seq[i].ms);
+    setPS(seq[i].on, 'run');
+    if (seq[i].off) { setPS(seq[i].off, 'done'); }
+  }
+  await wait(600);
+  setPS(5, 'done');
+  await wait(300);
+
+  document.getElementById('pbar').style.display = 'none';
+  btn.disabled = false;
+  btn.textContent = '\u25B6 Run Compliance Check';
+  for (var k = 1; k <= 5; k++) { setPS(k, ''); }
+
+  buildResults();
+  gotoResults();
+}
+
+/* ── BUILD RESULTS ───────────────────────────────────── */
+function buildResults() {
+  if (resultsBuilt) { return; }
+  resultsBuilt = true;
+
+  /* Discrepancies */
+  var dp = document.getElementById('pd');
+  dp.innerHTML = '';
+  for (var i = 0; i < DISCS.length; i++) {
+    var d = DISCS[i];
+    var invHtml = d.inv === null
+      ? '<div class="cval missing">[ NOT STATED ]</div>'
+      : '<div class="cval">' + d.inv.replace(/\n/g, '<br>') + '</div>';
+    var card = document.createElement('div');
+    card.className = 'dc';
+    card.setAttribute('data-i', i);
+    card.innerHTML =
+      '<div class="dc-hdr" onclick="toggleD(this)">' +
+        '<div class="dc-num">' + d.seq + '</div>' +
+        '<div class="dc-fname">' + d.field + '</div>' +
+        '<div class="dc-rule">' + d.rule + '</div>' +
+        '<div class="dc-arr">&#9654;</div>' +
+      '</div>' +
+      '<div class="dc-body">' +
+        '<div class="cmp">' +
+          '<div class="cbox lc"><div class="clbl">LC Requirement</div><div class="cval">' + d.lc.replace(/\n/g,'<br>') + '</div></div>' +
+          '<div class="cbox inv"><div class="clbl">Invoice Presented</div>' + invHtml + '</div>' +
+        '</div>' +
+        '<div class="ddesc"><span class="sev">MAJOR</span>' + d.desc + '</div>' +
+      '</div>';
+    dp.appendChild(card);
+  }
+
+  /* Passed */
+  var pp = document.getElementById('pp');
+  pp.innerHTML = '';
+  for (var j = 0; j < PASSES.length; j++) {
+    var p = PASSES[j];
+    var pc = document.createElement('div');
+    pc.className = 'pc';
+    pc.innerHTML =
+      '<div class="picon">&#10003;</div>' +
+      '<div><div class="pfld">' + p.field + '</div><div class="pnote">' + p.note + '</div></div>' +
+      '<div class="prule">' + p.rule + '</div>';
+    pp.appendChild(pc);
+  }
+
+  /* Raw JSON */
+  document.getElementById('json-pre').textContent = JSON.stringify(JSON_OUT, null, 2);
+}
+
+/* ── TABS ────────────────────────────────────────────── */
+function tab(name) {
+  var map  = { d:'td', p:'tp', r:'tr' };
+  var pmap = { d:'pd', p:'pp', r:'pr' };
+  var tabs = ['d','p','r'];
+  for (var i = 0; i < tabs.length; i++) {
+    var t = tabs[i];
+    document.getElementById(map[t]).classList.toggle('on', t === name);
+    document.getElementById(pmap[t]).classList.toggle('on', t === name);
+  }
+}
+
+function toggleD(hdr) {
+  hdr.closest('.dc').classList.toggle('open');
+}
+
+/* ── DOWNLOAD ────────────────────────────────────────── */
+function dlJSON() {
+  var blob = new Blob([JSON.stringify(JSON_OUT, null, 2)], {type:'application/json'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'lc_check_LC2024-000123.json';
+  a.click();
+}
+
+/* ── INIT ────────────────────────────────────────────── */
+gotoUpload();
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Keep the build context small and cache-friendly.
+# Anything NOT required by `gradle bootJar` should live here.
+
+# Gradle / IDE / OS
+.gradle/
+build/
+out/
+bin/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Logs & local runtime
+logs/
+*.log
+
+# Tests + fixtures (built in CI, not needed to package the jar)
+# NOTE: this excludes src/test/** because we `-x test` in the Dockerfile.
+# If we ever move to a "test during build" model, remove this line.
+src/test/
+
+# Env files and local secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Docker / compose — avoid recursion
+Dockerfile
+.dockerignore
+docker-compose*.yml

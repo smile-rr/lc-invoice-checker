@@ -1,0 +1,87 @@
+# syntax=docker/dockerfile:1.7
+#
+# docling-svc — Single-stage dev image for LC Invoice Checker.
+# Layer ordering: deps first (cached across code edits), then source.
+#
+# Pre-warm: models download + initialize during build so startup is instant.
+#
+# Usage (with HF token for faster downloads):
+#   docker build -t lc-checker/docling:dev \
+#        --build-arg HF_TOKEN=hf_xxx \
+#        -f extractors/docling/Dockerfile.dev extractors/docling
+#   docker run --rm -p 8081:8081 \
+#        -e HF_TOKEN=hf_xxx \
+#        --env-file .env \
+#        lc-checker/docling:dev
+#
+# Usage (no token — models downloaded anonymously, slower first run):
+#   docker build -t lc-checker/docling:dev -f extractors/docling/Dockerfile.dev extractors/docling
+#   docker run --rm -p 8081:8081 --env-file .env lc-checker/docling:dev
+
+FROM python:3.12-slim
+
+ARG HF_TOKEN=
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        libgl1 \
+        libglib2.0-0 \
+        libxext6 \
+        libxrender1 \
+        libsm6 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (pinned image, not :latest)
+COPY --from=ghcr.io/astral-sh/uv:0.4 /uv /usr/local/bin/uv
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LOG_LEVEL=INFO \
+    HF_TOKEN=${HF_TOKEN:-}
+
+WORKDIR /app
+
+# 1. Copy deps metadata — cached unless pyproject.toml or uv.lock changes
+COPY pyproject.toml README.md ./
+
+# 2. Install deps into venv — cached unless deps change
+RUN uv venv /app/.venv \
+    && . /app/.venv/bin/activate \
+    && uv pip install --no-cache -e .
+
+# 3. Copy source — always busts cache after this line, but deps step above is cached
+COPY app ./app
+
+# 4. Copy sample PDF for build-time warm-up (model download + init)
+COPY sample_invoice.pdf /tmp/sample_invoice.pdf
+
+# 5. Pre-warm: trigger Docling model download and converter init during build.
+#    This bakes the models into the image layer so container startup is instant.
+RUN . /app/.venv/bin/activate \
+    && python -c " \
+        import sys, logging; \
+        logging.basicConfig(level=logging.INFO, format='%(message)s'); \
+        sys.path.insert(0, '/app'); \
+        from app.docling_extractor import warm_up, convert_pdf_path; \
+        from pathlib import Path; \
+        print('PRE-WARM: initializing Docling models...'); \
+        warm_up(); \
+        print('PRE-WARM: warming with sample PDF...'); \
+        result = convert_pdf_path(Path('/tmp/sample_invoice.pdf')); \
+        print(f'PRE-WARM: done — confidence={result.confidence}, pages={result.pages}'); \
+    " \
+    && rm /tmp/sample_invoice.pdf
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+    CMD curl -fsS http://localhost:8081/health || exit 1
+
+CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8081"]

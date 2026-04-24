@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Prod JSON logging — Loki / Elasticsearch / Datadog-ingestable.
+
+  Each log line becomes a single JSON object via logstash-logback-encoder.
+  The `mdc` key carries every value the MdcFilter populated so downstream queries
+  can group by sessionId / ruleId / stage without regex.
+-->
+<configuration>
+
+    <appender name="STDOUT-JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <fieldName>ts</fieldName>
+                </timestamp>
+                <version/>
+                <logLevel/>
+                <loggerName/>
+                <threadName/>
+                <message/>
+                <stackTrace/>
+                <mdc/>
+                <context/>
+                <pattern>
+                    <pattern>
+                        {
+                          "app": "lc-checker-api"
+                        }
+                    </pattern>
+                </pattern>
+            </providers>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT-JSON"/>
+    </root>
+    <logger name="com.lc.checker" level="INFO"/>
+    <logger name="org.springframework.ai" level="INFO"/>
+
+</configuration>

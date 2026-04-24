@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local / dev console logging.
+
+  MDC keys surfaced here are a subset of what MdcFilter populates on every request:
+    - sessionId : UUID for the /lc-check call
+    - stage     : parse | extract | activate | check | assemble
+    - ruleId    : populated during check execution
+    - checkType : A | B | AB | SPI
+    - llmModel  : populated around ChatClient calls
+
+  The `prod` profile swaps in logback-json.xml for Loki/ELK-friendly JSON output.
+-->
+<configuration>
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- Human-friendly pattern for local dev. Includes MDC keys inline so logs are greppable. -->
+    <springProfile name="default | dev | !prod">
+        <appender name="CONSOLE-DEV" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level %-36logger{36} [sid=%X{sessionId:--} stage=%X{stage:--} rule=%X{ruleId:--} type=%X{checkType:--} model=%X{llmModel:--}] - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE-DEV"/>
+        </root>
+        <logger name="com.lc.checker" level="DEBUG"/>
+        <logger name="org.springframework.ai" level="INFO"/>
+    </springProfile>
+
+    <!-- Prod: JSON. Loaded from logback-json.xml so we can re-use it standalone if needed. -->
+    <springProfile name="prod">
+        <include resource="logback-json.xml"/>
+    </springProfile>
+
+</configuration>

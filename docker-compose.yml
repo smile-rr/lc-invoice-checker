@@ -1,0 +1,158 @@
+# lc-checker — V1 stack
+#
+# Services wired in V1:
+#   - lc-checker-api   Java 21 Spring Boot 3 / Spring AI    :8080
+#   - docling-svc      Python FastAPI (Docling)             :8081
+#
+# V1.5 additions (kept commented until owner is ready):
+#   - mineru-svc       Python FastAPI (MiniRU fallback)     :8082
+#
+# Quick start:
+#   cp .env.example .env   # fill LLM_API_KEY
+#   docker compose up -d
+#   curl -fsS http://localhost:8080/actuator/health
+#
+# Owner: devops. See docs/jdk21-install.md for local JDK setup.
+# ---------------------------------------------------------------------------
+
+name: lc-checker
+
+services:
+
+  lc-checker-api:
+    build:
+      context: ./lc-checker-api
+      dockerfile: Dockerfile
+    image: lc-checker/api:dev
+    container_name: lc-checker-api
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      # --- Spring / logging --------------------------------------------------
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-default}
+      SERVER_PORT: "8080"
+      JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+
+      # --- LLM (OpenAI-compatible; DeepSeek primary, MiniMax fallback) ------
+      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY must be set (see .env.example)}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-https://api.minimaxi.chat/v1}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-MiniMax-Text-01}
+
+      # --- Extractor routing -------------------------------------------------
+      EXTRACTOR_VISION_ENABLED: "${EXTRACTOR_VISION_ENABLED:-true}"
+      EXTRACTOR_DOCLING_ENABLED: "${EXTRACTOR_DOCLING_ENABLED:-true}"
+      EXTRACTOR_DOCLING_URL: "http://docling-svc:8081"
+      # EXTRACTOR_MINERU_URL: "http://mineru-svc:8082"     # uncomment with V1.5
+      EXTRACTOR_CONFIDENCE_THRESHOLD: "0.80"
+      EXTRACTOR_TIMEOUT_SECONDS: "30"
+
+      # --- Vision LLM (V1.5 primary extractor) --------------------------------
+      # Provider: ollama | qwen | gemini
+      VISION_PROVIDER: "${VISION_PROVIDER:-ollama}"
+      VISION_BASE_URL: "${VISION_BASE_URL:-http://host.docker.internal:11434/v1}"
+      VISION_MODEL: "${VISION_MODEL:-moondream:2b}"
+      VISION_API_KEY: "${VISION_API_KEY:-}"
+      VISION_TEMPERATURE: "${VISION_TEMPERATURE:-0.0}"
+      VISION_RENDER_SCALE: "${VISION_RENDER_SCALE:-1.5}"
+      VISION_TIMEOUT_SECONDS: "${VISION_TIMEOUT_SECONDS:-120}"
+    depends_on:
+      docling-svc:
+        condition: service_healthy
+      # mineru-svc:
+      #   condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - lc-checker-net
+
+  docling-svc:
+    build:
+      context: ./extractors/docling
+      dockerfile: Dockerfile
+    image: lc-checker/docling-svc:dev
+    container_name: docling-svc
+    ports:
+      - "${DOCLING_PORT:-8081}:8081"
+    environment:
+      # Docling may call the same LLM for structured-field extraction on its
+      # side (per extractors/CONTRACT.md). Share creds; service treats them as
+      # optional when a local heuristic suffices.
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LOG_LEVEL: ${DOCLING_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - lc-checker-net
+
+  # ---------------------------------------------------------------------------
+  # V1.5 — Vision LLM primary extractor
+  # Requires M1 Mac with Ollama installed: `brew install ollama && ollama pull moondream:2b`
+  # For GPU acceleration on Linux with NVIDIA: add deploy.resources.reservations.devices.
+  # For cloud vision (no Ollama needed): set VISION_PROVIDER=qwen or gemini in .env.
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lc-checker-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      ollama-data:/root/.ollama
+    # M1 Mac: CPU-only via Rosetta; for NVIDIA GPU add:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - lc-checker-net
+
+  # ---------------------------------------------------------------------------
+  # V1.5 — enable when extractor-dev delivers extractors/mineru/
+  # ---------------------------------------------------------------------------
+  # mineru-svc:
+  #   build:
+  #     context: ./extractors/mineru
+  #     dockerfile: Dockerfile
+  #   image: lc-checker/mineru-svc:dev
+  #   container_name: mineru-svc
+  #   ports:
+  #     - "${MINERU_PORT:-8082}:8082"
+  #   environment:
+  #     LLM_API_KEY: ${LLM_API_KEY:-}
+  #     LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+  #     LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+  #     LOG_LEVEL: ${MINERU_LOG_LEVEL:-INFO}
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     start_period: 30s
+  #     retries: 3
+  #   restart: unless-stopped
+  #   networks:
+  #     - lc-checker-net
+
+volumes:
+  ollama-data:
+    name: lc-checker-ollama-data
+
+networks:
+  lc-checker-net:
+    name: lc-checker-net
+    driver: bridge
