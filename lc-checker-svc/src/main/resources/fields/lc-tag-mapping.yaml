@@ -2,144 +2,39 @@
 # lc-tag-mapping.yaml — MT700 tag → canonical field key dispatch.
 # =============================================================================
 #
-# Each tag declares:
-#   field_keys: list of canonical keys it populates (every key MUST exist in field-pool.yaml)
-#   parser:     ParserType enum value (see com.lc.checker.domain.common.ParserType)
-#   mandatory:  fail-fast at parse if absent
-#   defaults:   optional per-key default applied when the tag is absent
+# Each row: tag → { field_keys, parser, mandatory, defaults? }.
+#   field_keys      — must exist in field-pool.yaml (validated at startup)
+#   parser          — ParserType enum (com.lc.checker.domain.common.ParserType)
+#   mandatory       — fail-fast at parse if absent
+#   defaults        — per-key default applied when the tag is absent
 #
-# Adding a tag only requires editing this file (and field-pool.yaml if a new
-# canonical key is needed). No Java change.
+# Adding a tag = one new line here (and a new row in field-pool.yaml only if
+# the canonical key doesn't yet exist). No Java change.
 
 mt700:
   official_tags:
-
-    "20":
-      field_keys: [lc_number]
-      parser: SIMPLE_STRING
-      mandatory: true
-
-    "31C":
-      field_keys: [issue_date]
-      parser: DATE_YYMMDD
-      mandatory: false
-
-    "31D":
-      field_keys: [expiry_date, expiry_place]
-      parser: DATE_PLUS_TEXT
-      mandatory: true
-
-    "32B":
-      field_keys: [credit_currency, credit_amount]
-      parser: AMOUNT_WITH_CURRENCY
-      mandatory: true
-
-    "39A":
-      field_keys: [tolerance_plus, tolerance_minus]
-      parser: SLASH_SEPARATED_INT
-      mandatory: false
-      defaults:
-        tolerance_plus: 0
-        tolerance_minus: 0
-
-    "39B":
-      field_keys: [max_amount_flag]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "40E":
-      field_keys: [applicable_rules]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "43P":
-      field_keys: [partial_shipment]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "43T":
-      field_keys: [transhipment]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "44A":
-      field_keys: [place_of_receipt]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "44B":
-      field_keys: [place_of_delivery]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "44C":
-      field_keys: [latest_shipment_date]
-      parser: DATE_YYMMDD
-      mandatory: false
-
-    "44D":
-      field_keys: [shipment_period]
-      parser: MULTILINE_FULL
-      mandatory: false
-
-    "44E":
-      field_keys: [port_of_loading]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "44F":
-      field_keys: [port_of_discharge]
-      parser: SIMPLE_STRING
-      mandatory: false
-
-    "45A":
-      field_keys: [goods_description, incoterms]
-      parser: MULTILINE_FULL
-      mandatory: true
-
-    "46A":
-      field_keys: [documents_required]
-      parser: DOCUMENT_LIST
-      mandatory: false
-
-    "47A":
-      field_keys: [additional_conditions]
-      parser: MULTILINE_FULL
-      mandatory: false
-
-    "48":
-      field_keys: [presentation_days]
-      parser: INT_BEFORE_SLASH
-      mandatory: false
-      defaults:
-        presentation_days: 21
-
-    "50":
-      field_keys: [applicant_name, applicant_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: true
-
-    "50B":
-      field_keys: [applicant_name, applicant_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: false
-
-    "50F":
-      field_keys: [applicant_name, applicant_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: false
-
-    "59":
-      field_keys: [beneficiary_name, beneficiary_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: true
-
-    "59A":
-      field_keys: [beneficiary_name, beneficiary_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: false
-
-    "59F":
-      field_keys: [beneficiary_name, beneficiary_address]
-      parser: MULTILINE_FIRST_LINE
-      mandatory: false
+    "20":  { field_keys: [lc_number],                       parser: SIMPLE_STRING,        mandatory: true }
+    "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: false }
+    "31D": { field_keys: [expiry_date, expiry_place],       parser: DATE_PLUS_TEXT,       mandatory: true }
+    "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true }
+    "39A": { field_keys: [tolerance_plus, tolerance_minus], parser: SLASH_SEPARATED_INT,  mandatory: false, defaults: { tolerance_plus: 0, tolerance_minus: 0 } }
+    "39B": { field_keys: [max_amount_flag],                 parser: SIMPLE_STRING,        mandatory: false }
+    "40E": { field_keys: [applicable_rules],                parser: SIMPLE_STRING,        mandatory: false }
+    "43P": { field_keys: [partial_shipment],                parser: SIMPLE_STRING,        mandatory: false }
+    "43T": { field_keys: [transhipment],                    parser: SIMPLE_STRING,        mandatory: false }
+    "44A": { field_keys: [place_of_receipt],                parser: SIMPLE_STRING,        mandatory: false }
+    "44B": { field_keys: [place_of_delivery],               parser: SIMPLE_STRING,        mandatory: false }
+    "44C": { field_keys: [latest_shipment_date],            parser: DATE_YYMMDD,          mandatory: false }
+    "44D": { field_keys: [shipment_period],                 parser: MULTILINE_FULL,       mandatory: false }
+    "44E": { field_keys: [port_of_loading],                 parser: SIMPLE_STRING,        mandatory: false }
+    "44F": { field_keys: [port_of_discharge],               parser: SIMPLE_STRING,        mandatory: false }
+    "45A": { field_keys: [goods_description, incoterms],    parser: MULTILINE_FULL,       mandatory: true }
+    "46A": { field_keys: [documents_required],              parser: DOCUMENT_LIST,        mandatory: false }
+    "47A": { field_keys: [additional_conditions],           parser: MULTILINE_FULL,       mandatory: false }
+    "48":  { field_keys: [presentation_days],               parser: INT_BEFORE_SLASH,     mandatory: false, defaults: { presentation_days: 21 } }
+    "50":  { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: true }
+    "50B": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }
+    "50F": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }
+    "59":  { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: true }
+    "59A": { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: false }
+    "59F": { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: false }
