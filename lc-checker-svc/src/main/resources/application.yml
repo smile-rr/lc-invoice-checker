@@ -60,16 +60,12 @@ server:
 # locally by setting EXTRACTOR_DOCLING_ENABLED=true and starting the full profile:
 #   docker compose --profile full up -d
 extractor:
+  # Two vision-LLM sources fire in parallel against the same PDF; the first
+  # SUCCESS in chain priority order wins (local first, then remote). Threshold
+  # is a WARN-only signal — local_vision wins regardless of its confidence.
   vision-enabled:        ${EXTRACTOR_VISION_ENABLED:true}        # remote vision LLM (Qwen Cloud, OpenAI, etc.)
-  local-vision-enabled:  ${EXTRACTOR_LOCAL_VISION_ENABLED:false} # local vision LLM (Ollama on this host)
-  docling-enabled:       ${EXTRACTOR_DOCLING_ENABLED:false}
-  docling-url:           ${EXTRACTOR_DOCLING_URL:http://localhost:8081}
-  mineru-enabled:        ${EXTRACTOR_MINERU_ENABLED:false}
-  mineru-url:            ${EXTRACTOR_MINERU_URL:http://localhost:8082}
+  local-vision-enabled:  ${EXTRACTOR_LOCAL_VISION_ENABLED:false} # local vision LLM (MLX server / Ollama on this host)
   confidence-threshold:  ${EXTRACTOR_CONFIDENCE_THRESHOLD:0.80}
-  timeout-seconds:       ${EXTRACTOR_TIMEOUT_SECONDS:30}
-  retries:               1
-  retry-backoff-ms:      500
 
 # --- Vision LLM extractor (V1.5 primary) ------------------------------------
 # Uses Spring AI ChatModel + Media API. Provider-agnostic — all providers speak

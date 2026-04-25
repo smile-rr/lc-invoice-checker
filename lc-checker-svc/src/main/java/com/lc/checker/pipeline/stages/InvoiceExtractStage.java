@@ -60,7 +60,7 @@ public class InvoiceExtractStage implements Stage {
             ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_COMPLETED, name(),
                     Map.of("durationMs", dur, "output", inv)));
             log.debug("Stage 1b complete: invoice_extract selected={}",
-                    extractionOrchestrator.extractorName());
+                    extractionOrchestrator.lastUsedSource());
         } catch (RuntimeException e) {
             long dur = System.currentTimeMillis() - t0;
             metrics.recordStage(PipelineMetrics.TIMER_EXTRACT, dur, "failed");

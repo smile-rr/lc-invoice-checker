@@ -5,12 +5,11 @@ import com.lc.checker.domain.result.LlmTrace;
 import java.util.List;
 
 /**
- * Output of a single {@link InvoiceExtractor} invocation. Carries the mapped
- * {@link InvoiceDocument} plus any LLM traces the extractor captured (empty for
- * non-LLM extractors such as Docling / MinerU).
+ * Output of a single vision-LLM extractor invocation. Carries the mapped
+ * {@link InvoiceDocument} plus the LLM traces (request/response/latency).
  *
- * <p>The orchestrator persists one {@code stage_invoice_extract} row per result:
- * {@code inv_output = document}, {@code llm_calls = llmCalls}.
+ * <p>The orchestrator persists one {@code pipeline_steps} row per result:
+ * {@code result.document = document}, {@code result.llm_calls = llmCalls}.
  */
 public record ExtractionResult(
         InvoiceDocument document,

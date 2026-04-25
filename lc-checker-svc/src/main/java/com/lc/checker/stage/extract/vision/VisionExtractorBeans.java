@@ -21,7 +21,7 @@ import org.springframework.web.client.RestClient;
  *
  * <p>Two beans, one class. Each instance carries its own {@link VisionExtractorConfig}
  * (URL, API key, model, timeout, source name) and writes its own row to
- * {@code pipeline_steps} via {@link com.lc.checker.stage.extract.InvoiceExtractor#extractorName()}.
+ * {@code pipeline_steps} via {@link VisionLlmExtractor#extractorName()}.
  *
  * <p>The orchestrator picks them up via {@code @Qualifier("remoteVisionExtractor")} and
  * {@code ObjectProvider<VisionLlmExtractor>} — the latter so the orchestrator boots
@@ -34,7 +34,7 @@ public class VisionExtractorBeans {
     public VisionLlmExtractor remoteVisionExtractor(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
-            VisionInvoiceMapper mapper,
+            com.lc.checker.stage.extract.InvoiceFieldMapper mapper,
             ObjectMapper json,
             FieldPoolRegistry fieldPool,
             @Value("${vision.base-url}") String baseUrl,
@@ -52,7 +52,7 @@ public class VisionExtractorBeans {
     public VisionLlmExtractor localVisionExtractor(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
-            VisionInvoiceMapper mapper,
+            com.lc.checker.stage.extract.InvoiceFieldMapper mapper,
             ObjectMapper json,
             FieldPoolRegistry fieldPool,
             @Value("${local-vision.base-url:http://localhost:11434/v1}") String baseUrl,

@@ -12,22 +12,27 @@ import com.lc.checker.stage.check.strategy.TypeBStrategy;
 import com.lc.checker.stage.extract.vision.VisionLlmExtractor;
 
 /**
- * Single point where Spring AI enters the application.
+ * Single point where Spring AI enters the application — for the <b>text LLM</b>
+ * only (Type-B / Type-AB semantic rule checks).
  *
- * <p>Spring AI is used <b>only</b> for LLM inference (Type-B / Type-AB semantic rule
- * checks and Vision-LLM invoice extraction). The Docling / MinerU extractor hops use
- * plain {@code RestClient} — see {@code memory/feedback_spring_ai_scope.md} for rationale.
- *
- * <p>Provider swap is a runtime concern: set {@code LLM_BASE_URL} / {@code LLM_MODEL} /
- * {@code LLM_API_KEY} env vars and the OpenAI-compatible client targets DeepSeek (default),
- * MiniMax, or any compliant endpoint. Temperature is pinned to {@code 0.0} in
- * {@code application.yml} for deterministic compliance-check output.
- *
- * <p>Two {@link ChatModel} beans exist in the app:
+ * <p><b>Vision LLM extraction does NOT use Spring AI.</b> {@code VisionLlmExtractor}
+ * goes through a plain {@code RestClient} against an OpenAI-compatible
+ * {@code /chat/completions} endpoint. Rationale:
  * <ul>
- *   <li>{@code openAiChatModel} (auto-configured, @Primary) — language LLM for TypeBStrategy / TypeABStrategy</li>
- *   <li>{@code visionChatModel} (named) — vision LLM for VisionLlmExtractor</li>
+ *   <li>Two vision instances run side-by-side (remote Qwen Cloud + local MLX server) —
+ *       both speak the same OpenAI-compatible protocol; switching is a config-only swap.</li>
+ *   <li>Spring AI's multimodal support is provider-specific (response_format, image
+ *       payload shapes) and would constrain provider choice / version coupling.</li>
+ *   <li>Our prompt + parser tolerate the JSON-or-text response variability that small
+ *       vision models exhibit; a strict {@code .entity(...)} mapping would be brittle.</li>
  * </ul>
+ * See {@code extractors/README.md} for the canonical-field flow that ties both
+ * extractors back into the field-pool registry.
+ *
+ * <p>Provider swap (text LLM): set {@code LLM_BASE_URL} / {@code LLM_MODEL} /
+ * {@code LLM_API_KEY} env vars; the OpenAI-compatible client targets DeepSeek
+ * (default), MiniMax, or any compliant endpoint. Temperature is pinned to {@code 0.0}
+ * in {@code application.yml} for deterministic compliance-check output.
  */
 @Configuration
 public class ChatClientConfig {
@@ -44,9 +49,9 @@ public class ChatClientConfig {
 
     /**
      * Marks the auto-configured language {@link ChatModel} as Primary, so that
-     * {@code ChatClient.Builder} (auto-configured by Spring AI) resolves to it unambiguously.
-     * The vision extractor uses its own named {@code visionChatModel} bean via
-     * {@code @Qualifier("visionChatModel")} in {@link VisionLlmExtractor}.
+     * {@code ChatClient.Builder} (auto-configured by Spring AI) resolves to it
+     * unambiguously. {@link VisionLlmExtractor} bypasses Spring AI entirely
+     * (see class javadoc).
      */
     @Bean
     @Primary

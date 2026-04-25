@@ -8,7 +8,7 @@ import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractionResult;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
-import com.lc.checker.stage.extract.InvoiceExtractor;
+import com.lc.checker.stage.extract.InvoiceFieldMapper;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
 import java.io.IOException;
@@ -42,14 +42,14 @@ import org.springframework.web.client.RestClient;
  * {@link #extractorName()} so each instance writes its own row to
  * {@code pipeline_steps} and can be distinguished in SSE events / UI.
  */
-public class VisionLlmExtractor implements InvoiceExtractor {
+public class VisionLlmExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(VisionLlmExtractor.class);
     private static final String PROMPT_TEMPLATE = "prompts/vision-invoice-extract.st";
 
     private final RestClient restClient;
     private final PdfRenderer renderer;
-    private final VisionInvoiceMapper mapper;
+    private final InvoiceFieldMapper mapper;
     private final ObjectMapper json;
     private final FieldPoolRegistry fieldPool;
     private final String name;
@@ -62,7 +62,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
             RestClient.Builder restClientBuilder,
             VisionExtractorConfig config,
             PdfRenderer renderer,
-            VisionInvoiceMapper mapper,
+            InvoiceFieldMapper mapper,
             ObjectMapper json,
             FieldPoolRegistry fieldPool) {
         this.name = config.name();
@@ -89,7 +89,6 @@ public class VisionLlmExtractor implements InvoiceExtractor {
                 (apiKey != null && !apiKey.isBlank()) ? "bearer" : "none");
     }
 
-    @Override
     public ExtractionResult extract(byte[] pdfBytes, String filename) {
         long start = System.currentTimeMillis();
 
@@ -416,7 +415,6 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 
-    @Override
     public String extractorName() {
         return name;
     }
