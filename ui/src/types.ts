@@ -35,7 +35,8 @@ export type FieldType =
   | 'ENUM'
   | 'MULTILINE_TEXT'
   | 'DOCUMENT_LIST'
-  | 'CURRENCY_CODE';
+  | 'CURRENCY_CODE'
+  | 'TABLE';
 
 /** One row of /api/v1/fields. The single source of truth for field metadata. */
 export interface FieldDefinition {
@@ -149,6 +150,7 @@ export interface InvoiceDocument {
   raw_markdown: string | null;
   raw_text: string | null;
   envelope: FieldEnvelope;
+  parsed_rows: ParsedRow[];
 }
 
 export type CheckStatus =

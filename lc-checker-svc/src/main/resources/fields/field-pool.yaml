@@ -15,7 +15,10 @@
 # Schema (per row):
 #   key:            REQUIRED. snake_case. Globally unique.
 #   name_en/name_zh:REQUIRED.
-#   type:           STRING|AMOUNT|DATE|INTEGER|ENUM|MULTILINE_TEXT|DOCUMENT_LIST|CURRENCY_CODE
+#   type:           STRING|AMOUNT|DATE|INTEGER|ENUM|MULTILINE_TEXT|DOCUMENT_LIST|CURRENCY_CODE|TABLE
+#                   TABLE rows declare a `columns:` block — each column has its
+#                   own type + scoped invoice_aliases. Storage shape:
+#                   List<Map<String,Object>>.
 #   applies_to:     subset of [LC, INVOICE]
 #   source_tags:    MT700 tags producing this on the LC side
 #   invoice_aliases:extractor key variants (replaces the old normaliseKey)
@@ -70,7 +73,7 @@ fields:
   - { key: presentation_days,   name_en: Presentation Days,   name_zh: 单据提示期(天), type: INTEGER,    applies_to: [LC],          source_tags: ["48"],  rule_relevant: true,  default_value: 21, group: shipment }
 
   # ─── Documents / conditions ───────────────────────────────────────────
-  - { key: goods_description,   name_en: Goods Description,   name_zh: 货物描述,    type: MULTILINE_TEXT, applies_to: [LC, INVOICE], source_tags: ["45A"], invoice_aliases: [description, items, goods, item_description], rule_relevant: true, group: documents }
+  - { key: goods_description,   name_en: Goods Description,   name_zh: 货物描述,    type: MULTILINE_TEXT, applies_to: [LC, INVOICE], source_tags: ["45A"], invoice_aliases: [description, goods, item_description], rule_relevant: true, group: documents }
   - { key: incoterms,           name_en: Incoterms,           name_zh: 贸易术语,    type: ENUM,          applies_to: [LC, INVOICE], source_tags: ["45A"], enum_values: [CIF, CFR, FOB, EXW, FCA, CPT, CIP, DAP, DPU, DDP], invoice_aliases: [trade_terms, delivery_terms, terms], rule_relevant: true, group: documents }
   - { key: documents_required,  name_en: Documents Required,  name_zh: 要求单据,    type: DOCUMENT_LIST, applies_to: [LC],          source_tags: ["46A"], rule_relevant: true,  group: documents }
   - { key: additional_conditions, name_en: Additional Conditions, name_zh: 附加条件, type: MULTILINE_TEXT, applies_to: [LC],         source_tags: ["47A"], rule_relevant: false, group: documents }
@@ -82,10 +85,36 @@ fields:
   # ─── Invoice-only (Tier A — UCP-mandated) ─────────────────────────────
   - { key: invoice_number,      name_en: Invoice Number,      name_zh: 发票号,      type: STRING,        applies_to: [INVOICE], invoice_aliases: [invoice_no, inv_number, invoicenumber], rule_relevant: true,  group: header }
   - { key: invoice_date,        name_en: Invoice Date,        name_zh: 发票日期,    type: DATE,          applies_to: [INVOICE], invoice_aliases: [date, invoicedate, inv_date], rule_relevant: true,  group: header }
+  # signed stores "true"/"false" as STRING (FieldType has no BOOLEAN); InvoiceDocument.signed() re-coerces via asBoolean().
   - { key: signed,              name_en: Signed,              name_zh: 已签字,      type: STRING,        applies_to: [INVOICE], invoice_aliases: [signature, is_signed], rule_relevant: true,  group: meta }
+  - { key: stamp_present,       name_en: Stamp Present,       name_zh: 盖章,        type: STRING,        applies_to: [INVOICE], invoice_aliases: [stamp, has_stamp],     rule_relevant: false, group: meta }
+  - { key: letterhead_present,  name_en: Letterhead Present,  name_zh: 抬头信纸,    type: STRING,        applies_to: [INVOICE], invoice_aliases: [letterhead, has_letterhead], rule_relevant: false, group: meta }
 
   # ─── Invoice-only (Tier B — touched by current rules) ─────────────────
+  # quantity / unit / unit_price are LEGACY single-line aggregates. For
+  # multi-line invoices, line_items below is the canonical source; rules
+  # should migrate to summing line_items[*].quantity / line_items[*].amount.
   - { key: quantity,            name_en: Quantity,            name_zh: 数量,        type: AMOUNT,        applies_to: [INVOICE], invoice_aliases: [qty, number_of_units], rule_relevant: true,  group: amount }
   - { key: unit,                name_en: Unit,                name_zh: 单位,        type: STRING,        applies_to: [INVOICE], invoice_aliases: [], rule_relevant: true,  group: amount }
   - { key: unit_price,          name_en: Unit Price,          name_zh: 单价,        type: AMOUNT,        applies_to: [INVOICE], invoice_aliases: [unitprice, price_per_unit], rule_relevant: false, group: amount }
   - { key: country_of_origin,   name_en: Country of Origin,   name_zh: 原产国,      type: STRING,        applies_to: [INVOICE], invoice_aliases: [origin, coo, manufacturing_country, countryoforigin], rule_relevant: true,  group: documents }
+
+  # ─── Invoice line-item table (TABLE) ──────────────────────────────────
+  # Each row is one product line on the invoice. UCP 600 Art. 30(b)
+  # quantity-tolerance rules can iterate rows; goods-description checks
+  # can compare the LC narrative against the row descriptions.
+  - key: line_items
+    name_en: Line Items
+    name_zh: 商品明细
+    type: TABLE
+    applies_to: [INVOICE]
+    invoice_aliases: [items, lines, item_list, products, line_items_list]
+    rule_relevant: true
+    group: items
+    columns:
+      - { key: description, name_en: Description, name_zh: 描述,    type: MULTILINE_TEXT, rule_relevant: true,  invoice_aliases: [item, name, goods, product, desc, item_description] }
+      - { key: hs_code,     name_en: HS Code,     name_zh: 海关编码, type: STRING,         rule_relevant: false, invoice_aliases: [hscode, harmonized_code, tariff_code] }
+      - { key: quantity,    name_en: Quantity,    name_zh: 数量,    type: AMOUNT,         rule_relevant: true,  invoice_aliases: [qty, units, count] }
+      - { key: unit,        name_en: Unit,        name_zh: 单位,    type: STRING,         rule_relevant: false, invoice_aliases: [uom, unit_of_measure] }
+      - { key: unit_price,  name_en: Unit Price,  name_zh: 单价,    type: AMOUNT,         rule_relevant: true,  invoice_aliases: [price, price_per_unit, unitprice, rate] }
+      - { key: amount,      name_en: Line Total,  name_zh: 行合计,  type: AMOUNT,         rule_relevant: true,  invoice_aliases: [line_total, total, line_amount, subtotal, value] }

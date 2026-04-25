@@ -21,7 +21,6 @@ public class PipelineMetrics {
     public static final String TIMER_CHECK = "lc_checker.check.duration";
     public static final String TIMER_ASSEMBLE = "lc_checker.assemble.duration";
     public static final String COUNTER_LLM_CALLS = "lc_checker.llm.calls";
-    public static final String COUNTER_EXTRACTOR_FALLBACK = "lc_checker.extractor.fallback";
 
     private final MeterRegistry registry;
 
@@ -51,14 +50,6 @@ public class PipelineMetrics {
                 .tag("model", model == null ? "unknown" : model)
                 .tag("purpose", purpose)
                 .tag("outcome", outcome)
-                .register(registry)
-                .increment();
-    }
-
-    public void incrementFallback(String from, String to) {
-        Counter.builder(COUNTER_EXTRACTOR_FALLBACK)
-                .tag("from", from)
-                .tag("to", to)
                 .register(registry)
                 .increment();
     }

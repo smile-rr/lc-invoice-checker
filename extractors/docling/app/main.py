@@ -43,6 +43,7 @@ from .errors import (
 )
 from .fetching import fetch_url, read_path, validate_pdf_bytes
 from .field_extractor import extract_fields
+from .llm_field_extractor import llm_extract_fields
 
 # -- Logging ------------------------------------------------------------------
 # One JSON line per event, per contract §Logging (recommended).
@@ -241,19 +242,22 @@ async def extract(
     except Exception as exc:  # docling raised something
         raise ExtractionFailed(f"{type(exc).__name__}: {exc}") from exc
 
-    # Tier-1 + optional-Tier-2 field extraction.
+    # Field extraction: LLM first (uses LLM_BASE_URL/MODEL from env), regex fallback.
+    fields: InvoiceFields | None = None
     try:
-        fields: InvoiceFields = await asyncio.to_thread(
-            extract_fields, result.raw_markdown, result.raw_text
-        )
+        fields = await asyncio.to_thread(llm_extract_fields, result.raw_markdown)
     except Exception as exc:
-        # Don't fail the whole request on field-extraction errors — emit
-        # empty fields and let Java's fallback re-parse raw_markdown.
-        logger.warning(
-            "field extraction failed; returning empty fields",
-            extra={"event": "field_extract_error", "error": str(exc)},
-        )
-        fields = InvoiceFields()
+        logger.warning("LLM field extraction raised: %s", exc, extra={"event": "llm_extract_error"})
+
+    if fields is None:
+        try:
+            fields = await asyncio.to_thread(extract_fields, result.raw_markdown, result.raw_text)
+        except Exception as exc:
+            logger.warning(
+                "regex field extraction failed; returning empty fields",
+                extra={"event": "field_extract_error", "error": str(exc)},
+            )
+            fields = InvoiceFields()
 
     elapsed_ms = (time.perf_counter_ns() - start_ns) // 1_000_000
 

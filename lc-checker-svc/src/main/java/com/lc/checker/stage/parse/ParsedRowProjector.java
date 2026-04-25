@@ -31,6 +31,7 @@ public class ParsedRowProjector {
     private static final Map<FieldType, Integer> TYPE_RANK = Map.of(
             FieldType.MULTILINE_TEXT, 100,
             FieldType.DOCUMENT_LIST, 95,
+            FieldType.TABLE, 92,
             FieldType.AMOUNT, 90,
             FieldType.DATE, 80,
             FieldType.ENUM, 70,

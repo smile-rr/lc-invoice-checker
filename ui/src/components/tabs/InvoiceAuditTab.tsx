@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { listExtracts } from '../../api/client';
-import { InvoicePanel } from '../invoice/InvoicePanel';
+import { InvoicePanel, fmtSource } from '../invoice/InvoicePanel';
 import { InvoiceViewer } from '../invoice/InvoiceViewer';
 import { useCheckSession } from '../../hooks/useCheckSession';
 import { usePipelineConfig } from '../../hooks/usePipelineConfig';
@@ -34,6 +34,13 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
   const live = useCheckSession(sessionId);
   const pipeline = usePipelineConfig();
 
+  // Re-fetch persisted rows whenever a new source finishes (not just when the
+  // whole stage completes). This fills in the document as soon as each extractor
+  // writes its row, eliminating the window where status=SUCCESS but document=null.
+  const completedCount = Object.values(live.extractorStatus).filter(
+    (a) => a.status === 'SUCCESS' || a.status === 'FAILED',
+  ).length;
+
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
@@ -48,7 +55,8 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, invoice]);
+  // invoice kept as dep for backwards-compat (page reload after completed session)
+  }, [sessionId, invoice, completedCount]);
 
   // Merge config (PENDING placeholders) + persisted + live, in chain order.
   // Live wins on status / confidence / error; persisted wins on document.
@@ -118,11 +126,10 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
   );
   const currentDoc: InvoiceDocument | null = activeAttempt?.document ?? invoice ?? null;
   const currentSource = activeAttempt?.source ?? invoice?.extractor_used ?? '';
-  const selectedSource = attempts.find((a) => a.is_selected)?.source ?? null;
 
   return (
     <div className="px-6 py-5">
-      <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-5 max-w-[1400px] mx-auto">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-5 max-w-[1600px] mx-auto">
         <section className="min-w-0">
           <SectionHead title="Original PDF" sub="zoom and pan to inspect" />
           <InvoiceViewer sessionId={sessionId} highlight={hover} />
@@ -132,7 +139,7 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
             title="Extracted output"
             sub={
               currentDoc
-                ? `${currentSource} · ${(currentDoc.extractor_confidence * 100).toFixed(0)}% conf`
+                ? `${expandPipelineLabel(currentSource)} · ${(currentDoc.extractor_confidence * 100).toFixed(0)}% conf`
                 : extractorSummary(attempts)
             }
           />
@@ -141,13 +148,31 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
             activeSource={currentSource}
             onActiveSource={setActive}
             invoice={currentDoc}
-            selectedSource={selectedSource}
             onFieldHover={setHover}
           />
         </section>
       </div>
     </div>
   );
+}
+
+/**
+ * Expand the bare source name into a "pipeline kind" label for the
+ * "Extracted output" section header. Vision LLMs (`*_local`, `*_cloud`)
+ * keep the standard {@link fmtSource} rendering. Docling and MinerU are
+ * tagged `(regex)` because their sidecars produce fields via regex +
+ * heuristics over the markdown layout — no LLM call. The tag makes the
+ * pipeline shape visible when comparing cards (LLM judgment vs
+ * deterministic parsing).
+ *
+ * If the docling/mineru sidecars later route their markdown through the
+ * local Ollama LLM for field enrichment, change the tag here.
+ */
+function expandPipelineLabel(source: string): string {
+  if (source === 'docling' || source === 'mineru') {
+    return `${source} (regex)`;
+  }
+  return fmtSource(source);
 }
 
 function extractorSummary(attempts: ExtractAttempt[]): string {

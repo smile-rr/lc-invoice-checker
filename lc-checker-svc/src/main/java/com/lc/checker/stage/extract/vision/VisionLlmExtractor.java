@@ -3,11 +3,13 @@ package com.lc.checker.stage.extract.vision;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lc.checker.domain.common.FieldType;
+import com.lc.checker.infra.fields.ColumnDefinition;
 import com.lc.checker.infra.fields.FieldDefinition;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractionResult;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
+import com.lc.checker.stage.extract.InvoiceExtractor;
 import com.lc.checker.stage.extract.InvoiceFieldMapper;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
@@ -42,7 +44,7 @@ import org.springframework.web.client.RestClient;
  * {@link #extractorName()} so each instance writes its own row to
  * {@code pipeline_steps} and can be distinguished in SSE events / UI.
  */
-public class VisionLlmExtractor {
+public class VisionLlmExtractor implements InvoiceExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(VisionLlmExtractor.class);
     private static final String PROMPT_TEMPLATE = "prompts/vision-invoice-extract.st";
@@ -54,7 +56,9 @@ public class VisionLlmExtractor {
     private final FieldPoolRegistry fieldPool;
     private final String name;
     private final String model;
-    private final float renderScale;
+    private final int renderDpi;
+    private final int maxPages;
+    private final int maxLongEdgePx;
     private final int timeoutSeconds;
     private volatile String cachedPrompt;
 
@@ -67,7 +71,9 @@ public class VisionLlmExtractor {
             FieldPoolRegistry fieldPool) {
         this.name = config.name();
         this.model = config.model();
-        this.renderScale = config.renderScale();
+        this.renderDpi = config.renderDpi();
+        this.maxPages = config.maxPages();
+        this.maxLongEdgePx = config.maxLongEdgePx();
         this.timeoutSeconds = config.timeoutSeconds();
         this.renderer = renderer;
         this.mapper = mapper;
@@ -84,8 +90,8 @@ public class VisionLlmExtractor {
             builder.defaultHeader("Authorization", "Bearer " + apiKey);
         }
         this.restClient = builder.build();
-        log.info("VisionLlmExtractor[{}] configured: model={} scale={} timeout={} base={} auth={}",
-                name, model, renderScale, timeoutSeconds, config.baseUrl(),
+        log.info("VisionLlmExtractor[{}] configured: model={} dpi={} maxPages={} maxLongEdge={}px timeout={}s base={} auth={}",
+                name, model, renderDpi, maxPages, maxLongEdgePx, timeoutSeconds, config.baseUrl(),
                 (apiKey != null && !apiKey.isBlank()) ? "bearer" : "none");
     }
 
@@ -97,10 +103,10 @@ public class VisionLlmExtractor {
                     "PDF byte array is empty");
         }
 
-        // 1. Render PDF pages to PNG
+        // 1. Render PDF pages to JPEG (200 DPI, grayscale, ≤2048 px long edge by default)
         List<byte[]> pages;
         try {
-            pages = renderer.renderAllPages(pdfBytes, renderScale);
+            pages = renderer.renderAllPages(pdfBytes, renderDpi, maxPages, maxLongEdgePx, true);
         } catch (IllegalArgumentException e) {
             throw new ExtractionException(name, ExtractorErrorCode.INVALID_REQUEST,
                     "PDF render failed: " + e.getMessage(), e);
@@ -209,6 +215,23 @@ public class VisionLlmExtractor {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("stream", false);
+        // Extraction is a deterministic, structured task — no creativity.
+        body.put("temperature", 0.0);
+        // Long invoices (3+ pages, dense tables) need plenty of headroom; running
+        // out mid-JSON is the #1 cause of parse failures. 4096 fits even an
+        // image-heavy multi-page invoice with comfortable margin.
+        body.put("max_tokens", 4096);
+        // OpenAI-compatible JSON-mode hint. Honoured by DashScope (qwen-vl-plus,
+        // qwen-plus). The MLX server's pydantic-settings ignores unknown keys, so
+        // this is a safe no-op there — guarantees still come from the prompt.
+        body.put("response_format", Map.of("type", "json_object"));
+        // Disable Qwen3+ "thinking" mode. Without this, qwen3.6-plus / qwen3-vl-*
+        // emit hundreds of reasoning tokens (billed as completion) AND wrap the
+        // JSON in ```json …``` markdown fences, breaking strict parsing. Setting
+        // this to false: cuts cost ~30×, removes the markdown wrapping, leaves
+        // `content` as raw JSON. Ignored by Ollama (qwen3-vl:4b-instruct) and by
+        // older Qwen2-based models (qwen-vl-plus / qwen-vl-max) — safe no-op.
+        body.put("enable_thinking", false);
 
         String promptText = loadPrompt();
 
@@ -218,7 +241,7 @@ public class VisionLlmExtractor {
             String b64 = java.util.Base64.getEncoder().encodeToString(page);
             content.add(Map.of(
                     "type", "image_url",
-                    "image_url", Map.of("url", "data:image/png;base64," + b64)
+                    "image_url", Map.of("url", "data:image/jpeg;base64," + b64)
             ));
         }
 
@@ -274,6 +297,9 @@ public class VisionLlmExtractor {
     }
 
     private String renderFieldLine(FieldDefinition f) {
+        if (f.type() == FieldType.TABLE) {
+            return renderTableField(f);
+        }
         String typeHint = switch (f.type()) {
             case DATE -> "DATE — ISO yyyy-MM-dd";
             case CURRENCY_CODE -> "CURRENCY_CODE — ISO 4217";
@@ -285,6 +311,41 @@ public class VisionLlmExtractor {
         };
         String label = f.nameEn() == null ? f.key() : f.nameEn();
         return "- " + f.key() + " (" + label + ", " + typeHint + ")";
+    }
+
+    /**
+     * Render a TABLE field as a header line plus indented column hints. The
+     * model is asked to return an ARRAY of row objects under {@code f.key()};
+     * each row uses the canonical column keys with values typed per column.
+     */
+    private String renderTableField(FieldDefinition f) {
+        String label = f.nameEn() == null ? f.key() : f.nameEn();
+        StringBuilder sb = new StringBuilder("- ")
+                .append(f.key())
+                .append(" (")
+                .append(label)
+                .append(", TABLE — array of rows; each row has the columns below. ")
+                .append("Return [] if the invoice has no such table.)");
+        for (ColumnDefinition c : f.columns()) {
+            String hint = switch (c.type()) {
+                case DATE -> "DATE";
+                case CURRENCY_CODE -> "CURRENCY_CODE";
+                case ENUM -> "ENUM (" + String.join("|", c.enumValues()) + ")";
+                case AMOUNT -> "AMOUNT";
+                case INTEGER -> "INTEGER";
+                case MULTILINE_TEXT -> "TEXT";
+                default -> c.type().name();
+            };
+            String colLabel = c.nameEn() == null ? c.key() : c.nameEn();
+            sb.append("\n    • ")
+                    .append(c.key())
+                    .append(" (")
+                    .append(colLabel)
+                    .append(", ")
+                    .append(hint)
+                    .append(")");
+        }
+        return sb.toString();
     }
 
     private double asDouble(Object v, double def) {
@@ -425,6 +486,6 @@ public class VisionLlmExtractor {
             Keys: invoice_number, invoice_date, seller_name, seller_address, buyer_name,
             buyer_address, goods_description, quantity, unit, unit_price, total_amount,
             currency, lc_reference, trade_terms, port_of_loading, port_of_discharge,
-            country_of_origin, signed (true/false/null), confidence (0.0-1.0), raw_text
+            country_of_origin, signed (true/false/null), confidence (0.0-1.0)
             """;
 }

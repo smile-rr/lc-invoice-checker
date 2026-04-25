@@ -5,7 +5,6 @@ import com.lc.checker.domain.common.FieldEnvelope;
 import com.lc.checker.domain.common.ParseWarning;
 import com.lc.checker.domain.common.ParsedRow;
 import com.lc.checker.domain.lc.LcDocument;
-import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.infra.fields.TagMappingRegistry;
 import com.lc.checker.stage.parse.subfield.DocumentListParser;
 import com.lc.checker.stage.parse.subfield.IncotermsExtractor;
@@ -80,31 +79,18 @@ public class Mt700Parser {
     /** All :59: option letters accepted as the "beneficiary" party tag. */
     private static final Set<String> BENEFICIARY_TAGS = Set.of("59", "59A", "59F");
 
-    /**
-     * Tag names we bind to typed {@link LcDocument} fields. Tags not in this set are
-     * still captured in {@code rawFields} and logged once at INFO so ops can see them.
-     */
-    private static final Set<String> TYPED_TAGS = Set.of(
-            "20", "31C", "31D", "32B", "39A", "39B", "40E", "43P", "43T",
-            "44A", "44B", "44C", "44D", "44E", "44F", "45A", "46A", "47A",
-            "48", "50", "50B", "50F", "59", "59A", "59F"
-    );
-
     /** :48: presentation-period leading digits (e.g. "21" or "21/DAYS"). */
     private static final Pattern F48_DIGITS = Pattern.compile("^\\s*(\\d+).*$");
 
-    private final FieldPoolRegistry fieldPool;
     private final TagMappingRegistry tagMappings;
     private final DocumentListParser documentListParser;
     private final IncotermsExtractor incotermsExtractor;
     private final ParsedRowProjector rowProjector;
 
-    public Mt700Parser(FieldPoolRegistry fieldPool,
-                       TagMappingRegistry tagMappings,
+    public Mt700Parser(TagMappingRegistry tagMappings,
                        DocumentListParser documentListParser,
                        IncotermsExtractor incotermsExtractor,
                        ParsedRowProjector rowProjector) {
-        this.fieldPool = fieldPool;
         this.tagMappings = tagMappings;
         this.documentListParser = documentListParser;
         this.incotermsExtractor = incotermsExtractor;
@@ -204,25 +190,35 @@ public class Mt700Parser {
         String[] applicant = extractParty(raw, APPLICANT_TAGS);
         String[] beneficiary = extractParty(raw, BENEFICIARY_TAGS);
 
-        // Record any tag we saw but didn't bind to a typed field so ops can spot drift.
-        Set<String> unmapped = new LinkedHashSet<>(raw.keySet());
-        unmapped.removeAll(TYPED_TAGS);
-        if (!unmapped.isEmpty()) {
-            log.info("Mt700Parser unmapped Block-4 tags (available via lc.rawFields()): {}", unmapped);
+        // ── Structured :46A: documents-required ───────────────────────────────────
+        List<DocumentRequirement> documentsRequired = documentListParser.parse(raw.get("46A"));
+
+        // Pre-compute the two raw strings that projectSubFields() needs, so the method
+        // receives all its inputs from ParsedScalars and carries no loop-variable dependency.
+        String goodsDescriptionRaw = raw.get("45A");
+        String availableRaw = raw.containsKey("41A") ? raw.get("41A") : raw.get("41D");
+
+        // Bundle all Prowide-typed scalars into a single object for buildEnvelope().
+        ParsedScalars scalars = new ParsedScalars(
+                lcNumber, issueDate, expiryDate, expiryPlace, currency, amount,
+                tolerancePlus, toleranceMinus, latestShipmentDate, presentationDays,
+                applicant, beneficiary, documentsRequired,
+                goodsDescriptionRaw, splitAvailableWithBy(availableRaw));
+
+        // Log tags not registered in lc-tag-mapping.yaml — genuinely unknown to the system.
+        Set<String> notInRegistry = new LinkedHashSet<>();
+        for (String t : raw.keySet()) {
+            if (tagMappings.byTag(t).isEmpty()) notInRegistry.add(t);
+        }
+        if (!notInRegistry.isEmpty()) {
+            log.info("Mt700Parser: unregistered Block-4 tags (not in lc-tag-mapping.yaml; available via lc.rawFields()): {}", notInRegistry);
         }
         if (!header.isEmpty()) {
             log.debug("Mt700Parser Block-3 header tags: {}", header);
         }
 
-        // ── Structured :46A: documents-required ───────────────────────────────────
-        List<DocumentRequirement> documentsRequired = documentListParser.parse(raw.get("46A"));
-
-        // ── Generic envelope build (registry-driven canonical map) ────────────────
-        FieldEnvelope envelope = buildEnvelope(
-                raw, header, swift.getBlock1(), swift.getBlock2(),
-                lcNumber, issueDate, expiryDate, expiryPlace, currency, amount,
-                tolerancePlus, toleranceMinus, latestShipmentDate, presentationDays,
-                applicant, beneficiary, documentsRequired);
+        // ── Envelope build: lc-tag-mapping.yaml is the primary driver ────────────
+        FieldEnvelope envelope = buildEnvelope(raw, header, swift.getBlock1(), swift.getBlock2(), scalars);
 
         // ── Display-ready row list for the parsed pane (UI renders 1:1) ───────────
         List<ParsedRow> parsedRows = rowProjector.project(envelope);
@@ -263,46 +259,64 @@ public class Mt700Parser {
     }
 
     /**
-     * Build the canonical-key map driven by the field-pool / tag-mapping registries.
+     * Prowide-typed scalars extracted in {@link #parse(String)} and bundled here so
+     * {@link #buildEnvelope} receives a clean single-object contract instead of 13+
+     * individual parameters.
+     */
+    private record ParsedScalars(
+            String lcNumber,
+            LocalDate issueDate,
+            LocalDate expiryDate,
+            String expiryPlace,
+            String currency,
+            BigDecimal amount,
+            int tolerancePlus,
+            int toleranceMinus,
+            LocalDate latestShipmentDate,
+            int presentationDays,
+            String[] applicant,
+            String[] beneficiary,
+            List<DocumentRequirement> documentsRequired,
+            String goodsDescriptionRaw,    // :45A: verbatim text
+            String[] availableWithBy       // :41A:/:41D: pre-split [available_with, available_by]
+    ) {}
+
+    /**
+     * Build the canonical-key map. {@code lc-tag-mapping.yaml} is the primary driver.
      *
-     * <p>For each tag that the registries know about, write the already-extracted
-     * Prowide-typed value (or sub-field-parser result) under its canonical key(s).
-     * Tags the registries don't know about land in {@code extras} verbatim. Defaults
-     * (e.g. {@code presentation_days = 21}, {@code tolerance_plus/minus = 0}) come
-     * from {@code lc-tag-mapping.yaml}.
+     * <p>For every Block-4 tag:
+     * <ol>
+     *   <li>Confirm it is registered in {@code lc-tag-mapping.yaml} (gate via
+     *       {@link TagMappingRegistry}). Unknown tags land in {@code extras}.</li>
+     *   <li>If the tag encodes multiple canonical fields or requires Prowide's typed API
+     *       to decode, delegate to {@link #projectSubFields} which writes pre-parsed
+     *       scalars. That method is the <em>exception</em>.</li>
+     *   <li>Otherwise the registry default applies: write the raw SWIFT value under
+     *       each canonical key declared in the YAML — no Java change needed when adding
+     *       simple single-field tags.</li>
+     * </ol>
      */
     private FieldEnvelope buildEnvelope(Map<String, String> raw,
                                         Map<String, String> header,
                                         SwiftBlock1 block1,
                                         SwiftBlock2 block2,
-                                        String lcNumber,
-                                        LocalDate issueDate,
-                                        LocalDate expiryDate,
-                                        String expiryPlace,
-                                        String currency,
-                                        BigDecimal amount,
-                                        int tolerancePlus,
-                                        int toleranceMinus,
-                                        LocalDate latestShipmentDate,
-                                        int presentationDays,
-                                        String[] applicant,
-                                        String[] beneficiary,
-                                        List<DocumentRequirement> documentsRequired) {
+                                        ParsedScalars scalars) {
         Map<String, Object> fields = new LinkedHashMap<>();
         Map<String, Object> extras = new LinkedHashMap<>();
         List<ParseWarning> warnings = new ArrayList<>();
 
-        // Pre-populate registry-declared defaults so optional tags (39A, 48) have
-        // sensible values even when absent from the message.
+        // Seed registry-declared defaults first (e.g. presentation_days=21, tolerance=0).
         for (var mapping : tagMappings.all()) {
             for (var def : mapping.defaults().entrySet()) {
                 fields.putIfAbsent(def.getKey(), def.getValue());
             }
         }
 
+        // ── Main loop: lc-tag-mapping.yaml drives everything ──────────────────────
         for (var entry : raw.entrySet()) {
             String tag = entry.getKey();
             String rawValue = entry.getValue();
+
             var mappingOpt = tagMappings.byTag(tag);
             if (mappingOpt.isEmpty()) {
                 extras.put(tag, rawValue);
@@ -310,97 +324,101 @@ public class Mt700Parser {
                         "Tag :" + tag + ": is not registered in lc-tag-mapping.yaml"));
                 continue;
             }
-            // Write canonical-keyed values from the already-computed typed scalars.
-            // Tag-by-tag because each tag has a known shape; this is the single
-            // place where tag → canonical value coercion lives.
-            switch (tag) {
-                case "20" -> put(fields, "lc_number", lcNumber);
-                case "31C" -> put(fields, "issue_date", issueDate);
-                case "31D" -> {
-                    put(fields, "expiry_date", expiryDate);
-                    put(fields, "expiry_place", expiryPlace);
-                }
-                case "32B" -> {
-                    put(fields, "credit_currency", currency);
-                    put(fields, "credit_amount", amount);
-                }
-                case "39A" -> {
-                    put(fields, "tolerance_plus", tolerancePlus);
-                    put(fields, "tolerance_minus", toleranceMinus);
-                }
-                case "39B" -> put(fields, "max_amount_flag", rawValue);
-                case "40E" -> put(fields, "applicable_rules", rawValue);
-                case "43P" -> put(fields, "partial_shipment", rawValue);
-                case "43T" -> put(fields, "transhipment", rawValue);
-                case "44A" -> put(fields, "place_of_receipt", rawValue);
-                case "44B" -> put(fields, "place_of_delivery", rawValue);
-                case "44C" -> put(fields, "latest_shipment_date", latestShipmentDate);
-                case "44D" -> put(fields, "shipment_period", rawValue);
-                case "44E" -> put(fields, "port_of_loading", rawValue);
-                case "44F" -> put(fields, "port_of_discharge", rawValue);
-                case "45A" -> {
-                    put(fields, "goods_description", rawValue);
-                    String inco = incotermsExtractor.extract(rawValue);
-                    if (inco != null) put(fields, "incoterms", inco);
-                }
-                case "46A" -> put(fields, "documents_required", documentsRequired);
-                case "47A" -> put(fields, "additional_conditions", rawValue);
-                case "48" -> put(fields, "presentation_days", presentationDays);
-                case "50", "50B", "50F" -> {
-                    put(fields, "applicant_name", applicant[0]);
-                    put(fields, "applicant_address", applicant[1]);
-                }
-                case "59", "59A", "59F" -> {
-                    put(fields, "beneficiary_name", beneficiary[0]);
-                    put(fields, "beneficiary_address", beneficiary[1]);
-                }
-                case "41A", "41D" -> {
-                    // :41A:/:41D: produces two canonical fields. Heuristic split:
-                    // first line = available_with (bank/place), remainder = available_by.
-                    // Real LCs usually word it as "<bank> BY <method>"; split on " BY " when present,
-                    // otherwise on first newline.
-                    String[] split = splitAvailableWithBy(rawValue);
-                    put(fields, "available_with", split[0]);
-                    put(fields, "available_by", split[1]);
-                }
-                default -> {
-                    // Tag is registered in the mapping but the parser doesn't know how
-                    // to project it yet — preserve the raw value under each canonical key.
-                    for (String key : mappingOpt.get().fieldKeys()) {
-                        put(fields, key, rawValue);
-                    }
+
+            // Registry default: write raw value under each canonical key from the YAML.
+            // Tags needing multi-field or Prowide-typed projection are handled by
+            // projectSubFields() — that is the exception path, not the rule.
+            if (!projectSubFields(tag, scalars, fields)) {
+                for (String key : mappingOpt.get().fieldKeys()) {
+                    put(fields, key, rawValue);
                 }
             }
         }
 
-        // ── SWIFT envelope (Blocks 1/2/3) — registry-tagged with synthetic source_tags ──
-        // Block 1 example: F01HSBCHKHHHXXX0000000000 → sender BIC = chars 4-15 (HSBCHKHHHXXX)
+        // ── SWIFT envelope (Blocks 1/2/3) ─────────────────────────────────────────
+        // Block 1: F01HSBCHKHHHXXX0000000000 → sender LT "HSBCHKHHHXXX" → BIC11 "HSBCHKHHXXX".
         if (block1 != null) {
-            String lt = block1.getLogicalTerminal();
-            if (lt != null && lt.length() >= 12) {
-                put(fields, "sender_bic", lt.substring(0, Math.min(12, lt.length())));
-            } else if (lt != null) {
-                put(fields, "sender_bic", lt);
-            }
+            put(fields, "sender_bic", toBic11(block1.getLogicalTerminal()));
         }
-        // Block 2 input example: I700CITIUS33XXXXN → message_type = 700, receiver_bic = CITIUS33XXXX
+        // Block 2: I700CITIUS33XXXXN → message_type=700, receiver LT "CITIUS33XXXX" → BIC11 "CITIUS33XXX".
         if (block2 != null) {
             String b2 = block2.getValue();
             if (b2 != null && b2.length() >= 4) {
-                String mt = b2.substring(1, 4); // skip the leading "I" / "O"
-                put(fields, "message_type", mt);
-                if (b2.length() >= 16) {
-                    put(fields, "receiver_bic", b2.substring(4, 16));
-                }
+                put(fields, "message_type", b2.substring(1, 4)); // skip leading "I"/"O"
+                if (b2.length() >= 16) put(fields, "receiver_bic", toBic11(b2.substring(4, 16)));
             }
         }
-        // Block 3 :108: user reference (already captured into header map; surface as canonical field).
+        // Block 3 :108: user reference
         String userRef = header.get("108");
-        if (userRef != null) {
-            put(fields, "user_reference", userRef.trim());
-        }
+        if (userRef != null) put(fields, "user_reference", userRef.trim());
 
         return new FieldEnvelope("LC", fields, extras, raw, warnings);
+    }
+
+    /**
+     * Projects Prowide-typed scalars for the subset of Block-4 tags where the raw
+     * SWIFT value cannot be passed through directly — because a single tag encodes
+     * <em>two</em> canonical fields (e.g. {@code :32B:} → {@code credit_currency} +
+     * {@code credit_amount}), or because the value requires Prowide's typed API to
+     * decode correctly (e.g. {@code :31D:} date component → {@link LocalDate}), or
+     * because custom splitting logic applies (e.g. {@code :41A:} → available-with +
+     * available-by).
+     *
+     * <p>All tags <em>not</em> listed here are handled by the registry default in
+     * {@link #buildEnvelope}: raw SWIFT value written under the canonical key(s)
+     * declared in {@code lc-tag-mapping.yaml}. Add a new simple tag there and it
+     * works with zero Java changes.
+     *
+     * @return {@code true} if projection was handled here (caller skips registry default);
+     *         {@code false} to fall through to the registry default.
+     */
+    private boolean projectSubFields(String tag, ParsedScalars s, Map<String, Object> out) {
+        switch (tag) {
+            // ── Tags that decode into a single typed value ──────────────────────
+            case "20"  -> put(out, "lc_number",            s.lcNumber());
+            case "31C" -> put(out, "issue_date",            s.issueDate());
+            case "44C" -> put(out, "latest_shipment_date",  s.latestShipmentDate());
+            case "46A" -> put(out, "documents_required",    s.documentsRequired());
+            case "48"  -> put(out, "presentation_days",     s.presentationDays());
+
+            // ── Tags that split into two canonical fields ────────────────────────
+            case "31D" -> {
+                put(out, "expiry_date",  s.expiryDate());
+                put(out, "expiry_place", s.expiryPlace());
+            }
+            case "32B" -> {
+                put(out, "credit_currency", s.currency());
+                put(out, "credit_amount",   s.amount());
+            }
+            case "39A" -> {
+                put(out, "tolerance_plus",  s.tolerancePlus());
+                put(out, "tolerance_minus", s.toleranceMinus());
+            }
+            case "50", "50B", "50F" -> {
+                put(out, "applicant_name",    s.applicant()[0]);
+                put(out, "applicant_address", s.applicant()[1]);
+            }
+            case "59", "59A", "59F" -> {
+                put(out, "beneficiary_name",    s.beneficiary()[0]);
+                put(out, "beneficiary_address", s.beneficiary()[1]);
+            }
+            case "41A", "41D" -> {
+                put(out, "available_with", s.availableWithBy()[0]);
+                put(out, "available_by",   s.availableWithBy()[1]);
+            }
+
+            // ── Tags that also derive a secondary field via sub-parser ───────────
+            // :45A: raw text preserved verbatim AND incoterms extracted alongside.
+            case "45A" -> {
+                put(out, "goods_description", s.goodsDescriptionRaw());
+                String inco = incotermsExtractor.extract(s.goodsDescriptionRaw());
+                if (inco != null) put(out, "incoterms", inco);
+            }
+
+            // ── All other registered tags → registry default handles them ────────
+            default -> { return false; }
+        }
+        return true;
     }
 
     /** Split :41A/D: raw value into [available_with, available_by]. */
@@ -599,6 +617,22 @@ public class Mt700Parser {
 
     private static String safe(String s) {
         return s == null ? null : s.trim();
+    }
+
+    /**
+     * Convert a SWIFT 12-char Logical Terminal Address to its commercial BIC11 form
+     * by dropping the LT-code character at position 8 (0-indexed). The LT code
+     * identifies which physical terminal at the bank sent the message — operational
+     * detail, not bank identity. BIC11 = 8-char base BIC + 3-char branch code, and is
+     * what trade-finance operators expect to see in UI / docs.
+     *
+     * <p>Example: {@code HSBCHKHHHXXX} (LT) → {@code HSBCHKHHXXX} (BIC11). Inputs that
+     * are not exactly 12 characters (null, truncated, or already-stripped BIC11/BIC8)
+     * are returned unchanged so we never silently mangle an unexpected shape.
+     */
+    private static String toBic11(String lt) {
+        if (lt == null || lt.length() != 12) return lt;
+        return lt.substring(0, 8) + lt.substring(9, 12);
     }
 
     /** Exposed for unit tests — keeps the mandatory set single-sourced. */

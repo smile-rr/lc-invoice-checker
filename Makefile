@@ -5,9 +5,9 @@
 # Stop background:  make svc-down   (kills by port; works whether fg or bg)
 #
 # Whole stack:      make all                    # start svc + docling + mineru + ui in background
-#                                               #   (db and llm-vl are NOT started — manage them separately)
+#                                               #   (db is NOT started — manage it separately)
 #                   make all EXCEPT=mineru      # further skip mineru on top of the default
-#                   make all-down               # stop EVERYTHING (db, llm-vl, docling, mineru, svc, ui)
+#                   make all-down               # stop EVERYTHING (db, docling, mineru, svc, ui)
 # Background logs land in /tmp/lc-checker/<svc>.log
 #
 # +-----------+-------------------+----------------------+-------+--------------------------------------+
@@ -15,8 +15,6 @@
 # +-----------+-------------------+----------------------+-------+--------------------------------------+
 # | db        | make db           | make db-down         |  5432 | postgres://localhost:5432            |
 # | svc       | make svc          | make svc-down        |  8080 | http://127.0.0.1:8080                |
-# | llm       | make llm          | make llm-down        |  8088 | http://127.0.0.1:8088/v1             |
-# | llm-vl    | make llm-vl       | make llm-vl-down     |  8088 | http://127.0.0.1:8088/v1             |
 # | docling   | make docling      | make docling-down    |  8081 | http://127.0.0.1:8081                |
 # | mineru    | make mineru       | make mineru-down     |  8082 | http://127.0.0.1:8082                |
 # | ui        | make ui           | make ui-down         |  5173 | http://127.0.0.1:5173                |
@@ -25,11 +23,10 @@
 # | (health)  | make health       |                      |     — | hit each /health endpoint (actually working?) |
 # +-----------+-------------------+----------------------+-------+--------------------------------------+
 #
-# llm vs llm-vl: today they are aliases (same MLX server on :8088 — Qwen3-VL is
-# multimodal and handles both text-only and vision requests). When a separate
-# text-only model is added later, `llm` will move to its own port (e.g. :8089)
-# and `llm-vl` stays on :8088. The two target names are kept now so callers
-# don't have to rename later.
+# Local vision LLM is provided by Ollama (`brew install ollama && ollama serve`,
+# then `ollama pull qwen3-vl:4b-instruct`). Ollama is managed outside this
+# Makefile — it's a system daemon on :11434 that the Java service hits as
+# `local_llm_vl`. See LOCAL_LLM_VL_* in .env.
 #
 # db is a local fallback — .env may point at a remote Postgres instead.
 # ---------------------------------------------------------------------------
@@ -38,7 +35,6 @@ SHELL    := /bin/bash
 ENV_FILE := .env
 COMPOSE  := docker compose
 
-LLM_DIR     := llm/mlx-server
 DOCLING_DIR := extractors/docling
 MINERU_DIR  := extractors/mineru
 UI_DIR      := ui
@@ -49,10 +45,9 @@ PYTHON := python3.11
 LOG_DIR := /tmp/lc-checker
 
 # ALL          — every component (used by `all-down` for an exhaustive stop)
-# ALL_DEFAULT  — what `make all` starts. db and llm-vl are excluded so the
-#                user can manage them separately (db is usually remote and
-#                always-on; llm-vl is heavy, started on demand).
-ALL          := db llm-vl docling mineru svc ui
+# ALL_DEFAULT  — what `make all` starts. db is excluded so the user can
+#                manage it separately (usually remote and always-on).
+ALL          := db docling mineru svc ui
 ALL_DEFAULT  := docling mineru svc ui
 EXCEPT       ?=
 SELECTED     := $(filter-out $(EXCEPT),$(ALL_DEFAULT))
@@ -72,24 +67,24 @@ help:  ## list targets with ports + URLs
 $(LOG_DIR):
 	@mkdir -p $(LOG_DIR)
 
-all: $(LOG_DIR)  ## start svc + docling + mineru + ui in background (skips db & llm-vl — manage those separately)
+all: $(LOG_DIR)  ## start svc + docling + mineru + ui in background (skips db — manage separately)
 	@echo "→ all: $(SELECTED)$(if $(EXCEPT),  (further skipping: $(EXCEPT)),)"
-	@echo "  (db & llm-vl are NOT started by 'all' — bring them up with 'make db' / 'make llm' as needed)"
+	@echo "  (db is NOT started by 'all' — bring it up with 'make db' if needed)"
 	@for s in $(SELECTED); do $(MAKE) --no-print-directory $$s-down 2>/dev/null || true; done
 	@for s in $(SELECTED); do $(MAKE) --no-print-directory _$$s-bg; done
 	@echo ""
 	@echo "✓ stack up — logs in $(LOG_DIR)/<svc>.log   (stop with: make all-down)"
 
-all-down:  ## stop EVERYTHING (db, llm-vl, docling, mineru, svc, ui)
+all-down:  ## stop EVERYTHING (db, docling, mineru, svc, ui)
 	@for s in $(ALL); do $(MAKE) --no-print-directory $$s-down 2>/dev/null || true; done
 
 status:  ## show one-line status (host:port, up/down, url) for each component
 	@printf '  %-12s %-24s %-8s %s\n' service host:port status url
 	@printf '  %-12s %-24s %-8s %s\n' ------------ ------------------------ -------- ---
-	@for entry in svc:8080:http llm-vl:8088:http docling:8081:http mineru:8082:http ui:5173:http; do \
-	   svc=$${entry%%:*}; rest=$${entry#*:}; port=$${rest%%:*}; scheme=$${rest##*:}; \
+	@for entry in svc:8080 docling:8081 mineru:8082 ui:5173 ollama:11434; do \
+	   svc=$${entry%%:*}; port=$${entry#*:}; \
 	   if lsof -i tcp:$$port -sTCP:LISTEN >/dev/null 2>&1; then state="✓ up"; else state="·"; fi; \
-	   if [ "$$svc" = "llm-vl" ]; then url="http://127.0.0.1:$$port/v1"; \
+	   if [ "$$svc" = "ollama" ]; then url="http://127.0.0.1:$$port/v1  (local_llm_vl)"; \
 	   else url="http://127.0.0.1:$$port"; fi; \
 	   printf '  %-12s %-24s %-8s %s\n' "$$svc" "127.0.0.1:$$port" "$$state" "$$url"; \
 	 done
@@ -111,7 +106,7 @@ status:  ## show one-line status (host:port, up/down, url) for each component
 health:  ## hit each /health endpoint and report actual responsiveness (deeper than status)
 	@printf '  %-10s %-6s %-12s %s\n' service port health detail
 	@printf '  %-10s %-6s %-12s %s\n' ---------- ------ ------------ ------
-	@for entry in svc:8080:/actuator/health llm-vl:8088:/health docling:8081:/health mineru:8082:/health ui:5173:/; do \
+	@for entry in svc:8080:/actuator/health docling:8081:/health mineru:8082:/health ui:5173:/; do \
 	   svc=$${entry%%:*}; rest=$${entry#*:}; port=$${rest%%:*}; path=$${rest#*:}; \
 	   if ! lsof -i tcp:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
 	     printf '  %-10s %-6s %-12s %s\n' "$$svc" "$$port" "·" "(port not bound)"; \
@@ -149,14 +144,9 @@ _svc-bg:
 	  nohup ./gradlew bootRun > $(LOG_DIR)/svc.log 2>&1 &) \
 	  && echo "✓ svc bg → http://127.0.0.1:8080"
 
-_llm-vl-bg: _llm-vl-install
-	@(set -a && source $(ENV_FILE) && set +a && \
-	    cd $(LLM_DIR) && nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8088 \
-	    > $(LOG_DIR)/llm-vl.log 2>&1 &) \
-	  && echo "✓ llm-vl bg → http://127.0.0.1:8088/v1"
-
 _docling-bg: _docling-install
-	@(cd $(DOCLING_DIR) && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081 \
+	@(set -a && source $(ENV_FILE) && set +a && \
+	    cd $(DOCLING_DIR) && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081 \
 	    > $(LOG_DIR)/docling.log 2>&1 &) \
 	  && echo "✓ docling bg → http://127.0.0.1:8081"
 
@@ -169,6 +159,51 @@ _mineru-bg: _mineru-install
 _ui-bg: _ui-install _ui-samples
 	@(cd $(UI_DIR) && nohup npm run dev > $(LOG_DIR)/ui.log 2>&1 &) \
 	  && echo "✓ ui bg → http://127.0.0.1:5173"
+
+# --- llm-test (Ollama smoke test — no start/stop, daemon is system-managed) --
+# Diagnostic only. Verifies the Ollama daemon is listening on :11434, lists
+# installed models, then fires a tiny /v1/chat/completions ping using the
+# model named in .env's LOCAL_LLM_VL_MODEL. Surfaces latency + response so
+# you can tell at a glance whether `local_llm_vl` will work end-to-end.
+
+llm-test:  ## ping local Ollama (model from LOCAL_LLM_VL_MODEL in .env)
+	@echo "=== 1. daemon listening on :11434 ==="
+	@if lsof -nP -iTCP:11434 -sTCP:LISTEN >/dev/null 2>&1; then \
+	   lsof -nP -iTCP:11434 -sTCP:LISTEN | tail -n +1; \
+	 else \
+	   echo "  · NOT LISTENING — start with: brew services start ollama   (or: ollama serve &)"; \
+	   exit 1; \
+	 fi
+	@echo
+	@echo "=== 2. installed models ==="
+	@if command -v ollama >/dev/null 2>&1; then ollama list; \
+	 else curl -sS http://127.0.0.1:11434/api/tags | python3 -m json.tool 2>/dev/null || true; fi
+	@echo
+	@set -a; . ./$(ENV_FILE); set +a; \
+	 model="$${LOCAL_LLM_VL_MODEL:-qwen3-vl:4b-instruct}"; \
+	 base="$${LOCAL_LLM_VL_BASE_URL:-http://127.0.0.1:11434/v1}"; \
+	 echo "=== 3. inference smoke test ==="; \
+	 echo "  base-url: $$base"; \
+	 echo "  model:    $$model"; \
+	 t0=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 resp=$$(curl -sS -m 60 "$$base/chat/completions" \
+	   -H "Content-Type: application/json" \
+	   -d "{\"model\":\"$$model\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: ready\"}]}" \
+	   2>&1); \
+	 t1=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 ms=$$(( $$t1 - $$t0 )); \
+	 content=$$(printf '%s' "$$resp" | python3 -c 'import json,sys; r=json.loads(sys.stdin.read()); print(r["choices"][0]["message"]["content"])' 2>/dev/null); \
+	 if [ -n "$$content" ]; then \
+	   echo "  status:   ✓ OK ($${ms} ms)"; \
+	   echo "  response: $$content"; \
+	 else \
+	   echo "  status:   ✗ FAILED ($${ms} ms)"; \
+	   echo "  body:     $$(printf '%s' "$$resp" | head -c 400)"; \
+	   exit 2; \
+	 fi
+	@echo
+	@echo "=== 4. currently loaded in memory (ollama ps) ==="
+	@ollama ps 2>/dev/null || echo "  (ollama CLI unavailable)"
 
 # --- db (Docker compose) -----------------------------------------------------
 
@@ -189,37 +224,12 @@ svc-down:  ## stop Java service (kills :8080)
 	@pid=$$(lsof -ti tcp:8080 2>/dev/null); \
 	  if [ -n "$$pid" ]; then kill $$pid && echo "✓ svc stopped"; else echo "(svc not running)"; fi
 
-# --- llm-vl (MLX vision-language; canonical) ---------------------------------
-
-llm-vl: _llm-vl-install  ## start MLX vision-language server (foreground) — http://127.0.0.1:8088/v1
-	@echo "→ llm-vl on :8088 → http://127.0.0.1:8088/v1   (Ctrl-C to stop)"
-	@set -a && source $(ENV_FILE) && set +a && \
-	  cd $(LLM_DIR) && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8088
-
-llm-vl-down:  ## stop MLX vision-language server (kills :8088)
-	@pid=$$(lsof -ti tcp:8088 2>/dev/null); \
-	  if [ -n "$$pid" ]; then kill $$pid && echo "✓ llm-vl stopped"; else echo "(llm-vl not running)"; fi
-
-_llm-vl-install:
-	@if [ ! -d $(LLM_DIR)/.venv ]; then \
-	   echo "→ first-time install in $(LLM_DIR) (~3 min, no model download yet)"; \
-	   cd $(LLM_DIR) && $(PYTHON) -m venv .venv && \
-	     .venv/bin/pip install --upgrade --quiet pip && \
-	     .venv/bin/pip install --quiet -e . ; \
-	   echo "✓ $(LLM_DIR) installed"; \
-	 fi
-
-# --- llm (text language model; alias of llm-vl today) ------------------------
-# Future: edit these rules to point at a separate text-only MLX model on :8089.
-
-llm: llm-vl              ## start MLX text LLM (alias of llm-vl today — same process on :8088)
-llm-down: llm-vl-down    ## stop MLX text LLM (alias of llm-vl-down today)
-
 # --- docling (FastAPI) -------------------------------------------------------
 
 docling: _docling-install  ## start Docling extractor (foreground) — http://127.0.0.1:8081
 	@echo "→ docling on :8081 → http://127.0.0.1:8081   (Ctrl-C to stop)"
-	@cd $(DOCLING_DIR) && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081
+	@set -a && source $(ENV_FILE) && set +a && \
+	  cd $(DOCLING_DIR) && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081
 
 docling-down: ## stop Docling extractor (kills :8081)
 	@pid=$$(lsof -ti tcp:8081 2>/dev/null); \
@@ -274,17 +284,20 @@ _ui-install:
 _ui-samples:
 	@mkdir -p $(UI_DIR)/public/samples
 	@cp docs/refer-doc/sample_lc_mt700.txt $(UI_DIR)/public/samples/sample_lc_mt700.txt 2>/dev/null || true
+	@cp docs/refer-doc/mt700-large-machinery.txt $(UI_DIR)/public/samples/mt700-large-machinery.txt 2>/dev/null || true
+	@cp docs/refer-doc/mt700-tight-textile.txt $(UI_DIR)/public/samples/mt700-tight-textile.txt 2>/dev/null || true
+	@cp docs/refer-doc/mt700-fob-eur-flexible.txt $(UI_DIR)/public/samples/mt700-fob-eur-flexible.txt 2>/dev/null || true
+	@cp docs/refer-doc/mt700-expired-strict.txt $(UI_DIR)/public/samples/mt700-expired-strict.txt 2>/dev/null || true
 	@cp docs/refer-doc/invoice-1-apple.pdf $(UI_DIR)/public/samples/invoice-1-apple.pdf 2>/dev/null || true
 	@cp "docs/refer-doc/invoice-2-go rails.pdf" $(UI_DIR)/public/samples/invoice-2-go-rails.pdf 2>/dev/null || true
 	@cp docs/refer-doc/invoice-3-color-claude.pdf $(UI_DIR)/public/samples/invoice-3-color-claude.pdf 2>/dev/null || true
 	@cp docs/refer-doc/invoice-3-color-image.pdf $(UI_DIR)/public/samples/invoice-3-color-image.pdf 2>/dev/null || true
 
-.PHONY: help all all-down status health \
+.PHONY: help all all-down status health llm-test \
         db db-down \
         svc svc-down \
-        llm llm-down llm-vl llm-vl-down \
         docling docling-down \
         mineru mineru-down \
         ui ui-down \
-        _db-bg _svc-bg _llm-vl-bg _docling-bg _mineru-bg _ui-bg \
-        _llm-vl-install _docling-install _mineru-install _ui-install _ui-samples
+        _db-bg _svc-bg _docling-bg _mineru-bg _ui-bg \
+        _docling-install _mineru-install _ui-install _ui-samples

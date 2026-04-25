@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { startCheck } from '../../api/client';
-import { fetchSamplePair, SAMPLES, type SamplePair } from '../../data/samples';
+import { fetchSamplePair, SAMPLES, type SamplePair, type ScenarioKind } from '../../data/samples';
 import { useConfirm } from '../../hooks/useConfirm';
 
 interface Props {
@@ -77,6 +77,11 @@ export function UploadStep({ primaryRunCta = true }: Props) {
     setErr(null);
     try {
       const r = await startCheck(lc, invoice);
+      // Don't pin a `?step=` here — that would block downstream auto-advance
+      // (e.g. lc → invoice once invoice_extract starts streaming). The empty-
+      // upload-flash race is handled in `derivedStep` (see steps.ts), which
+      // falls back to the first content step when a session exists but no
+      // SSE event has arrived yet.
       nav(`/session/${r.session_id}`);
     } catch (e) {
       setErr((e as Error).message);
@@ -139,26 +144,20 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         )}
       </div>
 
-      {/* Pre-defined samples */}
+      {/* Pre-defined samples — each card carries TWO file chips so it's
+           visually obvious that one click loads both an LC and an invoice. */}
       <div className="border-t border-line pt-5">
-        <div className="text-[10px] uppercase tracking-[0.2em] text-muted mb-3">
-          Pre-defined samples
+        <div className="flex items-baseline justify-between mb-3">
+          <span className="text-[10px] uppercase tracking-[0.2em] text-muted">
+            Pre-defined samples
+          </span>
+          <span className="font-mono text-[10px] text-muted">
+            {SAMPLES.length} scenarios
+          </span>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2.5">
           {SAMPLES.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => loadSample(s)}
-              className="text-left rounded-btn border border-line bg-paper hover:border-teal-2 px-3 py-2.5"
-            >
-              <div className="text-sm text-navy-1">
-                MT700 + <span className="font-semibold">{s.label}</span>
-              </div>
-              <div className="text-xs text-muted">{s.note}</div>
-              <div className="mt-1 font-mono text-[10px] text-muted truncate">
-                {s.invoicePath.split('/').pop()}
-              </div>
-            </button>
+            <SampleCard key={s.id} sample={s} onClick={() => loadSample(s)} />
           ))}
         </div>
       </div>
@@ -202,9 +201,26 @@ function SourceSlot({
   const inputRef = useRef<HTMLInputElement>(null);
   const filled = !!file;
 
+  // Blob URL for the native browser preview (PDF → built-in viewer, .txt → plain text).
+  // Created lazily per file and revoked when the file changes or the slot unmounts.
+  // Note: revoking invalidates any preview tab the user opened from a previous file —
+  // acceptable, since picking a new file is an intentional context switch.
+  const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
   function pick(fs: FileList | null) {
     if (!fs || fs.length === 0) return;
     void onFile(fs[0]);
+  }
+
+  function openPreview() {
+    if (!previewUrl) return;
+    // noopener so the new tab can't reach back into our window object.
+    window.open(previewUrl, '_blank', 'noopener,noreferrer');
   }
 
   return (
@@ -227,14 +243,21 @@ function SourceSlot({
         onChange={(e) => pick(e.target.files)}
       />
 
+      {/* Header row. Filled state puts a comfortably-sized "✕ Remove" pill at top-right
+           so the operator can clear without hunting for a tiny icon embedded in the body. */}
       <div className="flex items-baseline justify-between mb-2">
         <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
           {slotLabel}
         </span>
         {filled && (
-          <span className="font-mono text-[9px] uppercase tracking-widest text-teal-1 font-bold">
-            ✓ loaded
-          </span>
+          <button
+            onClick={onClear}
+            className="font-mono text-[10px] uppercase tracking-widest text-muted hover:text-status-red hover:bg-status-redSoft/40 px-2 py-0.5 rounded inline-flex items-center gap-1 transition-colors"
+            title="Remove this file"
+          >
+            <span className="text-[11px] leading-none">✕</span>
+            <span>remove</span>
+          </button>
         )}
       </div>
 
@@ -242,19 +265,25 @@ function SourceSlot({
         <div className="flex items-start gap-3 flex-1 min-h-0">
           <span className="text-2xl leading-none">{icon}</span>
           <div className="min-w-0 flex-1">
-            <div className="text-base font-semibold text-navy-1 truncate">{file!.name}</div>
-            <div className="text-xs text-muted font-mono mt-1">
-              file · {(file!.size / 1024).toFixed(1)} KB
+            {/* Filename is a button → opens a native browser preview in a new tab.
+                 Underline + ↗ glyph signal external-tab behavior. */}
+            <button
+              onClick={openPreview}
+              className="text-base font-semibold text-navy-1 truncate hover:text-teal-1 hover:underline text-left max-w-full inline-flex items-baseline gap-1.5"
+              title="Open preview in a new tab"
+            >
+              <span className="truncate">{file!.name}</span>
+              <span className="text-xs text-muted shrink-0" aria-hidden>
+                ↗
+              </span>
+            </button>
+            <div className="text-xs font-mono mt-1 inline-flex items-center gap-1.5">
+              <span className="text-teal-1 font-semibold">✓ loaded</span>
+              <span className="text-muted/60">·</span>
+              <span className="text-muted">{(file!.size / 1024).toFixed(1)} KB</span>
             </div>
             <div className="font-mono text-[10px] text-muted/70 mt-1">{futureHint}</div>
           </div>
-          <button
-            onClick={onClear}
-            className="text-xs text-muted hover:text-status-red px-1.5 py-0.5"
-            title="Remove this file"
-          >
-            ✕
-          </button>
         </div>
       ) : (
         <button
@@ -273,3 +302,92 @@ function SourceSlot({
     </div>
   );
 }
+
+// ─── Sample card ────────────────────────────────────────────────────────────
+//
+// One outer card per scenario. Header row carries the title + a coloured
+// scenario badge; body row stacks two file chips side-by-side that mirror
+// the LC / Invoice slots above so the operator can see at a glance which
+// two files a click will load.
+
+function SampleCard({ sample, onClick }: { sample: SamplePair; onClick: () => void }) {
+  const badge = SCENARIO_BADGE[sample.kind];
+  return (
+    <button
+      onClick={onClick}
+      className="text-left rounded-btn border border-line bg-paper hover:border-teal-2 hover:shadow-sm transition-colors px-3 py-3 group"
+    >
+      {/* Header: title + scenario badge */}
+      <div className="flex items-baseline justify-between gap-2 mb-1">
+        <span className="text-sm font-semibold text-navy-1 truncate">{sample.title}</span>
+        <span
+          className={[
+            'shrink-0 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded',
+            badge.cls,
+          ].join(' ')}
+          title={badge.tooltip}
+        >
+          {badge.label}
+        </span>
+      </div>
+      <div className="text-xs text-muted mb-2.5 leading-snug">{sample.note}</div>
+
+      {/* Two file chips — side by side, mirrors the upload slot layout */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <FileChip icon="📄" role="LC" filename={sample.lcLabel} />
+        <FileChip icon="🧾" role="Invoice" filename={sample.invoiceLabel} />
+      </div>
+    </button>
+  );
+}
+
+function FileChip({ icon, role, filename }: { icon: string; role: string; filename: string }) {
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 rounded border border-line bg-slate2/40 group-hover:border-teal-2/40 transition-colors min-w-0">
+      <span className="text-base leading-none shrink-0" aria-hidden>
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="font-mono text-[8px] uppercase tracking-widest text-muted leading-none mb-0.5">
+          {role}
+        </div>
+        <div className="font-mono text-[10px] text-navy-1 truncate" title={filename}>
+          {filename}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SCENARIO_BADGE: Record<ScenarioKind, { label: string; cls: string; tooltip: string }> = {
+  baseline: {
+    label: 'baseline',
+    cls: 'bg-teal-1/10 text-teal-1',
+    tooltip: 'Standard happy-path run — text-PDF invoice',
+  },
+  'high-value': {
+    label: 'high-value',
+    cls: 'bg-status-goldSoft text-status-gold',
+    tooltip: 'Large amount with multiple required documents',
+  },
+  'strict-tolerance': {
+    label: 'strict 0/0',
+    cls: 'bg-status-redSoft text-status-red',
+    tooltip: 'Zero-tolerance LC — any over-shipment becomes a discrepancy',
+  },
+  'fob-eur': {
+    label: 'FOB · EUR',
+    cls: 'bg-navy-1/10 text-navy-1',
+    tooltip: 'EUR currency under FOB Incoterms — partial shipments allowed',
+  },
+  expired: {
+    label: 'expired',
+    cls: 'bg-status-redSoft text-status-red',
+    tooltip: 'LC already expired — exercises date-based rule checks',
+  },
+  'image-pdf': {
+    label: 'image · vision',
+    cls: 'bg-status-goldSoft text-status-gold',
+    tooltip: 'Image-only invoice — forces the vision-LLM extraction lane',
+  },
+};

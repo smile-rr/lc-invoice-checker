@@ -3,8 +3,10 @@ package com.lc.checker.domain.invoice;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.lc.checker.domain.common.FieldEnvelope;
+import com.lc.checker.domain.common.ParsedRow;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * Parsed commercial invoice, populated by the vision LLM extractor or one of the
@@ -57,12 +59,16 @@ public record InvoiceDocument(
         String rawText,
 
         // --- Generic envelope (canonical-keyed map; extras preserve unknown keys) ---
-        FieldEnvelope envelope
+        FieldEnvelope envelope,
+
+        // --- Display-ready rows for the invoice fields panel ---
+        List<ParsedRow> parsedRows
 ) {
 
     public InvoiceDocument {
         if (envelope == null) {
             envelope = FieldEnvelope.empty("INVOICE");
         }
+        parsedRows = parsedRows == null ? List.of() : List.copyOf(parsedRows);
     }
 }

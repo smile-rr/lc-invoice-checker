@@ -91,7 +91,7 @@ function StepNode({
           ? 'cursor-not-allowed opacity-50 line-through decoration-muted/40 decoration-1'
           : enabled
             ? active
-              ? 'bg-teal-1/5'
+              ? 'bg-teal-1/10'
               : 'hover:bg-slate2'
             : 'cursor-not-allowed opacity-60',
       ].join(' ')}
@@ -164,13 +164,18 @@ function Dot({ status, active }: { status: StepStatus; active: boolean }) {
       />
     );
   }
-  const tone = {
-    done: 'bg-status-green',
-    running: active ? 'bg-status-gold' : 'bg-status-gold animate-blink',
-    pending: 'bg-line',
-    error: 'bg-status-red',
-  }[status as Exclude<StepStatus, 'skipped'>];
-  const ring = active ? 'ring-2 ring-teal-1/30 ring-offset-2 ring-offset-paper' : '';
+  // Active + done → teal (matches label color) so the current step is visually
+  // distinct from completed-but-not-selected steps (which stay green).
+  const tone =
+    active && status === 'done'
+      ? 'bg-teal-1'
+      : ({
+          done: 'bg-status-green',
+          running: active ? 'bg-status-gold' : 'bg-status-gold animate-blink',
+          pending: 'bg-line',
+          error: 'bg-status-red',
+        } as Record<string, string>)[status];
+  const ring = active ? 'ring-2 ring-teal-1 ring-offset-2 ring-offset-paper' : '';
   return <span className={`${base} ${sizing} ${tone} ${ring}`} />;
 }
 

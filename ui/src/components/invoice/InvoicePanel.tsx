@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { MarkdownView } from './MarkdownView';
-import type { ExtractAttempt, InvoiceDocument } from '../../types';
+import { fmtMs } from '../../lib/formatDuration';
+import type { ExtractAttempt, InvoiceDocument, ParsedRow } from '../../types';
 
 interface Props {
   /** Every visible extractor attempt — drives the top tab strip. May include
@@ -12,52 +13,27 @@ interface Props {
   /** The {@link InvoiceDocument} for {@link activeSource}, or null while no
    *  attempt has produced a document yet (all sources still RUNNING / FAILED). */
   invoice: InvoiceDocument | null;
-  /** Source the orchestrator marked as canonical (used by rule checks). May
-      differ from {@link activeSource} when the operator is browsing alternatives. */
-  selectedSource: string | null;
   onFieldHover: (value: string | null) => void;
 }
 
-const FIELDS: Array<[keyof InvoiceDocument, string]> = [
-  ['invoice_number', 'Invoice #'],
-  ['invoice_date', 'Invoice Date'],
-  ['seller_name', 'Seller'],
-  ['seller_address', 'Seller Address'],
-  ['buyer_name', 'Buyer'],
-  ['buyer_address', 'Buyer Address'],
-  ['goods_description', 'Goods Description'],
-  ['quantity', 'Quantity'],
-  ['unit', 'Unit'],
-  ['unit_price', 'Unit Price'],
-  ['total_amount', 'Total Amount'],
-  ['currency', 'Currency'],
-  ['lc_reference', 'LC Reference'],
-  ['trade_terms', 'Trade Terms'],
-  ['port_of_loading', 'Port of Loading'],
-  ['port_of_discharge', 'Port of Discharge'],
-  ['country_of_origin', 'Country of Origin'],
-  ['signed', 'Signed'],
-];
 
 /**
  * Unified extractor inspector. Two stacked tab strips frame the body:
  *
  *   row 1 — extractor tabs    (Vision · Docling · Mineru …)
- *   row 2 — view tabs          (Fields / Markdown)
+ *   row 2 — view tabs          (Fields / [Markdown] / JSON)
  *
- * The body shows the currently-selected view of the currently-selected
- * extractor's parse. When the operator picks a non-canonical extractor,
- * a soft gold band warns that rule checks ran against a different attempt.
+ * Markdown tab is shown only for text-layout sources (docling, mineru).
+ * Vision LLMs (_local / _cloud) get Fields + JSON only.
  */
 export function InvoicePanel({
   attempts,
   activeSource,
   onActiveSource,
   invoice,
-  selectedSource,
   onFieldHover,
 }: Props) {
-  const [view, setView] = useState<'fields' | 'markdown'>('fields');
+  const [view, setView] = useState<'fields' | 'markdown' | 'json'>('fields');
   const [mdMode, setMdMode] = useState<'rendered' | 'raw'>('rendered');
 
   // Build the extractor tabs. Even during live streaming (before /extracts
@@ -79,15 +55,18 @@ export function InvoicePanel({
           ]
         : [];
 
-  const isAlternativeView =
-    selectedSource != null && activeSource !== selectedSource;
+  const showMarkdown = !isVisionSource(activeSource);
+  // If user was on Markdown and switches to a vision source, fall back silently.
+  const effectiveView = view === 'markdown' && !showMarkdown ? 'fields' : view;
 
   const presentCount = invoice
-    ? FIELDS.filter(([k]) => invoice[k] != null && invoice[k] !== '').length
+    ? (invoice.parsed_rows ?? []).filter(
+        (r) => r.display_value != null && r.display_value !== '',
+      ).length
     : 0;
 
   return (
-    <div className="rounded-card border border-line overflow-hidden bg-paper">
+    <div className="rounded-card border border-line overflow-hidden bg-paper flex flex-col h-[calc(100vh-15rem)]">
       {/* Top zone — extractor selector as a row of stat cards.
            Confidence is the primary number; meta sits underneath. The active
            card gets a teal border + soft tint so the selection is obvious at
@@ -117,47 +96,46 @@ export function InvoicePanel({
         </div>
       </div>
 
-      {/* Alternative-view banner */}
-      {isAlternativeView && (
-        <div className="px-4 py-2 bg-status-goldSoft border-b border-status-gold/20 text-[12px] text-status-gold flex items-center gap-2">
-          <span className="font-mono font-bold uppercase text-[10px] tracking-widest">
-            Alternative view
-          </span>
-          <span>·</span>
-          <span>
-            Rule checks ran against{' '}
-            <span className="font-mono font-bold">{selectedSource}</span>.
-          </span>
-        </div>
-      )}
+      {/* Reference state is conveyed entirely by ExtractorCard styling
+           (gold tint, REF pill, opacity) — no banner row, so toggling
+           between cards never shifts vertical layout. */}
 
-      {/* Row 2 — view tabs (Fields / Markdown) on the white body */}
+      {/* Row 2 — view tabs (Fields / [Markdown] / JSON) on the white body */}
       <div className="flex items-center border-b border-line px-4">
-        <ViewTab on={view === 'fields'} onClick={() => setView('fields')}>
+        <ViewTab on={effectiveView === 'fields'} onClick={() => setView('fields')}>
           Fields <span className="text-muted">({presentCount})</span>
         </ViewTab>
-        <ViewTab on={view === 'markdown'} onClick={() => setView('markdown')}>
-          Markdown
+        {showMarkdown && (
+          <ViewTab on={effectiveView === 'markdown'} onClick={() => setView('markdown')}>
+            Markdown
+          </ViewTab>
+        )}
+        <ViewTab on={effectiveView === 'json'} onClick={() => setView('json')}>
+          JSON
         </ViewTab>
         <div className="ml-auto py-2 text-[10px] font-mono text-muted">
           {invoice
-            ? `${Math.round((invoice.extractor_confidence ?? 0) * 100)}% conf · ${invoice.pages ?? 1}p · ${invoice.extraction_ms}ms`
+            ? `${Math.round((invoice.extractor_confidence ?? 0) * 100)}% conf · ${invoice.pages ?? 1}p · ${fmtMs(invoice.extraction_ms)}`
             : 'awaiting first extractor result'}
         </div>
       </div>
 
-      {/* Body */}
-      {!invoice ? (
-        <BodyPlaceholder attempts={tabs} />
-      ) : view === 'fields' ? (
-        <FieldsTable invoice={invoice} onFieldHover={onFieldHover} />
-      ) : (
-        <MarkdownBody
-          source={invoice.raw_markdown ?? ''}
-          mode={mdMode}
-          setMode={setMdMode}
-        />
-      )}
+      {/* Body — fills remaining height, single scroll region */}
+      <div className="flex-1 overflow-auto min-h-0">
+        {!invoice ? (
+          <BodyPlaceholder attempts={tabs} />
+        ) : effectiveView === 'fields' ? (
+          <FieldsTable invoice={invoice} onFieldHover={onFieldHover} />
+        ) : effectiveView === 'markdown' ? (
+          <MarkdownBody
+            source={invoice.raw_markdown ?? ''}
+            mode={mdMode}
+            setMode={setMdMode}
+          />
+        ) : (
+          <JsonBody invoice={invoice} />
+        )}
+      </div>
     </div>
   );
 }
@@ -196,23 +174,38 @@ function ExtractorCard({
 }) {
   const pending = attempt.status === 'PENDING';
   const running = attempt.status === 'RUNNING';
-  // FAILED implies status==='FAILED' OR (terminal state with no doc) — but we
-  // must NOT treat PENDING (no doc yet) as failed.
-  const failed = !pending && !running && (attempt.status === 'FAILED' || attempt.document === null);
-  const success = !pending && !running && !failed;
+  const failed  = attempt.status === 'FAILED';
+  const success = attempt.status === 'SUCCESS';
+  // Reference card: succeeded but the orchestrator did NOT pick this output
+  // for downstream rule checks. Visually demoted (gold instead of teal,
+  // slight opacity) so the canonical winner is unambiguous at a glance.
+  const isReference = success && !attempt.is_selected;
+  // confidence: SSE COMPLETED carries it directly; document fills it once /extracts loads
   const conf = attempt.document?.extractor_confidence ?? attempt.confidence ?? 0;
   const pct = Math.round(conf * 100);
-  const clickable = success;
+  // only clickable once the document has loaded (confidence may arrive before it)
+  const clickable = success && attempt.document != null;
 
-  const cls = pending
-    ? 'border-line border-dashed bg-slate2/40 cursor-default opacity-70'
-    : running
-      ? 'border-status-gold/50 bg-status-goldSoft/40 cursor-progress'
-      : active && success
-        ? 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30'
-        : failed
-          ? 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75'
-          : 'border-line bg-paper hover:border-teal-2/60';
+  // Card surface treatment:
+  //   selected canonical (active or not) → teal accents
+  //   reference (active)                  → gold tint + ring (matches REF banner)
+  //   reference (inactive)                → default surface, dimmed 90%
+  let cls: string;
+  if (pending) {
+    cls = 'border-line border-dashed bg-slate2/40 cursor-default opacity-70';
+  } else if (running) {
+    cls = 'border-status-gold/50 bg-status-goldSoft/40 cursor-progress';
+  } else if (failed) {
+    cls = 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75';
+  } else if (active && isReference) {
+    cls = 'border-status-gold bg-status-goldSoft/40 ring-1 ring-status-gold/30';
+  } else if (active) {
+    cls = 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30';
+  } else if (isReference) {
+    cls = 'border-line bg-paper hover:border-status-gold/40 opacity-90';
+  } else {
+    cls = 'border-line bg-paper hover:border-teal-2/60';
+  }
 
   return (
     <button
@@ -221,51 +214,68 @@ function ExtractorCard({
       className={`relative text-left rounded-btn border-2 px-3 py-2.5 transition-colors ${cls}`}
       title={
         pending
-          ? `${attempt.source} · queued — will run when its lane is ready`
+          ? `${fmtSource(attempt.source)} · queued — will run when its lane is ready`
           : running
-            ? `${attempt.source} · extracting…`
+            ? `${fmtSource(attempt.source)} · extracting…`
             : failed
               ? attempt.error ?? 'failed'
-              : `${attempt.source} · ${pct}% confidence`
+              : `${fmtSource(attempt.source)} · ${pct}% confidence`
       }
     >
-      {/* Source label + status badge */}
+      {/* Source label + status badge.
+           Long labels (`qwen3-vl:4b-instruct (Local)`) truncate with ellipsis
+           rather than wrap to a 2nd line, which used to push the badge below
+           the label on cards with longer source names. `min-w-0` lets the
+           label shrink in the flex track; `shrink-0` pins the badge to the
+           top-right corner regardless of label length. */}
       <div className="flex items-baseline justify-between gap-2">
         <span
           className={[
-            'font-mono text-[10px] uppercase tracking-[0.22em] font-semibold',
+            'font-mono text-[10px] uppercase tracking-[0.22em] font-semibold truncate min-w-0',
             pending
               ? 'text-muted'
               : running
                 ? 'text-status-gold'
-                : active && success
-                  ? 'text-teal-1'
-                  : failed
-                    ? 'text-status-red'
-                    : 'text-muted',
+                : active && isReference
+                  ? 'text-status-gold'
+                  : active && success
+                    ? 'text-teal-1'
+                    : failed
+                      ? 'text-status-red'
+                      : 'text-muted',
           ].join(' ')}
+          title={fmtSource(attempt.source)}
         >
-          {attempt.source}
+          {fmtSource(attempt.source)}
         </span>
         {pending && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted/80 font-bold inline-flex items-center gap-1">
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted/80 font-bold inline-flex items-center gap-1 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full border border-dashed border-muted/50" />
             queued
           </span>
         )}
         {running && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold font-bold inline-flex items-center gap-1">
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold font-bold inline-flex items-center gap-1 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-status-gold animate-pulse" />
             running
           </span>
         )}
         {success && attempt.is_selected && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-green font-bold">
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-green font-bold shrink-0">
             ✓ used
           </span>
         )}
+        {isReference && (
+          <span
+            className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold/85 font-bold inline-flex items-center gap-1 shrink-0"
+            title="Reference output — extracted in parallel for comparison; rule checks did not use this result"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-status-gold/60" />
+            ref
+          </span>
+        )}
         {failed && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-red font-bold">
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-red font-bold shrink-0">
             failed
           </span>
         )}
@@ -283,7 +293,7 @@ function ExtractorCard({
           </span>
         ) : failed ? (
           <span className="text-xs text-status-red/80">
-            {truncate(attempt.error ?? 'error', 36)}
+            {truncate(attempt.error ?? 'error', 56)}
           </span>
         ) : (
           <>
@@ -295,7 +305,7 @@ function ExtractorCard({
             </span>
             <Sep />
             <span className="font-mono text-[10px] text-muted">
-              {attempt.duration_ms}ms
+              {fmtMs(attempt.duration_ms)}
             </span>
             {attempt.document?.image_based && (
               <>
@@ -349,34 +359,135 @@ function FieldsTable({
   invoice: InvoiceDocument;
   onFieldHover: (v: string | null) => void;
 }) {
+  const rows = invoice.parsed_rows ?? [];
+  if (rows.length === 0) {
+    return (
+      <div className="px-6 py-8 text-center text-muted text-sm italic">
+        No fields extracted.
+      </div>
+    );
+  }
   return (
-    <table
-      className="w-full text-sm"
-      onMouseLeave={() => onFieldHover(null)}
-    >
+    <table className="w-full text-sm" onMouseLeave={() => onFieldHover(null)}>
+      <colgroup>
+        <col className="w-44" />
+        <col />
+      </colgroup>
       <tbody>
-        {FIELDS.map(([k, label]) => {
-          const raw = invoice[k];
-          const val = formatVal(raw);
-          return (
-            <tr
-              key={k}
-              className="border-b border-line last:border-0 hover:bg-slate2 cursor-help"
-              onMouseEnter={() => onFieldHover(val)}
-            >
-              <td className="px-4 py-1.5 text-muted w-44">{label}</td>
-              <td className="px-4 py-1.5 font-mono text-xs">
-                {raw == null || raw === '' ? (
-                  <em className="text-muted italic">missing</em>
-                ) : (
-                  val
-                )}
-              </td>
-            </tr>
-          );
-        })}
+        {rows.map((row) =>
+          row.meta?.type === 'TABLE' ? (
+            <LineItemsSection key={row.tag} row={row} onFieldHover={onFieldHover} />
+          ) : (
+            <FieldValueRow key={row.tag} row={row} onFieldHover={onFieldHover} />
+          ),
+        )}
       </tbody>
     </table>
+  );
+}
+
+function FieldValueRow({
+  row,
+  onFieldHover,
+}: {
+  row: ParsedRow;
+  onFieldHover: (v: string | null) => void;
+}) {
+  const val = row.display_value ?? '';
+  return (
+    <tr
+      className="border-b border-line last:border-0 hover:bg-slate2 cursor-help"
+      onMouseEnter={() => onFieldHover(val)}
+    >
+      <td className="px-4 py-1.5 text-muted w-44">{row.label}</td>
+      <td className="px-4 py-1.5 font-mono text-xs">
+        {val ? (
+          <span className="whitespace-pre-wrap">{val}</span>
+        ) : (
+          <em className="text-muted italic">missing</em>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function LineItemsSection({
+  row,
+  onFieldHover,
+}: {
+  row: ParsedRow;
+  onFieldHover: (v: string | null) => void;
+}) {
+  const columns = (row.meta?.columns ?? []) as string[];
+  const columnLabels = (row.meta?.column_labels ?? {}) as Record<string, string>;
+  const tableRows = (row.meta?.rows ?? []) as Array<Record<string, unknown>>;
+  const rowCount = (row.meta?.row_count ?? 0) as number;
+  // display_value is null when the extractor never returned the table at all,
+  // distinct from "extractor returned an empty array" (rowCount === 0). The
+  // first should look like a missing scalar field; the second should say "0 items".
+  const wasExtracted = row.display_value != null;
+
+  return (
+    <tr className="border-b border-line">
+      <td colSpan={2} className="px-0 py-0">
+        {/* Section header */}
+        <div className="px-4 py-2 bg-slate2/50 border-b border-line flex items-center gap-2">
+          <span className="text-sm text-muted">{row.label}</span>
+          {wasExtracted ? (
+            <span className="font-mono text-[10px] bg-teal-1/10 text-teal-1 px-1.5 py-0.5 rounded">
+              {rowCount} {rowCount === 1 ? 'item' : 'items'}
+            </span>
+          ) : (
+            <span className="font-mono text-[10px] bg-slate2 text-muted italic px-1.5 py-0.5 rounded">
+              missing
+            </span>
+          )}
+        </div>
+        {tableRows.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-line bg-slate2/30">
+                  {columns.map((col) => (
+                    <th
+                      key={col}
+                      className="px-3 py-1.5 text-left font-mono text-[10px] text-muted uppercase tracking-wider font-semibold whitespace-nowrap"
+                    >
+                      {columnLabels[col] ?? col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map((rowData, i) => (
+                  <tr
+                    key={i}
+                    className="border-b border-line/50 last:border-0 hover:bg-slate2/40"
+                  >
+                    {columns.map((col) => {
+                      const cell = rowData[col] != null ? String(rowData[col]) : null;
+                      return (
+                        <td
+                          key={col}
+                          className="px-3 py-1.5 font-mono"
+                          onMouseEnter={() => cell != null && onFieldHover(cell)}
+                        >
+                          {cell ?? <span className="text-muted/50">—</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="px-4 py-3 text-muted text-xs italic">
+            {wasExtracted ? 'Extractor returned an empty table.' : 'Not extracted.'}
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -407,7 +518,7 @@ function MarkdownBody({
           {source.length} chars
         </div>
       </div>
-      <div className="px-4 py-3 max-h-[68vh] overflow-auto">
+      <div className="px-4 py-3">
         {mode === 'rendered' ? (
           <MarkdownView source={source} />
         ) : (
@@ -444,13 +555,31 @@ function ModeBtn({
   );
 }
 
+// ─── json body ──────────────────────────────────────────────────────────────
+
+function JsonBody({ invoice }: { invoice: InvoiceDocument }) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { parsed_rows: _pr, envelope: _env, ...rest } = invoice;
+  return (
+    <div className="p-4">
+      <pre className="font-mono text-xs text-navy-1 whitespace-pre leading-relaxed">
+        {JSON.stringify(rest, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function formatVal(v: unknown): string {
-  if (v === null || v === undefined || v === '') return '';
-  if (typeof v === 'boolean') return v ? 'yes' : 'no';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+function isVisionSource(source: string): boolean {
+  return source.endsWith('_local') || source.endsWith('_cloud');
+}
+
+/** "qwen3-vl:4b-instruct_local" → "qwen3-vl:4b-instruct (Local)", "qwen-vl-plus_cloud" → "qwen-vl-plus (Cloud)". */
+export function fmtSource(s: string): string {
+  if (s.endsWith('_local')) return s.slice(0, -6) + ' (Local)';
+  if (s.endsWith('_cloud')) return s.slice(0, -6) + ' (Cloud)';
+  return s;
 }
 
 function truncate(s: string, n: number): string {

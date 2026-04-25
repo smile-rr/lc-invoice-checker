@@ -4,6 +4,7 @@ import com.lc.checker.domain.common.FieldEnvelope;
 import com.lc.checker.domain.common.FieldType;
 import com.lc.checker.domain.common.ParseWarning;
 import com.lc.checker.domain.invoice.InvoiceDocument;
+import com.lc.checker.infra.fields.ColumnDefinition;
 import com.lc.checker.infra.fields.FieldDefinition;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
 import java.math.BigDecimal;
@@ -57,9 +58,11 @@ public class InvoiceFieldMapper {
             DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH));
 
     private final FieldPoolRegistry registry;
+    private final InvoiceRowProjector rowProjector;
 
-    public InvoiceFieldMapper(FieldPoolRegistry registry) {
+    public InvoiceFieldMapper(FieldPoolRegistry registry, InvoiceRowProjector rowProjector) {
         this.registry = registry;
+        this.rowProjector = rowProjector;
     }
 
     /** The key path: any extractor → InvoiceDocument. */
@@ -99,7 +102,9 @@ public class InvoiceFieldMapper {
             }
             FieldDefinition def = registry.byKey(canonical.get())
                     .orElseThrow(); // resolved alias must point to a real field
-            Object coerced = coerce(value, def.type());
+            Object coerced = (def.type() == FieldType.TABLE)
+                    ? coerceTable(value, def, warnings)
+                    : coerce(value, def.type());
             if (coerced != null) {
                 fields.put(def.key(), coerced);
             }
@@ -108,6 +113,7 @@ public class InvoiceFieldMapper {
         FieldEnvelope envelope = new FieldEnvelope("INVOICE", fields, extras, rawSource, warnings);
 
         // Build the legacy typed-scalar facade from the same canonical map.
+        var parsedRows = rowProjector.project(envelope);
         return new InvoiceDocument(
                 asString(fields.get("invoice_number")),
                 asDate(fields.get("invoice_date")),
@@ -134,7 +140,8 @@ public class InvoiceFieldMapper {
                 extractionMs,
                 rawMarkdown,
                 rawText,
-                envelope);
+                envelope,
+                parsedRows);
     }
 
     // ─── coercion ──────────────────────────────────────────────────────────
@@ -146,17 +153,86 @@ public class InvoiceFieldMapper {
             case DATE -> asDate(v);
             case INTEGER -> asInteger(v);
             case CURRENCY_CODE, ENUM, STRING, MULTILINE_TEXT, DOCUMENT_LIST -> asString(v);
+            case TABLE -> v;   // handled separately by coerceTable() — reaching here is a wiring bug
         };
+    }
+
+    /**
+     * Coerce a TABLE-typed value: expects a {@code List<Map<String,Object>>}
+     * (or anything that looks list-shaped). Each row is walked with the
+     * column-scoped alias dict; cells coerce per their column type. Unknown
+     * row keys land in a per-row {@code _extras} map and emit an UNKNOWN_COLUMN
+     * warning so nothing is silently dropped.
+     */
+    private List<Map<String, Object>> coerceTable(Object raw, FieldDefinition def, List<ParseWarning> warnings) {
+        if (raw == null) return null;
+        if (!(raw instanceof List<?> list)) {
+            warnings.add(new ParseWarning("TABLE_NOT_LIST", def.key(),
+                    "expected an array of rows for '" + def.key() + "' but got "
+                    + raw.getClass().getSimpleName() + "; field skipped"));
+            return null;
+        }
+        if (list.isEmpty()) return null;
+
+        // Build the column-scoped alias dict once.
+        Map<String, ColumnDefinition> colByAlias = new LinkedHashMap<>();
+        Map<String, ColumnDefinition> colByKey = new LinkedHashMap<>();
+        for (ColumnDefinition col : def.columns()) {
+            colByKey.put(col.key(), col);
+            colByAlias.put(col.key().toLowerCase(), col);
+            for (String a : col.invoiceAliases()) {
+                if (a != null && !a.isBlank()) {
+                    colByAlias.put(a.toLowerCase(), col);
+                }
+            }
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int rowIdx = 0;
+        for (Object rowObj : list) {
+            rowIdx++;
+            if (!(rowObj instanceof Map<?, ?> rowMap)) {
+                warnings.add(new ParseWarning("TABLE_ROW_NOT_MAP", def.key(),
+                        "row " + rowIdx + " of '" + def.key() + "' is not an object; skipped"));
+                continue;
+            }
+            Map<String, Object> outRow = new LinkedHashMap<>();
+            Map<String, Object> rowExtras = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> cell : rowMap.entrySet()) {
+                String rawKey = String.valueOf(cell.getKey());
+                if (rawKey == null || rawKey.isBlank()) continue;
+                ColumnDefinition col = colByAlias.get(rawKey.toLowerCase());
+                if (col == null) {
+                    rowExtras.put(rawKey, cell.getValue());
+                    warnings.add(new ParseWarning("UNKNOWN_COLUMN", def.key() + "[" + rowIdx + "]." + rawKey,
+                            "column '" + rawKey + "' is not declared on table '" + def.key()
+                            + "'; preserved in row._extras"));
+                    continue;
+                }
+                Object coerced = coerce(cell.getValue(), col.type());
+                if (coerced != null) {
+                    outRow.put(col.key(), coerced);
+                }
+            }
+            if (!rowExtras.isEmpty()) {
+                outRow.put("_extras", rowExtras);
+            }
+            if (!outRow.isEmpty()) {
+                rows.add(outRow);
+            }
+        }
+        return rows.isEmpty() ? null : rows;
     }
 
     private static String asString(Object v) {
         if (v == null) return null;
-        if (v instanceof String s) {
-            String t = s.trim();
-            return t.isEmpty() ? null : t;
-        }
-        String s = v.toString().trim();
-        return s.isEmpty() ? null : s;
+        String s = v instanceof String str ? str.trim() : v.toString().trim();
+        if (s.isEmpty()) return null;
+        // LLM sometimes emits the literal string "null" for absent fields.
+        if (s.equalsIgnoreCase("null")) return null;
+        // Also treat explicit "n/a" / "n.a." / "—" / "–" as blank.
+        if (s.equalsIgnoreCase("n/a") || s.equalsIgnoreCase("n.a.") || s.equals("—") || s.equals("–")) return null;
+        return s;
     }
 
     private static BigDecimal asDecimal(Object v) {

@@ -114,7 +114,18 @@ function derivedStep(s: SessionState, configured: Set<string> | null): StepKey {
   if (s.invoice && s.lc && enabled('compare')) candidates.push('compare');
   if (invoiceVisible && enabled('invoice')) candidates.push('invoice');
   if (lcVisible && enabled('lc')) candidates.push('lc');
-  candidates.push('upload');
+  // Fallback. If a session exists but no progress is visible yet (the race
+  // window between Run-clicked and the first SSE event), prefer the earliest
+  // configured content step over 'upload' — otherwise the user briefly sees
+  // a blank upload form on a session that is already streaming. With no
+  // session at all we still land on 'upload' as before.
+  if (s.sessionId) {
+    if (enabled('lc')) candidates.push('lc');
+    else if (enabled('invoice')) candidates.push('invoice');
+    else candidates.push('upload');
+  } else {
+    candidates.push('upload');
+  }
   return candidates[0];
 }
 

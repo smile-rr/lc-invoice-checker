@@ -2,6 +2,7 @@ package com.lc.checker.stage.extract.vision;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
+import com.lc.checker.stage.extract.InvoiceFieldMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -9,59 +10,77 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
 /**
- * Spring wiring for vision-LLM invoice extractors. Produces:
+ * Spring wiring for the two vision-LLM invoice extractors. Naming convention:
+ * {@code <location>_llm_vl} — location prefix (cloud / local) + role (llm)
+ * + modality (vl = vision-language). Mirrors the {@code make llm} /
+ * {@code make llm-vl} pattern in the Makefile.
  *
  * <ul>
- *   <li>{@code remoteVisionExtractor} — always present, fed from {@code ${vision.*}}.
- *       This is the cloud-hosted vision LLM (Qwen Cloud, OpenAI, Gemini, etc.).</li>
- *   <li>{@code localVisionExtractor} — only created when
- *       {@code extractor.local-vision-enabled=true}, fed from {@code ${local-vision.*}}.
- *       Targets a local Ollama (or compatible) instance on the same host.</li>
+ *   <li>{@code cloudLlmVlExtractor} — always present, fed from
+ *       {@code ${cloud-llm-vl.*}}. The hosted vision LLM (Qwen Cloud,
+ *       OpenAI, Gemini, etc.).</li>
+ *   <li>{@code localLlmVlExtractor} — only created when
+ *       {@code extractor.local-llm-vl-enabled=true}, fed from
+ *       {@code ${local-llm-vl.*}}. Targets a local Ollama or MLX server on
+ *       the same host.</li>
  * </ul>
  *
- * <p>Two beans, one class. Each instance carries its own {@link VisionExtractorConfig}
- * (URL, API key, model, timeout, source name) and writes its own row to
- * {@code pipeline_steps} via {@link VisionLlmExtractor#extractorName()}.
+ * <p>Two beans, one class. Each instance carries its own
+ * {@link VisionExtractorConfig} (URL, API key, model, timeout, source name)
+ * and writes its own row to {@code pipeline_steps} via
+ * {@link VisionLlmExtractor#extractorName()}.
  *
- * <p>The orchestrator picks them up via {@code @Qualifier("remoteVisionExtractor")} and
- * {@code ObjectProvider<VisionLlmExtractor>} — the latter so the orchestrator boots
- * cleanly even when the local bean is absent (disabled).
+ * <p>The orchestrator picks them up via {@code @Qualifier("cloudLlmVlExtractor")}
+ * and {@code ObjectProvider<VisionLlmExtractor>} (the latter so the
+ * orchestrator boots cleanly even when the local bean is absent).
+ *
+ * <p>The two LLMs run in parallel, not as fall-back — each fires its own
+ * {@code CompletableFuture} in {@code InvoiceExtractionOrchestrator}. Both
+ * results are persisted; selection picks the first SUCCESS in chain priority
+ * order ({@code local} first), so {@code local_llm_vl} wins by default and
+ * {@code cloud_llm_vl} is shown alongside for comparison.
  */
 @Configuration
 public class VisionExtractorBeans {
 
-    @Bean(name = "remoteVisionExtractor")
-    public VisionLlmExtractor remoteVisionExtractor(
+    @Bean(name = "cloudLlmVlExtractor")
+    public VisionLlmExtractor cloudLlmVlExtractor(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
-            com.lc.checker.stage.extract.InvoiceFieldMapper mapper,
+            InvoiceFieldMapper mapper,
             ObjectMapper json,
             FieldPoolRegistry fieldPool,
-            @Value("${vision.base-url}") String baseUrl,
-            @Value("${vision.api-key:}") String apiKey,
-            @Value("${vision.model}") String model,
-            @Value("${vision.render-scale:1.5}") float renderScale,
-            @Value("${vision.timeout-seconds:120}") int timeoutSeconds) {
+            @Value("${cloud-llm-vl.base-url}") String baseUrl,
+            @Value("${cloud-llm-vl.api-key:}") String apiKey,
+            @Value("${cloud-llm-vl.model}") String model,
+            @Value("${cloud-llm-vl.render-dpi:200}") int renderDpi,
+            @Value("${cloud-llm-vl.max-pages:10}") int maxPages,
+            @Value("${cloud-llm-vl.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${cloud-llm-vl.timeout-seconds:120}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                "remote_vision", baseUrl, apiKey, model, renderScale, timeoutSeconds);
+                model + "_cloud", baseUrl, apiKey, model,
+                renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, fieldPool);
     }
 
-    @Bean(name = "localVisionExtractor")
-    @ConditionalOnProperty(name = "extractor.local-vision-enabled", havingValue = "true")
-    public VisionLlmExtractor localVisionExtractor(
+    @Bean(name = "localLlmVlExtractor")
+    @ConditionalOnProperty(name = "extractor.local-llm-vl-enabled", havingValue = "true")
+    public VisionLlmExtractor localLlmVlExtractor(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
-            com.lc.checker.stage.extract.InvoiceFieldMapper mapper,
+            InvoiceFieldMapper mapper,
             ObjectMapper json,
             FieldPoolRegistry fieldPool,
-            @Value("${local-vision.base-url:http://localhost:11434/v1}") String baseUrl,
-            @Value("${local-vision.api-key:}") String apiKey,
-            @Value("${local-vision.model:qwen2.5vl}") String model,
-            @Value("${local-vision.render-scale:1.5}") float renderScale,
-            @Value("${local-vision.timeout-seconds:300}") int timeoutSeconds) {
+            @Value("${local-llm-vl.base-url:http://localhost:11434/v1}") String baseUrl,
+            @Value("${local-llm-vl.api-key:}") String apiKey,
+            @Value("${local-llm-vl.model:qwen2.5vl}") String model,
+            @Value("${local-llm-vl.render-dpi:200}") int renderDpi,
+            @Value("${local-llm-vl.max-pages:10}") int maxPages,
+            @Value("${local-llm-vl.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${local-llm-vl.timeout-seconds:300}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                "local_vision", baseUrl, apiKey, model, renderScale, timeoutSeconds);
+                model + "_local", baseUrl, apiKey, model,
+                renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, fieldPool);
     }
 }

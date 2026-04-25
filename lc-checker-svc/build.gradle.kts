@@ -86,3 +86,10 @@ tasks.withType<JavaCompile> {
     // -parameters retains parameter names for SpEL binding in TypeAStrategy.
     options.compilerArgs.add("-parameters")
 }
+
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    // Force IPv4 for outbound sockets — guards against macOS picking an
+    // IPv6 path that lies (e.g. a TUN proxy adding bogus IPv6 routes).
+    // Pairs with BoundSocketFactory in the JDBC URL for full network defence.
+    jvmArgs("-Djava.net.preferIPv4Stack=true")
+}

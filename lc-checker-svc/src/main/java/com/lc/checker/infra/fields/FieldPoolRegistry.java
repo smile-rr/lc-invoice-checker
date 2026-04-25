@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.lc.checker.domain.common.FieldType;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collections;
@@ -69,6 +70,7 @@ public class FieldPoolRegistry {
             if (keyMap.put(f.key(), f) != null) {
                 throw new IllegalStateException("Duplicate field-pool key: " + f.key());
             }
+            validateColumns(f);
             // Each field is its own alias too, so {credit_amount → credit_amount}.
             aliasMap.put(f.key(), f.key());
             for (String alias : f.invoiceAliases()) {
@@ -119,6 +121,38 @@ public class FieldPoolRegistry {
 
     public List<FieldDefinition> appliesToInvoice() {
         return fields.stream().filter(FieldDefinition::appliesToInvoice).toList();
+    }
+
+    private static void validateColumns(FieldDefinition f) {
+        boolean isTable = f.type() == FieldType.TABLE;
+        boolean hasColumns = f.columns() != null && !f.columns().isEmpty();
+        if (isTable && !hasColumns) {
+            throw new IllegalStateException(
+                    "TABLE field '" + f.key() + "' must declare a columns: block");
+        }
+        if (!isTable && hasColumns) {
+            throw new IllegalStateException(
+                    "Field '" + f.key() + "' (type=" + f.type()
+                    + ") declared columns: but only TABLE fields may have columns");
+        }
+        if (!isTable) return;
+
+        Set<String> colKeys = new LinkedHashSet<>();
+        for (ColumnDefinition c : f.columns()) {
+            if (c.key() == null || c.key().isBlank()) {
+                throw new IllegalStateException(
+                        "TABLE field '" + f.key() + "' has a column without a key");
+            }
+            if (!colKeys.add(c.key())) {
+                throw new IllegalStateException(
+                        "TABLE field '" + f.key() + "' has duplicate column key: " + c.key());
+            }
+            if (c.type() == FieldType.TABLE) {
+                throw new IllegalStateException(
+                        "Column '" + c.key() + "' on '" + f.key()
+                        + "' is type=TABLE — nested tables are not supported");
+            }
+        }
     }
 
     /** Top-level YAML envelope: {@code fields: [...]}. */

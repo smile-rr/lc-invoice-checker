@@ -8,8 +8,8 @@ the **selected** source for downstream rule checks.
 
 | Source          | Lives in                 | Runtime | LLM? | Typical use |
 |-----------------|--------------------------|---------|------|-------------|
-| `remote_vision` | `lc-checker-svc` (Java)  | JVM     | **Yes** — vision LLM via OpenAI-compatible endpoint | Image-based PDFs, scanned invoices, layout-heavy documents (cloud Qwen / OpenAI / Gemini) |
-| `local_vision`  | `lc-checker-svc` (Java)  | JVM     | **Yes** — local Ollama vision model | Same workload as `remote_vision`, run offline / no API spend |
+| `vendor_vision` | `lc-checker-svc` (Java)  | JVM     | **Yes** — vision LLM via OpenAI-compatible endpoint | Image-based PDFs, scanned invoices, layout-heavy documents (cloud Qwen / OpenAI / Gemini) |
+| `local_vision`  | `lc-checker-svc` (Java)  | JVM     | **Yes** — local Ollama vision model | Same workload as `vendor_vision`, run offline / no API spend |
 | `docling`       | `extractors/docling/`    | Python  | No   | Born-digital PDFs with a clean text layer |
 | `mineru`        | `extractors/mineru/`     | Python  | No   | Image-heavy PDFs where Docling's OCR struggles |
 
@@ -58,7 +58,7 @@ are split into two lanes that execute concurrently on `lcCheckExecutor`:
 
 ```
 ┌── Lane A (parallel) ────────────────────────────────┐
-│   remote_vision   (cloud network call, 2–5 s)       │
+│   vendor_vision   (cloud network call, 2–5 s)       │
 └─────────────────────────────────────────────────────┘
 ┌── Lane B (sequential within lane) ──────────────────┐
 │   docling → mineru → local_vision                   │
@@ -76,7 +76,7 @@ are split into two lanes that execute concurrently on `lcCheckExecutor`:
      with `status`, `confidence`, `inv_output` JSONB, `llm_calls` JSONB,
    - emits an `extract.source.completed` SSE event with the per-source outcome.
 2. After **both** lanes finish, attempts are collected in chain priority order
-   (`remote_vision → docling → mineru → local_vision`) for selection:
+   (`vendor_vision → docling → mineru → local_vision`) for selection:
    - First source in chain order whose `status = SUCCESS` AND
      `confidence >= extractor.confidence-threshold`.
    - Fallback: highest-confidence successful source.
@@ -93,8 +93,8 @@ Sources are enabled/disabled via env vars (see [`../.env.example`](../.env.examp
 
 | Env var                         | Default | Notes |
 |---------------------------------|---------|-------|
-| `EXTRACTOR_VISION_ENABLED`      | `true`  | remote vision LLM (lane A) |
-| `EXTRACTOR_LOCAL_VISION_ENABLED`| `false` | local Ollama vision LLM (lane B) |
+| `EXTRACTOR_VENDOR_VISION_ENABLED` (alias `EXTRACTOR_VISION_ENABLED`) | `true`  | vendor vision LLM (commercial / paid API) |
+| `EXTRACTOR_LOCAL_VISION_ENABLED`| `false` | local vision LLM (MLX / Ollama on this host) |
 | `EXTRACTOR_DOCLING_ENABLED`     | `false` | docling sidecar (lane B) |
 | `EXTRACTOR_MINERU_ENABLED`      | `false` | mineru sidecar (lane B) |
 | `EXTRACTOR_CONFIDENCE_THRESHOLD`| `0.80`  | selection cutoff |
@@ -122,7 +122,7 @@ echo "LOCAL_VISION_BASE_URL=http://localhost:11434/v1" >> .env
 echo "LOCAL_VISION_MODEL=qwen2.5vl" >> .env
 ```
 
-`local_vision` shares the same Java class as `remote_vision`
+`local_vision` shares the same Java class as `vendor_vision`
 (`VisionLlmExtractor` — see `stage/extract/vision/VisionExtractorBeans.java`)
 but is wired as a separate Spring bean with its own config block.
 
@@ -133,7 +133,7 @@ but is wired as a separate Spring bean with its own config block.
 `field-pool.yaml` (in `lc-checker-svc/src/main/resources/fields/`) is the
 single source of truth for invoice field names. Every extractor's output —
 regardless of whether it's a regex-driven Python parser (docling/mineru) or
-an LLM (remote_vision/local_vision) — flows through `InvoiceFieldMapper`,
+an LLM (vendor_vision/local_vision) — flows through `InvoiceFieldMapper`,
 which calls `FieldPoolRegistry.resolveInvoiceAlias(rawKey)` for each entry:
 
 | Outcome | Behaviour |

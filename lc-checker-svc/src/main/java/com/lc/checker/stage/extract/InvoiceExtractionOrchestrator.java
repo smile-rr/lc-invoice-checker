@@ -1,6 +1,5 @@
 package com.lc.checker.stage.extract;
 
-import com.lc.checker.stage.extract.vision.VisionLlmExtractor;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
 import com.lc.checker.infra.persistence.CheckSessionStore;
@@ -14,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -22,114 +22,140 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Stage 1b orchestrator. Fires every enabled vision-LLM extractor in parallel
- * against the same PDF, persists one {@code pipeline_steps} row per source,
- * then marks one row as {@code is_selected=true} to drive downstream rule
- * checks.
+ * Stage 1b orchestrator. Fires every enabled extractor in parallel against the
+ * same PDF, persists one {@code pipeline_steps} row per source, then marks one
+ * row as {@code is_selected=true} to drive downstream rule checks.
  *
- * <p>Chain priority order: {@code [local_vision, remote_vision]}. Selection
- * rule: <b>first SUCCESS in chain order</b> — confidence threshold becomes a
- * {@code WARN}-only signal, not a gate. So {@code local_vision} wins whenever
- * it succeeded, regardless of confidence; if it failed, {@code remote_vision}
- * takes over.
+ * <p><b>Selection chain</b> (priority order): {@code [local_llm_vl, cloud_llm_vl]}.
+ * Selection rule: <b>first SUCCESS in chain order</b>. Confidence threshold is a
+ * {@code WARN}-only signal, not a gate.
+ *
+ * <p><b>Supplementary sources</b>: {@code [docling, mineru]} (when enabled). They
+ * run in parallel and their results are persisted for display in the UI, but they
+ * are never candidates for the selected result — rule checks always use a vision
+ * LLM result.
  *
  * <p>Per-source persistence is preserved across crashes — {@link #runAndPersistOne}
- * catches every exception, persists a {@code FAILED} row, and emits an SSE
- * event, so a single source's blow-up never loses the other source's result.
+ * catches every exception, persists a {@code FAILED} row, and emits an SSE event,
+ * so a single source's blow-up never loses the other sources' results.
  */
 @Component
 public class InvoiceExtractionOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(InvoiceExtractionOrchestrator.class);
 
-    /** Configured chain in priority order — drives selection AND parallel fan-out. */
-    private final List<VisionLlmExtractor> chain = new ArrayList<>();
+    /** Priority-ordered vision sources — winner is selected from here only. */
+    private final List<InvoiceExtractor> selectionChain = new ArrayList<>();
+
+    /** Text-layout sources — always run, persist, but never selected for rule checks. */
+    private final List<InvoiceExtractor> supplementary = new ArrayList<>();
 
     private final CheckSessionStore store;
     private final Executor executor;
     private final double confidenceThreshold;
-    private volatile String lastUsed = "remote_vision";
+    private volatile String lastUsed = "";
 
     public InvoiceExtractionOrchestrator(
-            @Qualifier("remoteVisionExtractor") VisionLlmExtractor remoteVision,
-            @Qualifier("localVisionExtractor") ObjectProvider<VisionLlmExtractor> localVisionProvider,
+            @Qualifier("cloudLlmVlExtractor") InvoiceExtractor cloudLlmVl,
+            @Qualifier("localLlmVlExtractor") ObjectProvider<InvoiceExtractor> localLlmVlProvider,
+            @Qualifier("doclingExtractorClient") ObjectProvider<InvoiceExtractor> doclingProvider,
+            @Qualifier("mineruExtractorClient")  ObjectProvider<InvoiceExtractor> mineruProvider,
             CheckSessionStore store,
             @Qualifier("lcCheckExecutor") Executor executor,
             @Value("${extractor.confidence-threshold:0.80}") double confidenceThreshold,
-            @Value("${extractor.vision-enabled:true}")        boolean visionEnabled,
-            @Value("${extractor.local-vision-enabled:false}") boolean localVisionEnabled) {
+            @Value("${extractor.cloud-llm-vl-enabled:true}")  boolean cloudLlmVlEnabled,
+            @Value("${extractor.local-llm-vl-enabled:false}") boolean localLlmVlEnabled,
+            @Value("${extractor.docling-enabled:false}") boolean doclingEnabled,
+            @Value("${extractor.mineru-enabled:false}")  boolean mineruEnabled) {
 
         this.store = store;
         this.executor = executor;
         this.confidenceThreshold = confidenceThreshold;
 
-        // Priority order: local_vision first (default selected when available),
-        // then remote_vision as the comparison / fallback source.
-        if (localVisionEnabled) {
-            VisionLlmExtractor local = localVisionProvider.getIfAvailable();
+        // Selection chain: local first (default winner), cloud second (fallback).
+        if (localLlmVlEnabled) {
+            InvoiceExtractor local = localLlmVlProvider.getIfAvailable();
             if (local == null) {
                 throw new IllegalStateException(
-                        "extractor.local-vision-enabled=true but no localVisionExtractor bean exists. "
-                        + "Check the @ConditionalOnProperty wiring and the local-vision config block.");
+                        "extractor.local-llm-vl-enabled=true but no localLlmVlExtractor bean exists. "
+                        + "Check the @ConditionalOnProperty wiring and the local-llm-vl config block.");
             }
-            chain.add(local);
+            selectionChain.add(local);
         }
-        if (visionEnabled) {
-            chain.add(remoteVision);
+        if (cloudLlmVlEnabled) {
+            selectionChain.add(cloudLlmVl);
         }
-        if (chain.isEmpty()) {
+        if (selectionChain.isEmpty()) {
             throw new IllegalStateException(
-                    "At least one extractor must be enabled (local_vision / remote_vision).");
+                    "At least one vision extractor must be enabled (local_llm_vl / cloud_llm_vl).");
         }
-        log.info("InvoiceExtractionOrchestrator initialised: sources={} threshold={} (warn-only)",
-                chain.stream().map(VisionLlmExtractor::extractorName).toList(),
+
+        // Supplementary sources: run always, persist results, never selected.
+        if (doclingEnabled) {
+            InvoiceExtractor d = doclingProvider.getIfAvailable();
+            if (d != null) supplementary.add(d);
+            else log.warn("extractor.docling-enabled=true but doclingExtractorClient bean is absent");
+        }
+        if (mineruEnabled) {
+            InvoiceExtractor m = mineruProvider.getIfAvailable();
+            if (m != null) supplementary.add(m);
+            else log.warn("extractor.mineru-enabled=true but mineruExtractorClient bean is absent");
+        }
+
+        log.info("InvoiceExtractionOrchestrator initialised: selection={} supplementary={} threshold={} (warn-only)",
+                selectionChain.stream().map(InvoiceExtractor::extractorName).toList(),
+                supplementary.stream().map(InvoiceExtractor::extractorName).toList(),
                 confidenceThreshold);
     }
 
     /** Per-source extraction outcome — produced by {@link #runAndPersistOne}. */
-    private record Attempt(String source, boolean success, InvoiceDocument doc,
-                           List<LlmTrace> traces, String error, long durationMs) {}
+    private record Attempt(String source, boolean success, boolean isSelectionSource,
+                           InvoiceDocument doc, List<LlmTrace> traces, String error, long durationMs) {}
 
     public InvoiceDocument runAndPersist(String sessionId, byte[] pdfBytes, String filename) {
         return runAndPersist(sessionId, pdfBytes, filename, CheckEventPublisher.NOOP);
     }
 
     /**
-     * Stage 1b main entry. Fires each enabled extractor as its own future on
-     * {@code lcCheckExecutor}; total wall-clock is roughly {@code max(perSource)}.
+     * Stage 1b main entry. Fires every enabled source (selection chain + supplementary)
+     * as its own future on {@code lcCheckExecutor}; total wall-clock is roughly
+     * {@code max(perSource)}.
      */
     public InvoiceDocument runAndPersist(String sessionId, byte[] pdfBytes, String filename,
                                           CheckEventPublisher publisher) {
-        // One future per enabled source, all run in parallel.
-        List<CompletableFuture<Attempt>> futures = chain.stream()
-                .map(e -> CompletableFuture.supplyAsync(
-                        () -> runAndPersistOne(e, sessionId, pdfBytes, filename, publisher),
-                        executor))
+        // Fire all sources in parallel — selection chain and supplementary alike.
+        List<InvoiceExtractor> allSources = Stream
+                .concat(selectionChain.stream(), supplementary.stream())
                 .toList();
 
-        // Each future internally swallows ExtractionException into a FAILED Attempt,
-        // so allOf().join() should never throw under normal operation. Defensive log.
+        List<CompletableFuture<Attempt>> futures = allSources.stream()
+                .map(e -> {
+                    boolean isSelection = selectionChain.contains(e);
+                    return CompletableFuture.supplyAsync(
+                            () -> runAndPersistOne(e, isSelection, sessionId, pdfBytes, filename, publisher),
+                            executor);
+                })
+                .toList();
+
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         } catch (Exception e) {
             log.error("Unexpected lane failure in invoice extraction: {}", e.getMessage(), e);
         }
 
-        // Collect attempts — futures may not all have completed normally; getNow(null)
-        // handles that. Filter nulls. Order is chain order (futures stream is ordered).
         List<Attempt> attempts = futures.stream()
                 .map(f -> f.getNow(null))
                 .filter(Objects::nonNull)
                 .toList();
 
-        // Selection: first SUCCESS in chain priority order. Threshold is warn-only.
+        // Selection: first SUCCESS among selection-chain sources only.
         Attempt selected = attempts.stream()
-                .filter(Attempt::success)
+                .filter(a -> a.isSelectionSource() && a.success())
                 .findFirst()
                 .orElse(null);
         if (selected == null) {
             throw new ExtractionException("none", ExtractorErrorCode.UNKNOWN,
-                    "All extractors failed; see pipeline_steps rows for details");
+                    "All vision extractors failed; see pipeline_steps rows for details");
         }
         if (selected.doc().extractorConfidence() < confidenceThreshold) {
             log.warn("Stage 1b selected source={} below threshold (confidence={}, threshold={})",
@@ -146,11 +172,10 @@ public class InvoiceExtractionOrchestrator {
     /**
      * Run one extractor: capture timing, persist a row to {@code pipeline_steps}
      * (SUCCESS or FAILED), emit per-source SSE events, return the {@link Attempt}.
-     * Never throws — extractor exceptions become FAILED attempts so a single
-     * source's failure doesn't poison the parallel join.
+     * Never throws.
      */
-    private Attempt runAndPersistOne(VisionLlmExtractor e, String sessionId,
-                                     byte[] pdfBytes, String filename,
+    private Attempt runAndPersistOne(InvoiceExtractor e, boolean isSelectionSource,
+                                     String sessionId, byte[] pdfBytes, String filename,
                                      CheckEventPublisher publisher) {
         String source = e.extractorName();
         publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_STARTED,
@@ -176,7 +201,7 @@ public class InvoiceExtractionOrchestrator {
                             "durationMs", dur,
                             "imageBased", r.document().imageBased(),
                             "pages", r.document().pages())));
-            return new Attempt(source, true, r.document(), r.llmCalls(), null, dur);
+            return new Attempt(source, true, isSelectionSource, r.document(), r.llmCalls(), null, dur);
         } catch (ExtractionException ex) {
             long dur = System.currentTimeMillis() - t0;
             List<LlmTrace> trc = ex.getLlmTrace() == null ? List.of() : List.of(ex.getLlmTrace());
@@ -194,7 +219,7 @@ public class InvoiceExtractionOrchestrator {
                             "success", false,
                             "durationMs", dur,
                             "error", ex.getMessage() == null ? "" : ex.getMessage())));
-            return new Attempt(source, false, null, trc, ex.getMessage(), dur);
+            return new Attempt(source, false, isSelectionSource, null, trc, ex.getMessage(), dur);
         } catch (RuntimeException ex) {
             long dur = System.currentTimeMillis() - t0;
             String msg = "unexpected: " + ex.getClass().getSimpleName() + ": " + ex.getMessage();
@@ -211,16 +236,18 @@ public class InvoiceExtractionOrchestrator {
                             "success", false,
                             "durationMs", dur,
                             "error", msg)));
-            return new Attempt(source, false, null, List.of(), msg, dur);
+            return new Attempt(source, false, isSelectionSource, null, List.of(), msg, dur);
         }
     }
 
     /**
-     * Names of extractor sources currently configured to run, in chain priority
-     * order. UI uses this for pre-populated PENDING cards before any SSE event.
+     * Names of all active sources in declaration order (selection chain first,
+     * then supplementary). UI uses this for pre-populated PENDING cards.
      */
     public List<String> configuredSources() {
-        return chain.stream().map(VisionLlmExtractor::extractorName).toList();
+        return Stream.concat(selectionChain.stream(), supplementary.stream())
+                .map(InvoiceExtractor::extractorName)
+                .toList();
     }
 
     /** Source of the most recently selected attempt — debug / observability only. */
@@ -229,13 +256,12 @@ public class InvoiceExtractionOrchestrator {
     }
 
     /**
-     * Debug helper — runs every enabled source in chain order and returns a
-     * plain-text dump. Used by {@code /api/v1/debug/invoice/compare}. Does NOT
-     * persist to DB.
+     * Debug helper — runs every enabled source in order and returns a plain-text
+     * dump. Used by {@code /api/v1/debug/invoice/compare}. Does NOT persist to DB.
      */
     public String compareAllAsText(byte[] pdfBytes, String filename) {
         StringBuilder sb = new StringBuilder();
-        for (VisionLlmExtractor e : chain) {
+        Stream.concat(selectionChain.stream(), supplementary.stream()).forEach(e -> {
             long start = System.currentTimeMillis();
             sb.append("=== ").append(e.extractorName()).append(" ===\n");
             try {
@@ -268,7 +294,7 @@ public class InvoiceExtractionOrchestrator {
                 sb.append("error: ").append(ex.getMessage()).append("\n");
             }
             sb.append("\n");
-        }
+        });
         return sb.toString();
     }
 }

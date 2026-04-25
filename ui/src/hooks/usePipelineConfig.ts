@@ -5,8 +5,8 @@ interface PipelineConfig {
   /** Stage names wired in the current build (lc_parse, invoice_extract, ...). */
   configuredStages: Set<string>;
   /** Invoice-extractor source names in chain priority order
-   *  (remote_vision, docling, mineru, local_vision). The UI uses this to
-   *  pre-render PENDING cards before any SSE event arrives. */
+   *  (e.g. qwen3-vl:4b-instruct_local, qwen-vl-plus_cloud, docling, mineru).
+   *  Use fmtSource() to render the human-readable label in the UI. */
   extractorSources: string[];
   loading: boolean;
   error: string | null;

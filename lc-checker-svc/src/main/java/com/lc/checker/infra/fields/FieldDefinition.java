@@ -31,7 +31,8 @@ public record FieldDefinition(
         List<String> enumValues,       // populated only when type == ENUM
         boolean ruleRelevant,
         Object defaultValue,           // optional default if absent
-        String group                   // optional UI grouping label (e.g. "header", "amount")
+        String group,                  // optional UI grouping label (e.g. "header", "amount")
+        List<ColumnDefinition> columns // populated only when type == TABLE; row schema
 ) {
 
     public FieldDefinition {
@@ -39,6 +40,7 @@ public record FieldDefinition(
         sourceTags = sourceTags == null ? List.of() : List.copyOf(sourceTags);
         invoiceAliases = invoiceAliases == null ? List.of() : List.copyOf(invoiceAliases);
         enumValues = enumValues == null ? List.of() : List.copyOf(enumValues);
+        columns = columns == null ? List.of() : List.copyOf(columns);
     }
 
     public boolean appliesToLc() {

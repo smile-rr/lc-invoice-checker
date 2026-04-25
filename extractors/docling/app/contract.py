@@ -42,12 +42,16 @@ CONTRACT_FIELD_KEYS: tuple[str, ...] = (
 
 
 class InvoiceFields(BaseModel):
-    """The 18 structured fields. `signed` is bool|null; everything else is str|null.
+    """Structured invoice fields. `signed`, `stamp_present`, `letterhead_present`
+    are bool|null; `line_items` is a list of row dicts; everything else is str|null.
 
-    Extras belong under the separate `extras` dict so Java's strict deserializer
-    can ignore them without failing, per contract §fields.extras.
+    The 18 original CONTRACT_FIELD_KEYS are always present (value may be null).
+    Extended fields (stamp_present, letterhead_present, line_items) are populated
+    by the LLM extractor and resolved by Java's FieldPoolRegistry alias table.
+    Extras: catch-all for anything not mapped above.
     """
 
+    # --- original 18 contract fields ---
     invoice_number: Optional[str] = None
     invoice_date: Optional[str] = None  # ISO 8601 YYYY-MM-DD preferred; raw allowed
     seller_name: Optional[str] = None
@@ -66,7 +70,11 @@ class InvoiceFields(BaseModel):
     port_of_discharge: Optional[str] = None
     country_of_origin: Optional[str] = None
     signed: Optional[bool] = None
-    # Namespaced catch-all per contract §fields.extras
+    # --- extended fields (LLM extractor; resolved by Java field-pool aliases) ---
+    stamp_present: Optional[bool] = None
+    letterhead_present: Optional[bool] = None
+    line_items: Optional[list[dict[str, Any]]] = None
+    # --- catch-all ---
     extras: dict[str, Any] = Field(default_factory=dict)
 
     def non_null_count(self) -> int:
