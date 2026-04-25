@@ -15,16 +15,20 @@ export const STEPS: Array<{ key: StepKey; n: string; label: string }> = [
 const KEYS: StepKey[] = STEPS.map((s) => s.key);
 
 /**
- * Maps each UI step to the backend stage(s) it depends on. A UI step is
- * considered "skipped" iff every backing stage is absent from the
- * pipeline-config endpoint. Steps with NO backing stage (`upload`, `compare`)
- * are never skipped — they're UI-only views.
+ * Maps each UI step to the backend stage(s) it depends on. A step is
+ * "skipped" if any of its required backend stages is missing from the
+ * pipeline-config endpoint — every required stage must be wired in for
+ * the step to render meaningfully.
+ *
+ * `compare` has no backend stage of its own, but it cross-references
+ * lc_parse + invoice_extract output, so it inherits both as requirements.
+ * `upload` has no backend stage and stays always-enabled.
  */
 const STEP_TO_STAGES: Record<StepKey, string[]> = {
   upload: [],
   lc: ['lc_parse'],
   invoice: ['invoice_extract'],
-  compare: [],                   // derived from lc + invoice presence; no backend stage
+  compare: ['lc_parse', 'invoice_extract'],
   rules: ['rule_activation', 'rule_check'],
   review: ['report_assembly'],
 };
@@ -32,8 +36,11 @@ const STEP_TO_STAGES: Record<StepKey, string[]> = {
 export function isStepSkipped(key: StepKey, configured: Set<string> | null): boolean {
   if (!configured || configured.size === 0) return false;   // config unknown — assume enabled
   const required = STEP_TO_STAGES[key];
-  if (required.length === 0) return false;                  // UI-only step
-  return required.every((stage) => !configured.has(stage));
+  if (required.length === 0) return false;                  // UI-only step (upload)
+  // Skip iff ANY required stage is missing — a step needs every dependency wired
+  // in to render meaningfully (compare needs both LC and invoice, rules needs
+  // both activation and check, etc.).
+  return required.some((stage) => !configured.has(stage));
 }
 
 /**
@@ -71,22 +78,23 @@ export function useStep(
  * ran.
  */
 function derivedStep(s: SessionState, configured: Set<string> | null): StepKey {
+  const enabled = (k: StepKey) => !isStepSkipped(k, configured);
   // Honour the .endHere() debug halt: don't pretend a final report exists for
   // navigation purposes even though earlyFinalize synthesised a placeholder.
   if (s.haltedAfter) {
-    if (s.checks.length > 0) return 'rules';
-    if (s.invoice && s.lc) return 'compare';
-    if (s.invoice) return 'invoice';
-    if (s.lc) return 'lc';
+    if (s.checks.length > 0 && enabled('rules')) return 'rules';
+    if (s.invoice && s.lc && enabled('compare')) return 'compare';
+    if (s.invoice && enabled('invoice')) return 'invoice';
+    if (s.lc && enabled('lc')) return 'lc';
     return 'upload';
   }
-  // Don't auto-advance to a step whose backend stages are all skipped.
+  // Don't auto-advance to a step whose required backend stages aren't wired in.
   const candidates: StepKey[] = [];
-  if (s.report && !isStepSkipped('review', configured)) candidates.push('review');
-  if ((s.checks.length > 0 || s.inFlightRuleIds.size > 0) && !isStepSkipped('rules', configured)) candidates.push('rules');
-  if (s.invoice && s.lc) candidates.push('compare');
-  if (s.invoice) candidates.push('invoice');
-  if (s.lc) candidates.push('lc');
+  if (s.report && enabled('review')) candidates.push('review');
+  if ((s.checks.length > 0 || s.inFlightRuleIds.size > 0) && enabled('rules')) candidates.push('rules');
+  if (s.invoice && s.lc && enabled('compare')) candidates.push('compare');
+  if (s.invoice && enabled('invoice')) candidates.push('invoice');
+  if (s.lc && enabled('lc')) candidates.push('lc');
   candidates.push('upload');
   return candidates[0];
 }

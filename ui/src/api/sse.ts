@@ -7,6 +7,8 @@ const EVENT_TYPES: CheckEventType[] = [
   'stage.completed',
   'check.started',
   'check.completed',
+  'extract.source.started',
+  'extract.source.completed',
   'report.complete',
   'error',
 ];

@@ -1,15 +1,17 @@
 # Extractors — Invoice Extraction Sources
 
-Stage 1b of the pipeline (`refer-doc/logic-flow.md`). Three independent sources
-convert a PDF invoice into an `InvoiceDocument`; the Java orchestrator runs every
-enabled source, persists one `stage_invoice_extract` row per source, and marks one
-as the **selected** source for downstream rule checks.
+Stage 1b of the pipeline (`docs/refer-doc/logic-flow.md`). Up to **four**
+independent sources convert a PDF invoice into an `InvoiceDocument`; the Java
+orchestrator runs every enabled source, persists one row per source under
+`pipeline_steps (stage='invoice_extract', step_key=<source>)`, and marks one as
+the **selected** source for downstream rule checks.
 
-| Source    | Lives in                 | Runtime | LLM involved? | Typical use |
-|-----------|--------------------------|---------|---------------|-------------|
-| `vision`  | `lc-checker-svc` (Java)  | JVM     | **Yes** — Vision LLM via Spring AI | Image-based PDFs, scanned invoices, layout-heavy documents |
-| `docling` | `extractors/docling/`    | Python  | No            | Born-digital PDFs with a clean text layer |
-| `mineru`  | `extractors/mineru/`     | Python  | No            | Image-heavy PDFs where Docling's OCR struggles |
+| Source          | Lives in                 | Runtime | LLM? | Typical use |
+|-----------------|--------------------------|---------|------|-------------|
+| `remote_vision` | `lc-checker-svc` (Java)  | JVM     | **Yes** — vision LLM via OpenAI-compatible endpoint | Image-based PDFs, scanned invoices, layout-heavy documents (cloud Qwen / OpenAI / Gemini) |
+| `local_vision`  | `lc-checker-svc` (Java)  | JVM     | **Yes** — local Ollama vision model | Same workload as `remote_vision`, run offline / no API spend |
+| `docling`       | `extractors/docling/`    | Python  | No   | Born-digital PDFs with a clean text layer |
+| `mineru`        | `extractors/mineru/`     | Python  | No   | Image-heavy PDFs where Docling's OCR struggles |
 
 > **Principle:** Python extractors are pure parsers — regex + heuristic field capture,
 > no LLM calls. All semantic structuring that requires a model happens in Java via
@@ -49,23 +51,80 @@ an OpenAI-compatible `/v1/chat/completions` endpoint.
 
 ---
 
-## Orchestration (Java side)
+## Orchestration (Java side) — two-lane parallel
 
-`InvoiceExtractionOrchestrator` in `lc-checker-svc/` drives Stage 1b:
+`InvoiceExtractionOrchestrator` in `lc-checker-svc/` drives Stage 1b. Sources
+are split into two lanes that execute concurrently on `lcCheckExecutor`:
 
-1. For every enabled source (priority order: `vision → docling → mineru`):
-   - Call `extract(pdfBytes, filename)`.
-   - Persist one row in `stage_invoice_extract` with `source`, `status`, `confidence`,
-     `raw_markdown`, `raw_text`, `inv_output` JSONB, `llm_calls` JSONB.
-2. Select one row as `is_selected = true`:
-   - First source (priority order) whose `status = SUCCESS` AND `confidence >= extractor.confidence-threshold`.
+```
+┌── Lane A (parallel) ────────────────────────────────┐
+│   remote_vision   (cloud network call, 2–5 s)       │
+└─────────────────────────────────────────────────────┘
+┌── Lane B (sequential within lane) ──────────────────┐
+│   docling → mineru → local_vision                   │
+│   (all consume local CPU / RAM, run one-at-a-time)  │
+└─────────────────────────────────────────────────────┘
+                  ↓ join                              ↓
+        persist all attempts → select one row → mark is_selected
+```
+
+1. Both lanes start simultaneously. Each source — wherever it runs — invokes
+   the orchestrator's `runAndPersistOne` helper, which:
+   - emits an `extract.source.started` SSE event,
+   - calls `extract(pdfBytes, filename)` on that source,
+   - persists one row in `pipeline_steps (stage='invoice_extract', step_key=<source>)`
+     with `status`, `confidence`, `inv_output` JSONB, `llm_calls` JSONB,
+   - emits an `extract.source.completed` SSE event with the per-source outcome.
+2. After **both** lanes finish, attempts are collected in chain priority order
+   (`remote_vision → docling → mineru → local_vision`) for selection:
+   - First source in chain order whose `status = SUCCESS` AND
+     `confidence >= extractor.confidence-threshold`.
    - Fallback: highest-confidence successful source.
    - If all failed: throw.
 3. Return the selected `InvoiceDocument` — only this one drives Stage 2–3.
 
-The selection rule + threshold are configurable via `extractor.confidence-threshold`.
-Sources are enabled/disabled with `EXTRACTOR_VISION_ENABLED`, `EXTRACTOR_DOCLING_ENABLED`,
-`EXTRACTOR_MINERU_ENABLED` (see [`../lc-checker-svc/README.md`](../lc-checker-svc/README.md)).
+**Per-source persistence is preserved across lane failures** — `runAndPersistOne`
+catches every exception and persists a `FAILED` row, so a single source's
+crash never loses the other lane's results.
+
+### Configuration
+
+Sources are enabled/disabled via env vars (see [`../.env.example`](../.env.example)):
+
+| Env var                         | Default | Notes |
+|---------------------------------|---------|-------|
+| `EXTRACTOR_VISION_ENABLED`      | `true`  | remote vision LLM (lane A) |
+| `EXTRACTOR_LOCAL_VISION_ENABLED`| `false` | local Ollama vision LLM (lane B) |
+| `EXTRACTOR_DOCLING_ENABLED`     | `false` | docling sidecar (lane B) |
+| `EXTRACTOR_MINERU_ENABLED`      | `false` | mineru sidecar (lane B) |
+| `EXTRACTOR_CONFIDENCE_THRESHOLD`| `0.80`  | selection cutoff |
+
+**Disabled sources are HIDDEN from the UI**, not greyed — the chain only contains
+enabled sources, so `/extracts` and the SSE events never include a disabled name.
+
+### Local vision (Ollama) setup
+
+To enable `local_vision`:
+
+```bash
+# 1. Install Ollama (https://ollama.com) and pull a vision-capable model.
+ollama pull qwen2.5vl       # ~6 GB; or use moondream:2b for ~1.5 GB
+ollama serve                # exposes /v1/chat/completions on :11434
+
+# 2. Confirm reachable.
+curl http://localhost:11434/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen2.5vl","messages":[{"role":"user","content":"hi"}]}'
+
+# 3. Flip the env var and restart the service.
+echo "EXTRACTOR_LOCAL_VISION_ENABLED=true" >> .env
+echo "LOCAL_VISION_BASE_URL=http://localhost:11434/v1" >> .env
+echo "LOCAL_VISION_MODEL=qwen2.5vl" >> .env
+```
+
+`local_vision` shares the same Java class as `remote_vision`
+(`VisionLlmExtractor` — see `stage/extract/vision/VisionExtractorBeans.java`)
+but is wired as a separate Spring bean with its own config block.
 
 ---
 

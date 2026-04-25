@@ -16,27 +16,28 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
 
 /**
- * Vision-LLM invoice extractor using Ollama's native {@code /api/chat} endpoint.
+ * Vision-LLM invoice extractor over an OpenAI-compatible {@code /chat/completions}
+ * endpoint. Provider-agnostic: works for remote (Qwen Cloud, OpenAI, etc.) and
+ * local (Ollama) installations alike — only the URL/model/auth differ.
  *
  * <p>PDF pages are rendered to PNG via PDFBox ({@link PdfRenderer}), then sent as
- * base64-encoded images to Ollama. Uses the native Ollama API format rather than
- * the OpenAI-compatible endpoint to ensure multi-modal support works correctly.
+ * base64-encoded images in the array-style content format that both OpenAI and
+ * Ollama accept.
  *
- * <p>Provider switch is purely via env vars — no code changes needed.
- * For Qwen Cloud or Gemini, switch to the OpenAI-compatible {@code VisionChatModel}
- * path and fix the {@code baseUrl} wiring.
+ * <p>Not a Spring component — instantiated via {@link VisionExtractorBeans} which
+ * spins up two beans (remote + local) from two separate {@link VisionExtractorConfig}
+ * blocks. The {@link VisionExtractorConfig#name()} surfaces as
+ * {@link #extractorName()} so each instance writes its own row to
+ * {@code pipeline_steps} and can be distinguished in SSE events / UI.
  */
-@Component
 public class VisionLlmExtractor implements InvoiceExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(VisionLlmExtractor.class);
@@ -46,6 +47,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     private final PdfRenderer renderer;
     private final VisionInvoiceMapper mapper;
     private final ObjectMapper json;
+    private final String name;
     private final String model;
     private final float renderScale;
     private final int timeoutSeconds;
@@ -53,32 +55,30 @@ public class VisionLlmExtractor implements InvoiceExtractor {
 
     public VisionLlmExtractor(
             RestClient.Builder restClientBuilder,
-            @Value("${vision.base-url}") String baseUrl,
-            @Value("${vision.api-key:}") String apiKey,
-            @Value("${vision.model}") String model,
-            @Value("${vision.render-scale:1.5}") float renderScale,
-            @Value("${vision.timeout-seconds:120}") int timeoutSeconds,
+            VisionExtractorConfig config,
             PdfRenderer renderer,
             VisionInvoiceMapper mapper,
             ObjectMapper json) {
-        this.model = model;
-        this.renderScale = renderScale;
-        this.timeoutSeconds = timeoutSeconds;
+        this.name = config.name();
+        this.model = config.model();
+        this.renderScale = config.renderScale();
+        this.timeoutSeconds = config.timeoutSeconds();
         this.renderer = renderer;
         this.mapper = mapper;
         this.json = json;
 
         // Standalone RestClient for the OpenAI-compatible /v1/chat/completions endpoint.
         // Auth: empty api-key (e.g. local Ollama) → no header; non-empty → Bearer token.
+        String apiKey = config.apiKey();
         RestClient.Builder builder = restClientBuilder
-                .baseUrl(baseUrl)
+                .baseUrl(config.baseUrl())
                 .defaultHeader("Content-Type", "application/json");
         if (apiKey != null && !apiKey.isBlank()) {
             builder.defaultHeader("Authorization", "Bearer " + apiKey);
         }
         this.restClient = builder.build();
-        log.info("VisionLlmExtractor configured: model={} scale={} timeout={} base={} auth={}",
-                model, renderScale, timeoutSeconds, baseUrl,
+        log.info("VisionLlmExtractor[{}] configured: model={} scale={} timeout={} base={} auth={}",
+                name, model, renderScale, timeoutSeconds, config.baseUrl(),
                 (apiKey != null && !apiKey.isBlank()) ? "bearer" : "none");
     }
 
@@ -87,7 +87,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         long start = System.currentTimeMillis();
 
         if (pdfBytes == null || pdfBytes.length == 0) {
-            throw new ExtractionException("vision", ExtractorErrorCode.INVALID_REQUEST,
+            throw new ExtractionException(name, ExtractorErrorCode.INVALID_REQUEST,
                     "PDF byte array is empty");
         }
 
@@ -96,11 +96,11 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         try {
             pages = renderer.renderAllPages(pdfBytes, renderScale);
         } catch (IllegalArgumentException e) {
-            throw new ExtractionException("vision", ExtractorErrorCode.INVALID_REQUEST,
+            throw new ExtractionException(name, ExtractorErrorCode.INVALID_REQUEST,
                     "PDF render failed: " + e.getMessage(), e);
         }
         if (pages.isEmpty()) {
-            throw new ExtractionException("vision", ExtractorErrorCode.INVALID_REQUEST,
+            throw new ExtractionException(name, ExtractorErrorCode.INVALID_REQUEST,
                     "PDF has no renderable pages");
         }
         log.debug("Calling vision LLM: model={} pages={}", model, pages.size());
@@ -120,21 +120,21 @@ public class VisionLlmExtractor implements InvoiceExtractor {
                     .retrieve()
                     .body(String.class);
         } catch (HttpClientErrorException e) {
-            LlmTrace errTrace = new LlmTrace("vision.extract", model, promptRendered, null,
+            LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
-            throw new ExtractionException("vision", ExtractorErrorCode.UNREACHABLE,
+            throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
                     "Vision LLM client error " + e.getStatusCode() + ": " + e.getMessage(), e)
                     .withLlmTrace(errTrace);
         } catch (HttpServerErrorException e) {
-            LlmTrace errTrace = new LlmTrace("vision.extract", model, promptRendered, null,
+            LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
-            throw new ExtractionException("vision", ExtractorErrorCode.UNREACHABLE,
+            throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
                     "Vision LLM server error " + e.getStatusCode() + ": " + e.getMessage(), e)
                     .withLlmTrace(errTrace);
         } catch (Exception e) {
-            LlmTrace errTrace = new LlmTrace("vision.extract", model, promptRendered, null,
+            LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
-            throw new ExtractionException("vision", ExtractorErrorCode.UNREACHABLE,
+            throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
                     "Vision LLM call failed: " + e.getMessage(), e)
                     .withLlmTrace(errTrace);
         }
@@ -144,7 +144,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         // 4. Parse OpenAI-compatible response: { choices: [{ message: { content: "..." } }] }
         String contentText = extractContent(rawResponse);
 
-        LlmTrace trace = new LlmTrace("vision.extract", model, promptRendered,
+        LlmTrace trace = new LlmTrace(name + ".extract", model, promptRendered,
                 contentText, null, null, llmLatency, null);
 
         // 5. Parse JSON from response (fallback to key:value text parser for non-JSON models)
@@ -170,7 +170,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         String rawText = rawTextVal == null ? "" : String.valueOf(rawTextVal);
 
         long durMs = System.currentTimeMillis() - start;
-        InvoiceDocument doc = mapper.toDocument(fields, "vision", confidence, true, pages.size(), durMs,
+        InvoiceDocument doc = mapper.toDocument(fields, name, confidence, true, pages.size(), durMs,
                 contentText, rawText);
         return new ExtractionResult(doc, List.of(trace));
     }
@@ -182,7 +182,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
      */
     private String summarisePromptForTrace(Map<String, Object> body, int pageCount) {
         String prompt = loadPrompt();
-        return "[vision-extract model=" + model + " pages=" + pageCount + "]\n" + prompt;
+        return "[" + name + " model=" + model + " pages=" + pageCount + "]\n" + prompt;
     }
 
     /**
@@ -373,7 +373,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
 
     @Override
     public String extractorName() {
-        return "vision";
+        return name;
     }
 
     private static final String FALLBACK_PROMPT = """

@@ -6,6 +6,7 @@ import type {
   CheckResult,
   CheckSession,
   DiscrepancyReport,
+  ExtractAttempt,
   InvoiceDocument,
   LcDocument,
   StageName,
@@ -33,6 +34,13 @@ export type SessionState = {
    * banner, never the red "Pipeline error" treatment.
    */
   haltedAfter?: string;
+  /**
+   * Live per-source invoice-extractor state, keyed by source name. Populated
+   * by EXTRACT_SOURCE_STARTED / EXTRACT_SOURCE_COMPLETED events as each
+   * extractor begins/finishes. Sources only appear here once they actually
+   * start running on the backend — disabled sources never show.
+   */
+  extractorStatus: Record<string, ExtractAttempt>;
 };
 
 const initialStages: Record<StageName, StageInfo> = {
@@ -49,6 +57,7 @@ function initial(sessionId: string | null): SessionState {
     stages: { ...initialStages },
     checks: [],
     inFlightRuleIds: new Set(),
+    extractorStatus: {},
   };
 }
 
@@ -196,6 +205,49 @@ function reduce(state: SessionState, action: Action): SessionState {
       const s = new Set(state.inFlightRuleIds);
       s.delete(result.rule_id);
       return { ...state, checks: newChecks, inFlightRuleIds: s };
+    }
+    case 'extract.source.started': {
+      const p = ev.payload as { source: string };
+      const prior = state.extractorStatus[p.source];
+      const next: ExtractAttempt = {
+        source: p.source,
+        status: 'RUNNING',
+        is_selected: prior?.is_selected ?? false,
+        document: null,
+        duration_ms: 0,
+        started_at: ev.timestamp ?? new Date().toISOString(),
+        error: null,
+      };
+      return {
+        ...state,
+        extractorStatus: { ...state.extractorStatus, [p.source]: next },
+      };
+    }
+    case 'extract.source.completed': {
+      const p = ev.payload as {
+        source: string;
+        success: boolean;
+        confidence?: number;
+        durationMs?: number;
+        imageBased?: boolean;
+        pages?: number;
+        error?: string;
+      };
+      const prior = state.extractorStatus[p.source];
+      const next: ExtractAttempt = {
+        source: p.source,
+        status: p.success ? 'SUCCESS' : 'FAILED',
+        is_selected: prior?.is_selected ?? false,
+        document: prior?.document ?? null,
+        duration_ms: p.durationMs ?? prior?.duration_ms ?? 0,
+        started_at: prior?.started_at ?? null,
+        error: p.error ?? null,
+        confidence: p.confidence,
+      };
+      return {
+        ...state,
+        extractorStatus: { ...state.extractorStatus, [p.source]: next },
+      };
     }
     case 'report.complete': {
       const r = ev.payload as DiscrepancyReport;

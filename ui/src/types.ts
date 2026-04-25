@@ -15,6 +15,8 @@ export type CheckEventType =
   | 'stage.completed'
   | 'check.started'
   | 'check.completed'
+  | 'extract.source.started'
+  | 'extract.source.completed'
   | 'report.complete'
   | 'error';
 
@@ -235,12 +237,16 @@ export interface StartResponse {
 
 export interface ExtractAttempt {
   source: string;
-  status: 'SUCCESS' | 'FAILED' | string;
+  /** RUNNING is a UI-only state synthesized from extract.source.started events
+   *  that haven't yet seen their matching extract.source.completed. */
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
   is_selected: boolean;
   document: InvoiceDocument | null;
   duration_ms: number;
   started_at: string | null;
   error: string | null;
+  /** Optional confidence (0..1) — only set when the source completed successfully. */
+  confidence?: number;
 }
 
 export interface SessionSummary {

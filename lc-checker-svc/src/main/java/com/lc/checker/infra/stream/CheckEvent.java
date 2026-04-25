@@ -29,6 +29,13 @@ public record CheckEvent(Type type, String stage, Object payload, Instant timest
         STAGE_COMPLETED,
         CHECK_STARTED,
         CHECK_COMPLETED,
+        /** One invoice extractor source has begun running. Payload: {source}. */
+        EXTRACT_SOURCE_STARTED,
+        /**
+         * One invoice extractor source has finished. Payload:
+         * {source, success, confidence, duration_ms, error}.
+         */
+        EXTRACT_SOURCE_COMPLETED,
         REPORT_COMPLETE,
         ERROR;
 

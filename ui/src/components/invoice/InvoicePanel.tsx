@@ -3,14 +3,15 @@ import { MarkdownView } from './MarkdownView';
 import type { ExtractAttempt, InvoiceDocument } from '../../types';
 
 interface Props {
-  /** Every persisted extractor attempt — drives the top tab strip. */
+  /** Every visible extractor attempt — drives the top tab strip. May include
+   *  attempts in RUNNING / SUCCESS / FAILED state; disabled sources are absent. */
   attempts: ExtractAttempt[];
   /** Source name of the attempt currently being displayed. */
   activeSource: string;
   onActiveSource: (source: string) => void;
-  /** The {@link InvoiceDocument} for {@link activeSource}; falls back to the
-      streamed selected doc before /extracts has loaded. */
-  invoice: InvoiceDocument;
+  /** The {@link InvoiceDocument} for {@link activeSource}, or null while no
+   *  attempt has produced a document yet (all sources still RUNNING / FAILED). */
+  invoice: InvoiceDocument | null;
   /** Source the orchestrator marked as canonical (used by rule checks). May
       differ from {@link activeSource} when the operator is browsing alternatives. */
   selectedSource: string | null;
@@ -64,22 +65,26 @@ export function InvoicePanel({
   const tabs: ExtractAttempt[] =
     attempts.length > 0
       ? attempts
-      : [
-          {
-            source: invoice.extractor_used,
-            status: 'SUCCESS',
-            is_selected: true,
-            document: invoice,
-            duration_ms: invoice.extraction_ms,
-            started_at: null,
-            error: null,
-          },
-        ];
+      : invoice
+        ? [
+            {
+              source: invoice.extractor_used,
+              status: 'SUCCESS',
+              is_selected: true,
+              document: invoice,
+              duration_ms: invoice.extraction_ms,
+              started_at: null,
+              error: null,
+            },
+          ]
+        : [];
 
   const isAlternativeView =
     selectedSource != null && activeSource !== selectedSource;
 
-  const presentCount = FIELDS.filter(([k]) => invoice[k] != null && invoice[k] !== '').length;
+  const presentCount = invoice
+    ? FIELDS.filter(([k]) => invoice[k] != null && invoice[k] !== '').length
+    : 0;
 
   return (
     <div className="rounded-card border border-line overflow-hidden bg-paper">
@@ -135,13 +140,16 @@ export function InvoicePanel({
           Markdown
         </ViewTab>
         <div className="ml-auto py-2 text-[10px] font-mono text-muted">
-          {Math.round((invoice.extractor_confidence ?? 0) * 100)}% conf ·{' '}
-          {invoice.pages ?? 1}p · {invoice.extraction_ms}ms
+          {invoice
+            ? `${Math.round((invoice.extractor_confidence ?? 0) * 100)}% conf · ${invoice.pages ?? 1}p · ${invoice.extraction_ms}ms`
+            : 'awaiting first extractor result'}
         </div>
       </div>
 
       {/* Body */}
-      {view === 'fields' ? (
+      {!invoice ? (
+        <BodyPlaceholder attempts={tabs} />
+      ) : view === 'fields' ? (
         <FieldsTable invoice={invoice} onFieldHover={onFieldHover} />
       ) : (
         <MarkdownBody
@@ -150,6 +158,24 @@ export function InvoicePanel({
           setMode={setMdMode}
         />
       )}
+    </div>
+  );
+}
+
+function BodyPlaceholder({ attempts }: { attempts: ExtractAttempt[] }) {
+  const running = attempts.filter((a) => a.status === 'RUNNING').length;
+  const failed = attempts.filter((a) => a.status === 'FAILED').length;
+  return (
+    <div className="px-6 py-12 text-center text-muted text-sm">
+      <div className="font-serif text-base text-navy-1 mb-1 animate-pulse">
+        Awaiting extracted document…
+      </div>
+      <div className="font-mono text-[11px] text-muted/80">
+        {running > 0 && `${running} running`}
+        {running > 0 && failed > 0 && ' · '}
+        {failed > 0 && `${failed} failed`}
+        {running === 0 && failed === 0 && 'no extractor results yet'}
+      </div>
     </div>
   );
 }
@@ -165,38 +191,57 @@ function ExtractorCard({
   active: boolean;
   onClick: () => void;
 }) {
-  const failed = attempt.status === 'FAILED' || attempt.document === null;
-  const conf = attempt.document?.extractor_confidence ?? 0;
+  const running = attempt.status === 'RUNNING';
+  const failed = !running && (attempt.status === 'FAILED' || attempt.document === null);
+  const success = !running && !failed;
+  const conf = attempt.document?.extractor_confidence ?? attempt.confidence ?? 0;
   const pct = Math.round(conf * 100);
+  const clickable = success;
 
-  const cls = active && !failed
-    ? 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30'
-    : failed
-    ? 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75'
-    : 'border-line bg-paper hover:border-teal-2/60';
+  const cls = running
+    ? 'border-status-gold/50 bg-status-goldSoft/40 cursor-progress'
+    : active && success
+      ? 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30'
+      : failed
+        ? 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75'
+        : 'border-line bg-paper hover:border-teal-2/60';
 
   return (
     <button
-      onClick={onClick}
-      disabled={failed}
+      onClick={clickable ? onClick : undefined}
+      disabled={!clickable}
       className={`relative text-left rounded-btn border-2 px-3 py-2.5 transition-colors ${cls}`}
-      title={failed ? attempt.error ?? 'failed' : `${attempt.source} · ${pct}% confidence`}
+      title={
+        running
+          ? `${attempt.source} · extracting…`
+          : failed
+            ? attempt.error ?? 'failed'
+            : `${attempt.source} · ${pct}% confidence`
+      }
     >
-      {/* Source label + USED / FAILED badge */}
+      {/* Source label + USED / FAILED / RUNNING badge */}
       <div className="flex items-baseline justify-between gap-2">
         <span
           className={[
             'font-mono text-[10px] uppercase tracking-[0.22em] font-semibold',
-            active && !failed
-              ? 'text-teal-1'
-              : failed
-              ? 'text-status-red'
-              : 'text-muted',
+            running
+              ? 'text-status-gold'
+              : active && success
+                ? 'text-teal-1'
+                : failed
+                  ? 'text-status-red'
+                  : 'text-muted',
           ].join(' ')}
         >
           {attempt.source}
         </span>
-        {attempt.is_selected && !failed && (
+        {running && (
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold font-bold inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-status-gold animate-pulse" />
+            running
+          </span>
+        )}
+        {success && attempt.is_selected && (
           <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-green font-bold">
             ✓ used
           </span>
@@ -208,9 +253,13 @@ function ExtractorCard({
         )}
       </div>
 
-      {/* Confidence — primary metric */}
+      {/* Body — primary metric */}
       <div className="mt-1.5 flex items-baseline gap-1.5 flex-wrap">
-        {failed ? (
+        {running ? (
+          <span className="font-mono text-xs text-status-gold animate-pulse">
+            extracting…
+          </span>
+        ) : failed ? (
           <span className="text-xs text-status-red/80">
             {truncate(attempt.error ?? 'error', 36)}
           </span>

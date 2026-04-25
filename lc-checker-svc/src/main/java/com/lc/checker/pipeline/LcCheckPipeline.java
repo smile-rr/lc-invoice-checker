@@ -76,8 +76,8 @@ public class LcCheckPipeline {
         // ╚══════════════════════════════════════════════════════════════════╝
         this.stages = Flow.start()
                 .then(lcParse)         // Stage 1a │ MT700 SWIFT parse  → LcDocument
-                .endHere()             // ◄── DEBUG: ends and returns here. Comment to enable downstream.
                 .then(invoiceExtract)  // Stage 1b │ PDF extract        → InvoiceDocument
+                .endHere()             // ◄── DEBUG: ends and returns here. Comment to enable downstream.
                 .then(ruleActivation)  // Stage 2  │ Catalog walk       → active rule list
                 .then(ruleCheck)       // Stage 3  │ Tier 1 (A) / 2 (B) / 3 (AB)
                 .then(holisticSweep)   // Stage 4  │ Layer 3 LLM sweep  (V1: no-op)

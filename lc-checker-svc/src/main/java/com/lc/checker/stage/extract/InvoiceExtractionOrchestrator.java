@@ -4,20 +4,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lc.checker.stage.extract.vision.VisionLlmExtractor;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.infra.persistence.CheckSessionStore;
+import com.lc.checker.infra.stream.CheckEvent;
+import com.lc.checker.infra.stream.CheckEventPublisher;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
-import com.lc.checker.domain.result.LlmTrace;
-import com.lc.checker.domain.rule.Rule;
 
 /**
  * Stage 1b orchestrator. Runs every enabled extractor sequentially against the same PDF,
@@ -38,44 +41,81 @@ public class InvoiceExtractionOrchestrator implements InvoiceExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(InvoiceExtractionOrchestrator.class);
 
+    /**
+     * The full ordered chain in priority order: remote_vision (lane A) first,
+     * then docling → mineru → local_vision (lane B sequential bundle). Selection
+     * picks the first SUCCESS above threshold in this order; the order also
+     * surfaces in {@code /extracts} response and the UI's tab order.
+     */
     private final List<InvoiceExtractor> chain = new ArrayList<>();
+
+    /** Lane A — runs in parallel with lane B. (Slice 2 wires the parallelism.) */
+    private final InvoiceExtractor remoteVision;
+
+    /** Lane B — sequential bundle of local-resource extractors. */
+    private final List<InvoiceExtractor> sequentialBundle = new ArrayList<>();
+
     private final CheckSessionStore store;
+    private final Executor executor;
     private final double confidenceThreshold;
-    private volatile String lastUsed = "vision";
+    private volatile String lastUsed = "remote_vision";
 
     public InvoiceExtractionOrchestrator(
-            VisionLlmExtractor visionExtractor,
+            @Qualifier("remoteVisionExtractor") VisionLlmExtractor remoteVision,
+            @Qualifier("localVisionExtractor") ObjectProvider<VisionLlmExtractor> localVisionProvider,
             @Qualifier(ExtractorClientConfig.DOCLING_REST_CLIENT) RestClient doclingClient,
             @Qualifier(ExtractorClientConfig.MINERU_REST_CLIENT)  RestClient mineruClient,
             ExtractorResponseMapper responseMapper,
             ObjectMapper json,
             CheckSessionStore store,
+            @Qualifier("lcCheckExecutor") Executor executor,
             @Value("${extractor.retries:1}") int retries,
             @Value("${extractor.retry-backoff-ms:500}") long retryBackoffMs,
             @Value("${extractor.confidence-threshold:0.80}") double confidenceThreshold,
-            @Value("${extractor.vision-enabled:true}")  boolean visionEnabled,
-            @Value("${extractor.docling-enabled:false}") boolean doclingEnabled,
-            @Value("${extractor.mineru-enabled:false}")  boolean mineruEnabled) {
+            @Value("${extractor.vision-enabled:true}")        boolean visionEnabled,
+            @Value("${extractor.docling-enabled:false}")      boolean doclingEnabled,
+            @Value("${extractor.mineru-enabled:false}")       boolean mineruEnabled,
+            @Value("${extractor.local-vision-enabled:false}") boolean localVisionEnabled) {
 
         this.store = store;
+        this.executor = executor;
         this.confidenceThreshold = confidenceThreshold;
+        this.remoteVision = visionEnabled ? remoteVision : null;
 
         if (visionEnabled) {
-            chain.add(visionExtractor);
+            chain.add(remoteVision);
         }
         if (doclingEnabled) {
-            chain.add(new HttpInvoiceExtractor(doclingClient, "docling", responseMapper, json, retries, retryBackoffMs));
+            HttpInvoiceExtractor docling = new HttpInvoiceExtractor(
+                    doclingClient, "docling", responseMapper, json, retries, retryBackoffMs);
+            chain.add(docling);
+            sequentialBundle.add(docling);
         }
         if (mineruEnabled) {
-            chain.add(new HttpInvoiceExtractor(mineruClient, "mineru", responseMapper, json, retries, retryBackoffMs));
+            HttpInvoiceExtractor mineru = new HttpInvoiceExtractor(
+                    mineruClient, "mineru", responseMapper, json, retries, retryBackoffMs);
+            chain.add(mineru);
+            sequentialBundle.add(mineru);
+        }
+        if (localVisionEnabled) {
+            VisionLlmExtractor local = localVisionProvider.getIfAvailable();
+            if (local == null) {
+                throw new IllegalStateException(
+                        "extractor.local-vision-enabled=true but no localVisionExtractor bean exists. "
+                        + "Check the @ConditionalOnProperty wiring and the local-vision config block.");
+            }
+            chain.add(local);
+            sequentialBundle.add(local);
         }
         if (chain.isEmpty()) {
             throw new IllegalStateException(
-                    "At least one extractor must be enabled (vision/docling/mineru).");
+                    "At least one extractor must be enabled (remote_vision / docling / mineru / local_vision).");
         }
-        log.info("InvoiceExtractionOrchestrator initialised: sources={} threshold={}",
+        log.info("InvoiceExtractionOrchestrator initialised: sources={} threshold={} laneA={} laneB={}",
                 chain.stream().map(InvoiceExtractor::extractorName).toList(),
-                confidenceThreshold);
+                confidenceThreshold,
+                this.remoteVision != null ? this.remoteVision.extractorName() : "(none)",
+                sequentialBundle.stream().map(InvoiceExtractor::extractorName).toList());
     }
 
     /**
@@ -99,60 +139,75 @@ public class InvoiceExtractionOrchestrator implements InvoiceExtractor {
                 "No extractor configured");
     }
 
+    /** Per-source extraction outcome — produced by {@link #runAndPersistOne}. */
+    private record Attempt(String source, boolean success, InvoiceDocument doc,
+                           List<com.lc.checker.domain.result.LlmTrace> traces,
+                           String error, long durationMs) {}
+
     /**
-     * Stage 1b main entry. Runs every enabled source, persists each to DB, selects one.
+     * Stage 1b main entry. Runs the configured chain in two lanes:
+     * <ul>
+     *   <li>Lane A — remote_vision (if enabled). Cloud network call, no local resources.</li>
+     *   <li>Lane B — sequential bundle of [docling, mineru, local_vision] (whichever are
+     *       enabled). All consume local CPU/RAM so they run one at a time within the lane.</li>
+     * </ul>
+     * Both lanes execute concurrently on {@code lcCheckExecutor}; total wall-clock is
+     * roughly {@code max(laneA, laneB)}. Each source persists its own row to
+     * {@code pipeline_steps} regardless of pass/fail (inside {@link #runAndPersistOne}),
+     * so a partial failure in one lane never loses the other lane's results.
      *
      * @return the selected {@link InvoiceDocument} — the one downstream rule checks consume.
      */
     public InvoiceDocument runAndPersist(String sessionId, byte[] pdfBytes, String filename) {
-        record Attempt(String source, boolean success, InvoiceDocument doc,
-                       List<com.lc.checker.domain.result.LlmTrace> traces, String error, long durationMs) {}
+        return runAndPersist(sessionId, pdfBytes, filename, CheckEventPublisher.NOOP);
+    }
 
-        List<Attempt> attempts = new ArrayList<>(chain.size());
+    public InvoiceDocument runAndPersist(String sessionId, byte[] pdfBytes, String filename,
+                                          CheckEventPublisher publisher) {
+        // Lane A: remote_vision (single attempt).
+        CompletableFuture<List<Attempt>> laneA = CompletableFuture.supplyAsync(() -> {
+            if (remoteVision == null) return List.of();
+            return List.of(runAndPersistOne(remoteVision, sessionId, pdfBytes, filename, publisher));
+        }, executor);
 
-        for (InvoiceExtractor e : chain) {
-            String source = e.extractorName();
-            Instant stepStart = Instant.now();
-            long t0 = System.currentTimeMillis();
-            try {
-                ExtractionResult r = e.extract(pdfBytes, filename);
-                long dur = System.currentTimeMillis() - t0;
-                Instant stepEnd = Instant.now();
-                attempts.add(new Attempt(source, true, r.document(), r.llmCalls(), null, dur));
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("document", r.document());
-                result.put("llm_calls", r.llmCalls());
-                result.put("is_selected", false);  // markExtractSelected flips one later
-                store.putStep(sessionId, "invoice_extract", source, "SUCCESS",
-                        stepStart, stepEnd, result, null);
-                log.info("Stage 1b source={} SUCCESS confidence={} duration={}ms",
-                        source, r.document().extractorConfidence(), dur);
-            } catch (ExtractionException ex) {
-                long dur = System.currentTimeMillis() - t0;
-                Instant stepEnd = Instant.now();
-                List<com.lc.checker.domain.result.LlmTrace> trc = ex.getLlmTrace() == null
-                        ? List.of() : List.of(ex.getLlmTrace());
-                attempts.add(new Attempt(source, false, null, trc, ex.getMessage(), dur));
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("document", null);
-                result.put("llm_calls", trc);
-                result.put("is_selected", false);
-                store.putStep(sessionId, "invoice_extract", source, "FAILED",
-                        stepStart, stepEnd, result, ex.getMessage());
-                log.warn("Stage 1b source={} FAILED duration={}ms error={}",
-                        source, dur, ex.getMessage());
+        // Lane B: docling → mineru → local_vision, sequential within the lane.
+        CompletableFuture<List<Attempt>> laneB = CompletableFuture.supplyAsync(() -> {
+            List<Attempt> out = new ArrayList<>(sequentialBundle.size());
+            for (InvoiceExtractor e : sequentialBundle) {
+                out.add(runAndPersistOne(e, sessionId, pdfBytes, filename, publisher));
             }
+            return out;
+        }, executor);
+
+        // Wait for both lanes; each lane's body already swallows ExtractionException
+        // into a FAILED Attempt, so allOf().join() should never throw under normal
+        // operation. Wrap defensively anyway.
+        try {
+            CompletableFuture.allOf(laneA, laneB).join();
+        } catch (Exception e) {
+            log.error("Unexpected lane failure in invoice extraction: {}", e.getMessage(), e);
         }
 
+        // Concatenate attempts in CHAIN priority order (so selection logic walks them
+        // in the same order regardless of which lane finished first).
+        Map<String, Attempt> bySource = new LinkedHashMap<>();
+        laneA.getNow(List.of()).forEach(a -> bySource.put(a.source(), a));
+        laneB.getNow(List.of()).forEach(a -> bySource.put(a.source(), a));
+        List<Attempt> attempts = new ArrayList<>(chain.size());
+        for (InvoiceExtractor e : chain) {
+            Attempt a = bySource.get(e.extractorName());
+            if (a != null) attempts.add(a);
+        }
+
+        // Selection rule (unchanged): first SUCCESS above threshold in chain order;
+        // fallback: highest-confidence success; if all failed, throw.
         Attempt selected = null;
-        // Rule 1: first SUCCESS in priority order whose confidence >= threshold
         for (Attempt a : attempts) {
             if (a.success() && a.doc().extractorConfidence() >= confidenceThreshold) {
                 selected = a;
                 break;
             }
         }
-        // Rule 2: fallback — highest-confidence successful attempt
         if (selected == null) {
             for (Attempt a : attempts) {
                 if (!a.success()) continue;
@@ -171,6 +226,83 @@ public class InvoiceExtractionOrchestrator implements InvoiceExtractor {
         log.info("Stage 1b selected source={} (confidence={})",
                 selected.source(), selected.doc().extractorConfidence());
         return selected.doc();
+    }
+
+    /**
+     * Run one extractor: capture timing, persist a row to {@code pipeline_steps}
+     * (SUCCESS or FAILED), and return the {@link Attempt} for selection.
+     *
+     * <p>Never throws — extractor exceptions become FAILED attempts so a single
+     * source's failure doesn't abort the rest of its lane.
+     */
+    private Attempt runAndPersistOne(InvoiceExtractor e, String sessionId,
+                                     byte[] pdfBytes, String filename,
+                                     CheckEventPublisher publisher) {
+        String source = e.extractorName();
+        publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_STARTED,
+                Map.of("source", source)));
+        Instant stepStart = Instant.now();
+        long t0 = System.currentTimeMillis();
+        try {
+            ExtractionResult r = e.extract(pdfBytes, filename);
+            long dur = System.currentTimeMillis() - t0;
+            Instant stepEnd = Instant.now();
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("document", r.document());
+            result.put("llm_calls", r.llmCalls());
+            result.put("is_selected", false);  // markExtractSelected flips one later
+            store.putStep(sessionId, "invoice_extract", source, "SUCCESS",
+                    stepStart, stepEnd, result, null);
+            log.info("Stage 1b source={} SUCCESS confidence={} duration={}ms",
+                    source, r.document().extractorConfidence(), dur);
+            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
+                    Map.of(
+                            "source", source,
+                            "success", true,
+                            "confidence", r.document().extractorConfidence(),
+                            "durationMs", dur,
+                            "imageBased", r.document().imageBased(),
+                            "pages", r.document().pages())));
+            return new Attempt(source, true, r.document(), r.llmCalls(), null, dur);
+        } catch (ExtractionException ex) {
+            long dur = System.currentTimeMillis() - t0;
+            Instant stepEnd = Instant.now();
+            List<com.lc.checker.domain.result.LlmTrace> trc = ex.getLlmTrace() == null
+                    ? List.of() : List.of(ex.getLlmTrace());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("document", null);
+            result.put("llm_calls", trc);
+            result.put("is_selected", false);
+            store.putStep(sessionId, "invoice_extract", source, "FAILED",
+                    stepStart, stepEnd, result, ex.getMessage());
+            log.warn("Stage 1b source={} FAILED duration={}ms error={}",
+                    source, dur, ex.getMessage());
+            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
+                    Map.of(
+                            "source", source,
+                            "success", false,
+                            "durationMs", dur,
+                            "error", ex.getMessage() == null ? "" : ex.getMessage())));
+            return new Attempt(source, false, null, trc, ex.getMessage(), dur);
+        } catch (RuntimeException ex) {
+            long dur = System.currentTimeMillis() - t0;
+            Instant stepEnd = Instant.now();
+            String msg = "unexpected: " + ex.getClass().getSimpleName() + ": " + ex.getMessage();
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("document", null);
+            result.put("llm_calls", List.of());
+            result.put("is_selected", false);
+            store.putStep(sessionId, "invoice_extract", source, "FAILED",
+                    stepStart, stepEnd, result, msg);
+            log.error("Stage 1b source={} crashed duration={}ms", source, dur, ex);
+            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
+                    Map.of(
+                            "source", source,
+                            "success", false,
+                            "durationMs", dur,
+                            "error", msg)));
+            return new Attempt(source, false, null, List.of(), msg, dur);
+        }
     }
 
     @Override

@@ -50,7 +50,8 @@ public class InvoiceExtractStage implements Stage {
         ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_STARTED, name(), null));
         try {
             MDC.put(MdcKeys.STAGE, name());
-            InvoiceDocument inv = extractionOrchestrator.runAndPersist(ctx.sessionId, ctx.pdfBytes, ctx.pdfName);
+            InvoiceDocument inv = extractionOrchestrator.runAndPersist(
+                    ctx.sessionId, ctx.pdfBytes, ctx.pdfName, ctx.publisher);
             long dur = System.currentTimeMillis() - t0;
             ctx.invoice = inv;
             ctx.invoiceExtractTrace = new StageTrace(name(), StageStatus.SUCCESS,
