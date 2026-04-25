@@ -141,10 +141,21 @@ function reduce(state: SessionState, action: Action): SessionState {
     const newFromHydrate = (hydrated.checks ?? []).filter(
       (c) => !existingIds.has(c.rule_id),
     );
+    // Stage merge: live SSE values win ONLY if they've actually advanced past
+    // the initial 'pending'. Otherwise the hydrated value (the persisted truth
+    // at fetch time) is the source. Without this guard, a session that finished
+    // before the SSE channel connected (refresh after completion, or hydrate
+    // racing the first event) shows all stage dots grey while the LC/invoice
+    // data is sitting right there.
+    const mergedStages = { ...(hydrated.stages ?? initialStages) };
+    for (const name of Object.keys(state.stages) as StageName[]) {
+      const live = state.stages[name];
+      if (live.status !== 'pending') mergedStages[name] = live;
+    }
     return {
       ...hydrated,
       ...state,
-      stages: { ...hydrated.stages!, ...state.stages },
+      stages: mergedStages,
       lc: state.lc ?? hydrated.lc,
       invoice: state.invoice ?? hydrated.invoice,
       report: state.report ?? hydrated.report,

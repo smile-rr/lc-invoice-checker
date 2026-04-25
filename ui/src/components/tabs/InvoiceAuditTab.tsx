@@ -160,17 +160,17 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
  * Expand the bare source name into a "pipeline kind" label for the
  * "Extracted output" section header. Vision LLMs (`*_local`, `*_cloud`)
  * keep the standard {@link fmtSource} rendering. Docling and MinerU are
- * tagged `(regex)` because their sidecars produce fields via regex +
- * heuristics over the markdown layout — no LLM call. The tag makes the
- * pipeline shape visible when comparing cards (LLM judgment vs
- * deterministic parsing).
+ * tagged `(+llm)` because their sidecars run an LLM-first, regex-fallback
+ * field-extraction pipeline (see `extractors/{docling,mineru}/app/main.py`
+ * — `llm_extract_fields()` is tried first, with `extract_fields()` as the
+ * fallback when LLM is unconfigured or fails).
  *
- * If the docling/mineru sidecars later route their markdown through the
- * local Ollama LLM for field enrichment, change the tag here.
+ * The text LLM the sidecars hit is `LLM_BASE_URL` / `LLM_MODEL` from .env
+ * — currently the cloud DashScope model, not the local Ollama vision LLM.
  */
 function expandPipelineLabel(source: string): string {
   if (source === 'docling' || source === 'mineru') {
-    return `${source} (regex)`;
+    return `${source} (+ qwen3:4b)`;
   }
   return fmtSource(source);
 }

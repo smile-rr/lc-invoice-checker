@@ -32,7 +32,8 @@ public record FieldDefinition(
         boolean ruleRelevant,
         Object defaultValue,           // optional default if absent
         String group,                  // optional UI grouping label (e.g. "header", "amount")
-        List<ColumnDefinition> columns // populated only when type == TABLE; row schema
+        List<ColumnDefinition> columns,// populated only when type == TABLE; row schema
+        String extractionHint          // optional per-field guidance rendered into the LLM prompt
 ) {
 
     public FieldDefinition {

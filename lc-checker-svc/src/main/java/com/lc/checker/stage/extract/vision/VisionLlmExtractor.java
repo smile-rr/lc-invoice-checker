@@ -2,29 +2,21 @@ package com.lc.checker.stage.extract.vision;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lc.checker.domain.common.FieldType;
-import com.lc.checker.infra.fields.ColumnDefinition;
-import com.lc.checker.infra.fields.FieldDefinition;
-import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractionResult;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
 import com.lc.checker.stage.extract.InvoiceExtractor;
 import com.lc.checker.stage.extract.InvoiceFieldMapper;
+import com.lc.checker.stage.extract.PromptBuilder;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.MediaType;
-import org.springframework.util.StreamUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
@@ -47,20 +39,18 @@ import org.springframework.web.client.RestClient;
 public class VisionLlmExtractor implements InvoiceExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(VisionLlmExtractor.class);
-    private static final String PROMPT_TEMPLATE = "prompts/vision-invoice-extract.st";
 
     private final RestClient restClient;
     private final PdfRenderer renderer;
     private final InvoiceFieldMapper mapper;
     private final ObjectMapper json;
-    private final FieldPoolRegistry fieldPool;
+    private final PromptBuilder promptBuilder;
     private final String name;
     private final String model;
     private final int renderDpi;
     private final int maxPages;
     private final int maxLongEdgePx;
     private final int timeoutSeconds;
-    private volatile String cachedPrompt;
 
     public VisionLlmExtractor(
             RestClient.Builder restClientBuilder,
@@ -68,7 +58,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
-            FieldPoolRegistry fieldPool) {
+            PromptBuilder promptBuilder) {
         this.name = config.name();
         this.model = config.model();
         this.renderDpi = config.renderDpi();
@@ -78,7 +68,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         this.renderer = renderer;
         this.mapper = mapper;
         this.json = json;
-        this.fieldPool = fieldPool;
+        this.promptBuilder = promptBuilder;
 
         // Standalone RestClient for the OpenAI-compatible /v1/chat/completions endpoint.
         // Auth: empty api-key (e.g. local Ollama) → no header; non-empty → Bearer token.
@@ -267,85 +257,14 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         return "{}";
     }
 
-    private String loadPrompt() {
-        String cached = cachedPrompt;
-        if (cached != null) return cached;
-        String template;
-        try {
-            template = StreamUtils.copyToString(
-                    new ClassPathResource(PROMPT_TEMPLATE).getInputStream(),
-                    StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("Could not load {}; using inline fallback prompt", PROMPT_TEMPLATE);
-            template = FALLBACK_PROMPT;
-        }
-        // Render {{fields}} from the canonical registry — single source of truth
-        // for what the LLM is asked to produce. Adding a new invoice field is
-        // a one-line YAML edit; the prompt updates automatically on next boot.
-        String fieldList = renderFieldList();
-        cached = template.replace("{{fields}}", fieldList);
-        cachedPrompt = cached;
-        return cached;
-    }
-
-    /** Render the canonical-field reference block injected into the prompt. */
-    private String renderFieldList() {
-        if (fieldPool == null) return "";
-        return fieldPool.appliesToInvoice().stream()
-                .map(this::renderFieldLine)
-                .collect(Collectors.joining("\n"));
-    }
-
-    private String renderFieldLine(FieldDefinition f) {
-        if (f.type() == FieldType.TABLE) {
-            return renderTableField(f);
-        }
-        String typeHint = switch (f.type()) {
-            case DATE -> "DATE — ISO yyyy-MM-dd";
-            case CURRENCY_CODE -> "CURRENCY_CODE — ISO 4217";
-            case ENUM -> "ENUM — one of " + String.join(", ", f.enumValues());
-            case AMOUNT -> "AMOUNT (number)";
-            case INTEGER -> "INTEGER";
-            case MULTILINE_TEXT -> "MULTILINE_TEXT";
-            default -> f.type().name();
-        };
-        String label = f.nameEn() == null ? f.key() : f.nameEn();
-        return "- " + f.key() + " (" + label + ", " + typeHint + ")";
-    }
-
     /**
-     * Render a TABLE field as a header line plus indented column hints. The
-     * model is asked to return an ARRAY of row objects under {@code f.key()};
-     * each row uses the canonical column keys with values typed per column.
+     * Returns the rendered vision-lane prompt. Delegates to {@link PromptBuilder}
+     * which loads {@code prompts/invoice-extract.st} and fills the field-list
+     * placeholder from the canonical {@link com.lc.checker.infra.fields.FieldPoolRegistry}.
+     * Same template + same field source as the sidecar lanes — single source of truth.
      */
-    private String renderTableField(FieldDefinition f) {
-        String label = f.nameEn() == null ? f.key() : f.nameEn();
-        StringBuilder sb = new StringBuilder("- ")
-                .append(f.key())
-                .append(" (")
-                .append(label)
-                .append(", TABLE — array of rows; each row has the columns below. ")
-                .append("Return [] if the invoice has no such table.)");
-        for (ColumnDefinition c : f.columns()) {
-            String hint = switch (c.type()) {
-                case DATE -> "DATE";
-                case CURRENCY_CODE -> "CURRENCY_CODE";
-                case ENUM -> "ENUM (" + String.join("|", c.enumValues()) + ")";
-                case AMOUNT -> "AMOUNT";
-                case INTEGER -> "INTEGER";
-                case MULTILINE_TEXT -> "TEXT";
-                default -> c.type().name();
-            };
-            String colLabel = c.nameEn() == null ? c.key() : c.nameEn();
-            sb.append("\n    • ")
-                    .append(c.key())
-                    .append(" (")
-                    .append(colLabel)
-                    .append(", ")
-                    .append(hint)
-                    .append(")");
-        }
-        return sb.toString();
+    private String loadPrompt() {
+        return promptBuilder.forVision();
     }
 
     private double asDouble(Object v, double def) {
@@ -479,13 +398,4 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     public String extractorName() {
         return name;
     }
-
-    private static final String FALLBACK_PROMPT = """
-            Extract invoice fields as plain key:value pairs — ONE pair per line.
-            Return ONLY key:value lines. Use null if absent.
-            Keys: invoice_number, invoice_date, seller_name, seller_address, buyer_name,
-            buyer_address, goods_description, quantity, unit, unit_price, total_amount,
-            currency, lc_reference, trade_terms, port_of_loading, port_of_discharge,
-            country_of_origin, signed (true/false/null), confidence (0.0-1.0)
-            """;
 }

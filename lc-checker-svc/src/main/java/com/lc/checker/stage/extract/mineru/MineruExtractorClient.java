@@ -38,12 +38,15 @@ public class MineruExtractorClient implements InvoiceExtractor {
     private final InvoiceFieldMapper mapper;
     private final ObjectMapper json;
     private final MineruExtractorConfig config;
+    private final com.lc.checker.stage.extract.PromptBuilder promptBuilder;
 
     public MineruExtractorClient(RestClient.Builder restClientBuilder,
-            InvoiceFieldMapper mapper, ObjectMapper json, MineruExtractorConfig config) {
+            InvoiceFieldMapper mapper, ObjectMapper json, MineruExtractorConfig config,
+            com.lc.checker.stage.extract.PromptBuilder promptBuilder) {
         this.mapper = mapper;
         this.json = json;
         this.config = config;
+        this.promptBuilder = promptBuilder;
         // Use SimpleClientHttpRequestFactory (HttpURLConnection) to match the
         // previously-working ExtractorClientConfig (commit 30c16ee). The default
         // JdkClientHttpRequestFactory mishandles Spring's streaming multipart body
@@ -74,6 +77,8 @@ public class MineruExtractorClient implements InvoiceExtractor {
         };
         MultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
         parts.add("file", fileResource);
+        // Same canonical prompt the vision lanes use, rendered for text mode.
+        parts.add("prompt", promptBuilder.forText());
 
         String rawResponse;
         try {

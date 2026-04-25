@@ -1,17 +1,15 @@
 """FastAPI entry point for mineru-svc.
 
-Implements the FROZEN extractors/CONTRACT.md v1.0. Differences from the
-docling-svc main.py are narrowly scoped to:
+Implements extractors/CONTRACT.md. Differences from docling-svc/main.py
+are narrowly scoped to:
 
 1. Extractor identity string ("mineru").
-2. The `confidence` formula — per resolved Q3, MinerU uses
-   `non_null_field_count / len(CONTRACT_FIELD_KEYS)` because it does not
-   expose native per-page confidence scores.
-3. The underlying extractor module (mineru_extractor instead of docling_extractor).
+2. The underlying extractor module (mineru_extractor vs docling_extractor).
 
-Input validation, error codes, request-mode dispatch, field extraction,
-timeout budget, and the response shape are identical — both services
-implement the same contract.
+Both services use the same prompt-driven LLM extraction path and pass
+through the LLM's self-rated confidence verbatim — no per-service
+confidence formula. The Java client supplies the prompt + field list
+(rendered from `field-pool.yaml`); sidecars hold no schema knowledge.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 try:
@@ -34,7 +32,6 @@ except ImportError:  # pragma: no cover
 
 from . import CONTRACT_VERSION, EXTRACTOR_NAME, __version__ as SERVICE_VERSION
 from .contract import (
-    CONTRACT_FIELD_KEYS,
     ErrorResponse,
     ExtractResponse,
     HealthResponse,
@@ -49,8 +46,12 @@ from .errors import (
     InvalidRequest,
 )
 from .fetching import fetch_url, read_path, validate_pdf_bytes
-from .field_extractor import extract_fields
-from .llm_field_extractor import llm_extract_fields
+from .llm_field_extractor import (
+    LlmCallFailed,
+    LlmNotConfigured,
+    LlmResponseInvalid,
+    llm_extract_fields,
+)
 from .mineru_extractor import (
     MinerUResult,
     convert_pdf_bytes,
@@ -206,29 +207,26 @@ def _convert_with_budget(pdf_bytes: bytes, source_path: Optional[str]) -> MinerU
     return convert_pdf_bytes(pdf_bytes)
 
 
-def _compute_confidence(fields: InvoiceFields) -> float:
-    """CONTRACT.md Q3 resolved formula for mineru-svc:
-    `non_null_field_count / len(CONTRACT_FIELD_KEYS)`.
-
-    Deterministic, explainable, and keeps the `[0, 1]` range that Java's
-    `extractor.confidence-threshold` (default 0.80) expects.
-    """
-    denom = len(CONTRACT_FIELD_KEYS)
-    return fields.non_null_count() / denom if denom else 0.0
-
-
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(
     request: Request,
     file: Optional[UploadFile] = File(default=None),
+    prompt: str = Form(..., description="LLM system prompt — REQUIRED."),
 ) -> ExtractResponse:
+    """Extract invoice fields from a PDF.
+
+    The sidecar holds NO prompt or field list — both are supplied by the
+    Java client (rendered from `field-pool.yaml` + `invoice-extract.st`).
+    All four extractor lanes share the same prompt — see
+    lc-checker-svc / PromptBuilder.java.
+    """
     start_ns = time.perf_counter_ns()
 
     json_body = await _read_json_body(request) if file is None else None
     mode, ctx = _resolve_input_mode(file, json_body)
     pdf_bytes, source_path = await _load_bytes(mode, ctx)
 
-    # MinerU extraction with 25 s service budget.
+    # Run MinerU library with 25 s service budget.
     try:
         result: MinerUResult = await asyncio.wait_for(
             asyncio.to_thread(_convert_with_budget, pdf_bytes, source_path),
@@ -239,30 +237,26 @@ async def extract(
     except Exception as exc:
         raise ExtractionFailed(f"{type(exc).__name__}: {exc}") from exc
 
-    # Field extraction: LLM first (uses LLM_BASE_URL/MODEL from env), regex fallback.
-    fields: InvoiceFields | None = None
+    # Field extraction: LLM is mandatory, no fallback.
+    # Confidence comes from the LLM's own self-rating in the response
+    # envelope — replaces the previous `non_null_count / len(CONTRACT_FIELD_KEYS)`
+    # formula. The number on the card now represents extraction quality
+    # comparable across all 4 extractor lanes.
     try:
-        fields = await asyncio.to_thread(llm_extract_fields, result.raw_markdown)
-    except Exception as exc:
-        logger.warning("LLM field extraction raised: %s", exc, extra={"event": "llm_extract_error"})
+        fields, llm_confidence = await asyncio.to_thread(
+            llm_extract_fields, result.raw_markdown, prompt
+        )
+    except LlmNotConfigured as exc:
+        raise ExtractionFailed(f"LLM not configured: {exc}") from exc
+    except (LlmCallFailed, LlmResponseInvalid) as exc:
+        raise ExtractionFailed(f"LLM extraction failed: {exc}") from exc
 
-    if fields is None:
-        try:
-            fields = await asyncio.to_thread(extract_fields, result.raw_markdown, result.raw_text)
-        except Exception as exc:
-            logger.warning(
-                "regex field extraction failed; returning empty fields",
-                extra={"event": "field_extract_error", "error": str(exc)},
-            )
-            fields = InvoiceFields()
-
-    confidence = _compute_confidence(fields)
     elapsed_ms = (time.perf_counter_ns() - start_ns) // 1_000_000
 
     response = ExtractResponse(
         extractor=EXTRACTOR_NAME,
         contract_version=CONTRACT_VERSION,
-        confidence=confidence,
+        confidence=llm_confidence,
         is_image_based=result.is_image_based,
         raw_markdown=result.raw_markdown,
         raw_text=result.raw_text,
@@ -277,7 +271,7 @@ async def extract(
             "event": "extract",
             "input_mode": mode,
             "duration_ms": int(elapsed_ms),
-            "confidence": confidence,
+            "confidence": llm_confidence,
             "is_image_based": result.is_image_based,
             "pages": result.pages,
             "extractor": EXTRACTOR_NAME,

@@ -41,53 +41,10 @@ CONTRACT_FIELD_KEYS: tuple[str, ...] = (
 )
 
 
-class InvoiceFields(BaseModel):
-    """Structured invoice fields. `signed`, `stamp_present`, `letterhead_present`
-    are bool|null; `line_items` is a list of row dicts; everything else is str|null.
-
-    The 18 original CONTRACT_FIELD_KEYS are always present (value may be null).
-    Extended fields (stamp_present, letterhead_present, line_items) are populated
-    by the LLM extractor and resolved by Java's FieldPoolRegistry alias table.
-    Extras: catch-all for anything not mapped above.
-    """
-
-    # --- original 18 contract fields ---
-    invoice_number: Optional[str] = None
-    invoice_date: Optional[str] = None  # ISO 8601 YYYY-MM-DD preferred; raw allowed
-    seller_name: Optional[str] = None
-    seller_address: Optional[str] = None
-    buyer_name: Optional[str] = None
-    buyer_address: Optional[str] = None
-    goods_description: Optional[str] = None
-    quantity: Optional[str] = None
-    unit: Optional[str] = None
-    unit_price: Optional[str] = None
-    total_amount: Optional[str] = None
-    currency: Optional[str] = None
-    lc_reference: Optional[str] = None
-    trade_terms: Optional[str] = None
-    port_of_loading: Optional[str] = None
-    port_of_discharge: Optional[str] = None
-    country_of_origin: Optional[str] = None
-    signed: Optional[bool] = None
-    # --- extended fields (LLM extractor; resolved by Java field-pool aliases) ---
-    stamp_present: Optional[bool] = None
-    letterhead_present: Optional[bool] = None
-    line_items: Optional[list[dict[str, Any]]] = None
-    # --- catch-all ---
-    extras: dict[str, Any] = Field(default_factory=dict)
-
-    def non_null_count(self) -> int:
-        """Count of the 18 contract fields that have a non-null value.
-
-        Used by mineru-svc's confidence formula (see CONTRACT.md Q3). Excluded
-        by design: the `extras` dict — only declared contract fields count.
-        """
-        n = 0
-        for key in CONTRACT_FIELD_KEYS:
-            if getattr(self, key) is not None:
-                n += 1
-        return n
+# Pass-through field map: whatever keys the LLM produces (driven by the
+# client-supplied prompt + field-pool.yaml on Java side) flow through to
+# Java unchanged. The sidecar holds NO field list of its own.
+InvoiceFields = dict[str, Any]
 
 
 class ExtractResponse(BaseModel):
@@ -99,7 +56,7 @@ class ExtractResponse(BaseModel):
     is_image_based: bool
     raw_markdown: str  # may be "" but never null
     raw_text: str  # may be "" but never null
-    fields: InvoiceFields
+    fields: dict[str, Any]
     pages: int = Field(ge=0)
     extraction_ms: int = Field(ge=0)
 

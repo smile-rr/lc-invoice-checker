@@ -21,7 +21,7 @@ from typing import Optional
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 # pythonjsonlogger renamed the module in 3.x; try the new path, fall back to the old.
@@ -42,8 +42,12 @@ from .errors import (
     InvalidRequest,
 )
 from .fetching import fetch_url, read_path, validate_pdf_bytes
-from .field_extractor import extract_fields
-from .llm_field_extractor import llm_extract_fields
+from .llm_field_extractor import (
+    LlmCallFailed,
+    LlmNotConfigured,
+    LlmResponseInvalid,
+    llm_extract_fields,
+)
 
 # -- Logging ------------------------------------------------------------------
 # One JSON line per event, per contract §Logging (recommended).
@@ -224,14 +228,22 @@ def _convert_with_budget(pdf_bytes: bytes, source_path: Optional[str]) -> Doclin
 async def extract(
     request: Request,
     file: Optional[UploadFile] = File(default=None),
+    prompt: str = Form(..., description="LLM system prompt — REQUIRED."),
 ) -> ExtractResponse:
+    """Extract invoice fields from a PDF.
+
+    The sidecar holds NO prompt or field list — both are supplied by the
+    Java client (rendered from the canonical `field-pool.yaml` + the shared
+    `invoice-extract.st` template). All four extractor lanes share the same
+    prompt — see lc-checker-svc / PromptBuilder.java.
+    """
     start_ns = time.perf_counter_ns()
 
     json_body = await _read_json_body(request) if file is None else None
     mode, ctx = _resolve_input_mode(file, json_body)
     pdf_bytes, source_path = await _load_bytes(mode, ctx)
 
-    # Run extraction with the 25 s service budget.
+    # Run docling library with the 25 s service budget.
     try:
         result: DoclingResult = await asyncio.wait_for(
             asyncio.to_thread(_convert_with_budget, pdf_bytes, source_path),
@@ -242,29 +254,27 @@ async def extract(
     except Exception as exc:  # docling raised something
         raise ExtractionFailed(f"{type(exc).__name__}: {exc}") from exc
 
-    # Field extraction: LLM first (uses LLM_BASE_URL/MODEL from env), regex fallback.
-    fields: InvoiceFields | None = None
+    # Field extraction: LLM is mandatory, no fallback.
+    # Confidence comes from the LLM's own self-rating in the response
+    # envelope — the docling library's `mean_grade` (input quality / OCR
+    # confidence) is no longer reported as the headline confidence; the
+    # number on the card now represents extraction quality, comparable
+    # across all 4 extractor lanes.
     try:
-        fields = await asyncio.to_thread(llm_extract_fields, result.raw_markdown)
-    except Exception as exc:
-        logger.warning("LLM field extraction raised: %s", exc, extra={"event": "llm_extract_error"})
-
-    if fields is None:
-        try:
-            fields = await asyncio.to_thread(extract_fields, result.raw_markdown, result.raw_text)
-        except Exception as exc:
-            logger.warning(
-                "regex field extraction failed; returning empty fields",
-                extra={"event": "field_extract_error", "error": str(exc)},
-            )
-            fields = InvoiceFields()
+        fields, llm_confidence = await asyncio.to_thread(
+            llm_extract_fields, result.raw_markdown, prompt
+        )
+    except LlmNotConfigured as exc:
+        raise ExtractionFailed(f"LLM not configured: {exc}") from exc
+    except (LlmCallFailed, LlmResponseInvalid) as exc:
+        raise ExtractionFailed(f"LLM extraction failed: {exc}") from exc
 
     elapsed_ms = (time.perf_counter_ns() - start_ns) // 1_000_000
 
     response = ExtractResponse(
         extractor=EXTRACTOR_NAME,
         contract_version=CONTRACT_VERSION,
-        confidence=result.confidence,
+        confidence=llm_confidence,
         is_image_based=result.is_image_based,
         raw_markdown=result.raw_markdown,
         raw_text=result.raw_text,
@@ -279,7 +289,8 @@ async def extract(
             "event": "extract",
             "input_mode": mode,
             "duration_ms": int(elapsed_ms),
-            "confidence": result.confidence,
+            "confidence": llm_confidence,
+            "docling_mean_grade": result.confidence,
             "is_image_based": result.is_image_based,
             "pages": result.pages,
             "extractor": EXTRACTOR_NAME,

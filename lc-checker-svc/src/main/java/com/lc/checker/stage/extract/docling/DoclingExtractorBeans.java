@@ -2,6 +2,7 @@ package com.lc.checker.stage.extract.docling;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lc.checker.stage.extract.InvoiceFieldMapper;
+import com.lc.checker.stage.extract.PromptBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -22,9 +23,10 @@ public class DoclingExtractorBeans {
             RestClient.Builder restClientBuilder,
             InvoiceFieldMapper mapper,
             ObjectMapper objectMapper,
+            PromptBuilder promptBuilder,
             @Value("${docling.base-url:http://docling-svc:8081}") String baseUrl,
             @Value("${docling.timeout-seconds:60}") int timeoutSeconds) {
         return new DoclingExtractorClient(restClientBuilder, mapper, objectMapper,
-                new DoclingExtractorConfig("docling", baseUrl, timeoutSeconds));
+                new DoclingExtractorConfig("docling", baseUrl, timeoutSeconds), promptBuilder);
     }
 }

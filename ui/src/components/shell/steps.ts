@@ -152,17 +152,22 @@ export function viewForStep(
       return { status: 'done', metric: s.sessionId ? '2 files' : null };
     case 'lc': {
       const stg = s.stages.lc_parse;
-      const metric = s.lc?.lc_number ? s.lc.lc_number : stg.status === 'done' ? 'parsed' : null;
-      return { status: stg.status, metric };
+      // If the parsed LC is sitting in state, the step is done — even if the
+      // SSE `stage.completed` event was missed or hasn't arrived yet. Data
+      // presence is ground truth; the stage flag just confirms it.
+      const status: StepStatus = s.lc ? 'done' : stg.status;
+      const metric = s.lc?.lc_number ? s.lc.lc_number : status === 'done' ? 'parsed' : null;
+      return { status, metric };
     }
     case 'invoice': {
       const stg = s.stages.invoice_extract;
+      const status: StepStatus = s.invoice ? 'done' : stg.status;
       const metric = s.invoice
         ? `${s.invoice.extractor_used} · ${(s.invoice.extractor_confidence * 100).toFixed(0)}%`
         : stg.status === 'running'
         ? 'extracting…'
         : null;
-      return { status: stg.status, metric };
+      return { status, metric };
     }
     case 'compare': {
       // Compare has no backend stage of its own — derive from invoice + lc availability.
@@ -176,13 +181,20 @@ export function viewForStep(
       const total = s.checks.length;
       const fail = s.checks.filter((c) => c.status === 'DISCREPANT').length;
       const pass = s.checks.filter((c) => c.status === 'PASS').length;
+      // Treat as done when results are present and nothing is in flight, even
+      // if the SSE `stage.completed` for rule_check was missed. Mirrors the
+      // data-presence-as-done rule used by lc / invoice / compare / review.
+      const status: StepStatus =
+        total > 0 && s.inFlightRuleIds.size === 0 && stg.status !== 'running'
+          ? 'done'
+          : stg.status;
       const metric =
-        stg.status === 'running'
+        status === 'running' || stg.status === 'running'
           ? `${total} running…`
           : total > 0
           ? `${pass}✓ ${fail}✗`
           : null;
-      return { status: stg.status, metric };
+      return { status, metric };
     }
     case 'review': {
       // Halted runs have a synthetic placeholder report, not a real one.

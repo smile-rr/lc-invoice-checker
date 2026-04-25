@@ -1,9 +1,20 @@
-"""LLM-based invoice field extraction from Docling markdown.
+"""LLM-based invoice field extraction from Docling/MinerU markdown.
 
-Reads LLM_BASE_URL / LLM_API_KEY / LLM_MODEL from the environment (same
-settings the Java service uses for Type-B rule checks). Returns None if
-the LLM is not configured or the call fails — the caller falls back to
-the regex field_extractor.
+The sidecar holds NO field list and NO system prompt. Both arrive from the
+Java client per request — same template + field-pool.yaml that drives the
+vision lanes. Sidecar's job is purely:
+  1. take markdown + client-supplied prompt
+  2. call the configured LLM
+  3. return the LLM's structured response, transparently
+
+Endpoint resolution (in priority order):
+  1. SIDECAR_LLM_BASE_URL / SIDECAR_LLM_MODEL / SIDECAR_LLM_API_KEY
+     — dedicated sidecar LLM, defaults to local Ollama in .env.
+  2. LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+     — falls through to whatever Java's Spring AI uses.
+
+Raises {LlmNotConfigured, LlmCallFailed, LlmResponseInvalid} so the caller
+can surface the right HTTP status. No silent regex fallback.
 """
 
 from __future__ import annotations
@@ -11,82 +22,63 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
-from .contract import InvoiceFields
+# `InvoiceFields` is now a plain `dict[str, Any]` alias — see contract.py.
+# We don't import it; we just deal with dicts directly.
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """\
-You are extracting fields from a commercial invoice for Letter-of-Credit
-compliance review (UCP 600 / ISBP 821). Read the invoice text carefully and
-return ONE JSON object — no preamble, no code fences, no commentary.
 
-Return null for any field not found on the invoice.
-
-Schema (return exactly this shape):
-{
-  "invoice_number": "string|null",
-  "invoice_date": "YYYY-MM-DD|null",
-  "seller_name": "beneficiary/seller name|null",
-  "seller_address": "address, \\n for newlines|null",
-  "buyer_name": "applicant/buyer name|null",
-  "buyer_address": "address|null",
-  "goods_description": "verbatim goods wording|null",
-  "quantity": "number string|null",
-  "unit": "PCS/MT/KG/…|null",
-  "unit_price": "number string|null",
-  "total_amount": "number string|null",
-  "currency": "ISO-4217|null",
-  "lc_reference": "LC number quoted on invoice|null",
-  "trade_terms": "e.g. CIF SINGAPORE|null",
-  "port_of_loading": "string|null",
-  "port_of_discharge": "string|null",
-  "country_of_origin": "string|null",
-  "signed": true|false|null,
-  "stamp_present": true|false|null,
-  "letterhead_present": true|false|null,
-  "line_items": [{"description":"…","hs_code":"…","quantity":"…","unit":"…","unit_price":"…","amount":"…"}]
-}
-
-Conventions:
-- currency: ISO 4217 code only (USD/EUR/CNY). Never a symbol.
-- invoice_date: ISO 8601 YYYY-MM-DD.
-- Amounts / quantities: bare numbers, no thousands separators, no currency prefix.
-- goods_description: verbatim — do NOT rephrase or shorten.
-- signed: true if a signature is visible; false if explicitly absent; null if unclear.
-- stamp_present: true if a company seal or rubber stamp is visible.
-- letterhead_present: true if the seller's printed header/logo appears at the top.
-- quantity / unit_price scalars: populate when the invoice has exactly ONE product
-  line AND also include that row in line_items. For multi-line invoices leave these
-  null — the rule engine reads line_items directly.
-- line_items: one object per product row. Use null for any cell not printed.
-  Return [] if no line-item table exists.
-Output ONLY the JSON object.\
-"""
+class LlmNotConfigured(RuntimeError):
+    """Raised when neither SIDECAR_LLM_* nor LLM_* env vars are set."""
 
 
-def llm_extract_fields(markdown: str) -> Optional[InvoiceFields]:
-    """Call the text LLM to extract invoice fields from Docling's markdown.
+class LlmCallFailed(RuntimeError):
+    """Raised when the LLM HTTP call returns a non-2xx status or times out."""
 
-    Returns None if LLM is not configured or the call fails, so the caller
-    can fall through to the regex extractor.
+
+class LlmResponseInvalid(RuntimeError):
+    """Raised when the LLM response cannot be parsed as JSON."""
+
+
+def llm_extract_fields(markdown: str, prompt: str) -> tuple[dict[str, Any], float]:
+    """Call the text LLM with a client-supplied prompt to extract fields.
+
+    Both `markdown` (the docling/mineru-rendered invoice text) and `prompt`
+    (the system instructions, including the field list) are MANDATORY.
+    The sidecar does not own a prompt template or a field list.
+
+    Returns (fields_dict, confidence) — `fields_dict` is whatever key/value
+    map the LLM produced inside its response's `"fields"` envelope; the
+    sidecar passes it through to Java unchanged so canonical keys
+    (lc_number, beneficiary_name, credit_amount, …) reach Java's
+    InvoiceFieldMapper alias resolution at the top level. Confidence is
+    the LLM's own self-rating from the response envelope's "confidence"
+    key (defaults to 0.8 if omitted).
+
+    Raises LlmNotConfigured / LlmCallFailed / LlmResponseInvalid on failure.
     """
-    base_url = (os.getenv("LLM_BASE_URL") or "").rstrip("/")
-    api_key = os.getenv("LLM_API_KEY") or ""
-    model = os.getenv("LLM_MODEL") or ""
+    if not prompt or not prompt.strip():
+        raise ValueError("`prompt` is required and must be non-empty")
+
+    base_url = (os.getenv("SIDECAR_LLM_BASE_URL") or os.getenv("LLM_BASE_URL") or "").rstrip("/")
+    api_key = os.getenv("SIDECAR_LLM_API_KEY") or os.getenv("LLM_API_KEY") or ""
+    model = os.getenv("SIDECAR_LLM_MODEL") or os.getenv("LLM_MODEL") or ""
 
     if not base_url or not model:
-        logger.debug("LLM not configured (LLM_BASE_URL/LLM_MODEL unset); skipping LLM extraction")
-        return None
+        raise LlmNotConfigured(
+            "LLM endpoint not configured: set SIDECAR_LLM_BASE_URL+SIDECAR_LLM_MODEL "
+            "(or LLM_BASE_URL+LLM_MODEL) in .env"
+        )
 
     payload = {
         "model": model,
         "temperature": 0.0,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": prompt.strip()},
             {"role": "user", "content": f"Invoice text:\n\n{markdown}"},
         ],
     }
@@ -100,25 +92,36 @@ def llm_extract_fields(markdown: str) -> Optional[InvoiceFields]:
             resp.raise_for_status()
         raw_content: str = resp.json()["choices"][0]["message"]["content"]
     except Exception as exc:
-        logger.warning("LLM call failed: %s; falling back to regex extractor", exc)
-        return None
+        raise LlmCallFailed(f"LLM call to {base_url}: {exc}") from exc
 
     try:
         data: dict[str, Any] = _parse_json(raw_content)
     except Exception as exc:
-        logger.warning("LLM response is not valid JSON: %s; raw=%r", exc, raw_content[:200])
-        return None
+        raise LlmResponseInvalid(f"LLM returned non-JSON content: {raw_content[:200]!r}") from exc
 
+    fields = _unwrap_fields(data)
+
+    # LLM-emitted self-confidence (the prompt asks for it in the envelope).
+    # 0.8 is the "did extract something but didn't self-rate" default — same
+    # value the Java VisionLlmExtractor uses for its lanes.
+    raw_conf = data.get("confidence")
     try:
-        fields = _map_to_invoice_fields(data)
-        logger.info(
-            "LLM extraction succeeded",
-            extra={"event": "llm_extract", "non_null": fields.non_null_count()},
-        )
-        return fields
-    except Exception as exc:
-        logger.warning("Failed to map LLM output to InvoiceFields: %s", exc)
-        return None
+        confidence = float(raw_conf) if raw_conf is not None else 0.8
+    except (TypeError, ValueError):
+        confidence = 0.8
+    confidence = max(0.0, min(1.0, confidence))
+
+    non_null = sum(1 for v in fields.values() if v not in (None, "", []))
+    logger.info(
+        "LLM extraction succeeded",
+        extra={
+            "event": "llm_extract",
+            "non_null": non_null,
+            "field_count": len(fields),
+            "llm_confidence": confidence,
+        },
+    )
+    return fields, confidence
 
 
 # ---------------------------------------------------------------------------
@@ -130,60 +133,20 @@ def _parse_json(text: str) -> dict[str, Any]:
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
-        # drop first line (```json or ```) and last line (```)
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
     return json.loads(text)
 
 
-def _str(v: Any) -> Optional[str]:
-    if v is None:
-        return None
-    s = str(v).strip()
-    if s.lower() in ("null", "none", "n/a", ""):
-        return None
-    return s
+def _unwrap_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """Pull the field dict out of the LLM's JSON envelope and pass through.
 
+    Two response shapes accepted:
+      1) Shared prompt (rendered from invoice-extract.st on Java side):
+         { "fields": {...}, "extraction_warnings": [...], "confidence": 0.0 }
+      2) Older flat shape (legacy / direct curl tests).
 
-def _bool(v: Any) -> Optional[bool]:
-    if isinstance(v, bool):
-        return v
-    if v is None:
-        return None
-    s = str(v).strip().lower()
-    if s in ("true", "yes", "1"):
-        return True
-    if s in ("false", "no", "0"):
-        return False
-    return None
-
-
-def _list_of_dicts(v: Any) -> list[dict[str, Any]]:
-    if not isinstance(v, list):
-        return []
-    return [row for row in v if isinstance(row, dict)]
-
-
-def _map_to_invoice_fields(data: dict[str, Any]) -> InvoiceFields:
-    return InvoiceFields(
-        invoice_number=_str(data.get("invoice_number")),
-        invoice_date=_str(data.get("invoice_date")),
-        seller_name=_str(data.get("seller_name")),
-        seller_address=_str(data.get("seller_address")),
-        buyer_name=_str(data.get("buyer_name")),
-        buyer_address=_str(data.get("buyer_address")),
-        goods_description=_str(data.get("goods_description")),
-        quantity=_str(data.get("quantity")),
-        unit=_str(data.get("unit")),
-        unit_price=_str(data.get("unit_price")),
-        total_amount=_str(data.get("total_amount")),
-        currency=_str(data.get("currency")),
-        lc_reference=_str(data.get("lc_reference")),
-        trade_terms=_str(data.get("trade_terms")),
-        port_of_loading=_str(data.get("port_of_loading")),
-        port_of_discharge=_str(data.get("port_of_discharge")),
-        country_of_origin=_str(data.get("country_of_origin")),
-        signed=_bool(data.get("signed")),
-        stamp_present=_bool(data.get("stamp_present")),
-        letterhead_present=_bool(data.get("letterhead_present")),
-        line_items=_list_of_dicts(data.get("line_items")) or None,
-    )
+    The sidecar holds NO field schema — whatever the LLM produced flows
+    straight to Java, where InvoiceFieldMapper resolves canonical and
+    legacy keys via field-pool's invoice_aliases table.
+    """
+    return data["fields"] if isinstance(data.get("fields"), dict) else data

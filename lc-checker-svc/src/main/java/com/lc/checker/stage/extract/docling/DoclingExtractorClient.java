@@ -42,12 +42,15 @@ public class DoclingExtractorClient implements InvoiceExtractor {
     private final InvoiceFieldMapper mapper;
     private final ObjectMapper json;
     private final DoclingExtractorConfig config;
+    private final com.lc.checker.stage.extract.PromptBuilder promptBuilder;
 
     public DoclingExtractorClient(RestClient.Builder restClientBuilder,
-            InvoiceFieldMapper mapper, ObjectMapper json, DoclingExtractorConfig config) {
+            InvoiceFieldMapper mapper, ObjectMapper json, DoclingExtractorConfig config,
+            com.lc.checker.stage.extract.PromptBuilder promptBuilder) {
         this.mapper = mapper;
         this.json = json;
         this.config = config;
+        this.promptBuilder = promptBuilder;
         // Use SimpleClientHttpRequestFactory (HttpURLConnection) to match the
         // previously-working ExtractorClientConfig (commit 30c16ee). The default
         // JdkClientHttpRequestFactory mishandles Spring's streaming multipart body
@@ -79,6 +82,12 @@ public class DoclingExtractorClient implements InvoiceExtractor {
         };
         MultiValueMap<String, Object> parts = new LinkedMultiValueMap<>();
         parts.add("file", fileResource);
+        // Ship the rendered text-mode prompt so the sidecar's LLM tier uses
+        // the SAME instructions as the vision lanes (single source of truth
+        // — `prompts/invoice-extract.st` rendered via PromptBuilder.forText()).
+        // Sidecars that don't recognise this part fall through to their
+        // hardcoded prompt, preserving backward compatibility.
+        parts.add("prompt", promptBuilder.forText());
 
         String rawResponse;
         try {

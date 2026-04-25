@@ -558,12 +558,21 @@ function ModeBtn({
 // ─── json body ──────────────────────────────────────────────────────────────
 
 function JsonBody({ invoice }: { invoice: InvoiceDocument }) {
+  // Strip parsed_rows / envelope (UI-render scaffolding, noisy in JSON view).
+  // BUT: the line_items array doesn't live as a top-level field on
+  // InvoiceDocument — it sits inside parsed_rows[tag=line_items].meta.rows.
+  // Surface it back as a top-level `line_items` so the JSON view shows the
+  // array of row objects (matches what the LLM actually returned and what
+  // SQL queries against `result.document.fields.line_items` would expect).
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { parsed_rows: _pr, envelope: _env, ...rest } = invoice;
+  const { parsed_rows, envelope: _env, ...rest } = invoice;
+  const lineItemsRow = (parsed_rows ?? []).find((r) => r.tag === 'line_items');
+  const lineItems = (lineItemsRow?.meta as { rows?: unknown } | undefined)?.rows;
+  const display = lineItems !== undefined ? { ...rest, line_items: lineItems } : rest;
   return (
     <div className="p-4">
       <pre className="font-mono text-xs text-navy-1 whitespace-pre leading-relaxed">
-        {JSON.stringify(rest, null, 2)}
+        {JSON.stringify(display, null, 2)}
       </pre>
     </div>
   );
