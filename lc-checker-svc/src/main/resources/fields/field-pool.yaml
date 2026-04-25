@@ -1,0 +1,381 @@
+# =============================================================================
+# field-pool.yaml — single source of truth for canonical field names.
+# =============================================================================
+#
+# Adding a new field is a YAML edit. No Java type binds to a specific name in
+# this file — Mt700Parser, vision/HTTP invoice extractors, the rule catalog,
+# the GET /api/v1/fields endpoint, AND the UI panels all read from here.
+#
+# Tier convention (LC = closed-world; INVOICE = open-world):
+#   Tier A — UCP-mandated. Always parsed. Both LC and invoice if applicable.
+#   Tier B — Conditionally relevant; populated when the LC :46A: demands it.
+#   Tier C — Free-form. NOT enumerated here; extractor keys not matching any
+#            registered alias land verbatim in FieldEnvelope.extras.
+#
+# Each entry:
+#   key:               REQUIRED. snake_case. Globally unique.
+#   name_en:           REQUIRED.
+#   name_zh:           REQUIRED.
+#   type:              REQUIRED. STRING|AMOUNT|DATE|INTEGER|ENUM|MULTILINE_TEXT|DOCUMENT_LIST|CURRENCY_CODE
+#   description_zh:    optional.
+#   applies_to:        REQUIRED list. Subset of [LC, INVOICE].
+#   source_tags:       MT700 tags producing this field on the LC side. Empty for invoice-only.
+#   invoice_aliases:   extractor key variants; replaces the old normaliseKey() switch.
+#   enum_values:       only for type=ENUM.
+#   rule_relevant:     boolean — whether any rule reads this field today.
+#   default_value:     optional default if absent (e.g. presentation_days = 21).
+#   group:             optional UI grouping label. Conventional values:
+#                        header | amount | parties | shipment | documents | conditions | meta
+#                      Group ORDER inside a panel = order in the UI's group_order
+#                      constant; FIELD ORDER inside a group = YAML order.
+
+fields:
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Header / identity
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: lc_number
+    name_en: LC Number
+    name_zh: 信用证号
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["20"]
+    invoice_aliases: [lc_reference, lc_no, l_c_number, credit_number, reference]
+    rule_relevant: true
+    group: header
+
+  - key: issue_date
+    name_en: Issue Date
+    name_zh: 开证日期
+    type: DATE
+    applies_to: [LC]
+    source_tags: ["31C"]
+    rule_relevant: false
+    group: header
+
+  - key: expiry_date
+    name_en: Expiry Date
+    name_zh: 到期日期
+    type: DATE
+    applies_to: [LC]
+    source_tags: ["31D"]
+    rule_relevant: true
+    group: header
+
+  - key: expiry_place
+    name_en: Expiry Place
+    name_zh: 到期地点
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["31D"]
+    rule_relevant: false
+    group: header
+
+  - key: applicable_rules
+    name_en: Rules
+    name_zh: 适用规则
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["40E"]
+    rule_relevant: false
+    group: header
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Amount
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: credit_currency
+    name_en: Currency
+    name_zh: 信用证币种
+    type: CURRENCY_CODE
+    applies_to: [LC, INVOICE]
+    source_tags: ["32B"]
+    invoice_aliases: [currency, ccy]
+    rule_relevant: true
+    group: amount
+
+  - key: credit_amount
+    name_en: Amount
+    name_zh: 信用证金额
+    type: AMOUNT
+    applies_to: [LC, INVOICE]
+    source_tags: ["32B"]
+    invoice_aliases: [total_amount, total, invoice_total, amount_due, grand_total, amount, invoice_amount]
+    rule_relevant: true
+    group: amount
+
+  - key: tolerance_plus
+    name_en: Tolerance (+)
+    name_zh: 金额上浮容差
+    type: INTEGER
+    applies_to: [LC]
+    source_tags: ["39A"]
+    rule_relevant: true
+    default_value: 0
+    group: amount
+
+  - key: tolerance_minus
+    name_en: Tolerance (-)
+    name_zh: 金额下浮容差
+    type: INTEGER
+    applies_to: [LC]
+    source_tags: ["39A"]
+    rule_relevant: true
+    default_value: 0
+    group: amount
+
+  - key: max_amount_flag
+    name_en: Max Amount Flag
+    name_zh: 信用证金额上限标志
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["39B"]
+    rule_relevant: false
+    group: amount
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Parties
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: applicant_name
+    name_en: Applicant
+    name_zh: 申请人
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["50", "50B", "50F"]
+    invoice_aliases: [buyer_name, importer_name, consignee_name, buyer, consignee]
+    rule_relevant: false
+    group: parties
+
+  - key: applicant_address
+    name_en: Applicant Address
+    name_zh: 申请人地址
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["50", "50B", "50F"]
+    invoice_aliases: [buyer_address, consignee_address]
+    rule_relevant: false
+    group: parties
+
+  - key: beneficiary_name
+    name_en: Beneficiary
+    name_zh: 受益人
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["59", "59A", "59F"]
+    invoice_aliases: [seller_name, exporter_name, vendor_name, supplier_name, exporter]
+    rule_relevant: false
+    group: parties
+
+  - key: beneficiary_address
+    name_en: Beneficiary Address
+    name_zh: 受益人地址
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["59", "59A", "59F"]
+    invoice_aliases: [seller_address, vendor_address]
+    rule_relevant: false
+    group: parties
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Shipment / logistics
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: place_of_receipt
+    name_en: Place of Receipt
+    name_zh: 收货地
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["44A"]
+    rule_relevant: false
+    group: shipment
+
+  - key: port_of_loading
+    name_en: Port of Loading
+    name_zh: 装运港
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["44E"]
+    invoice_aliases: [loading_port, port_loading, pol]
+    rule_relevant: false
+    group: shipment
+
+  - key: port_of_discharge
+    name_en: Port of Discharge
+    name_zh: 卸货港
+    type: STRING
+    applies_to: [LC, INVOICE]
+    source_tags: ["44F"]
+    invoice_aliases: [discharge_port, port_discharge, pod]
+    rule_relevant: false
+    group: shipment
+
+  - key: place_of_delivery
+    name_en: Place of Delivery
+    name_zh: 交货地
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["44B"]
+    rule_relevant: false
+    group: shipment
+
+  - key: latest_shipment_date
+    name_en: Latest Shipment
+    name_zh: 最迟装运日
+    type: DATE
+    applies_to: [LC]
+    source_tags: ["44C"]
+    rule_relevant: true
+    group: shipment
+
+  - key: shipment_period
+    name_en: Shipment Period
+    name_zh: 装运期
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["44D"]
+    rule_relevant: false
+    group: shipment
+
+  - key: partial_shipment
+    name_en: Partial Shipment
+    name_zh: 分批装运
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["43P"]
+    rule_relevant: false
+    group: shipment
+
+  - key: transhipment
+    name_en: Transhipment
+    name_zh: 转运
+    type: STRING
+    applies_to: [LC]
+    source_tags: ["43T"]
+    rule_relevant: false
+    group: shipment
+
+  - key: presentation_days
+    name_en: Presentation Days
+    name_zh: 单据提示期(天)
+    type: INTEGER
+    applies_to: [LC]
+    source_tags: ["48"]
+    rule_relevant: true
+    default_value: 21
+    group: shipment
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Documents / conditions
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: goods_description
+    name_en: Goods Description
+    name_zh: 货物描述
+    type: MULTILINE_TEXT
+    applies_to: [LC, INVOICE]
+    source_tags: ["45A"]
+    invoice_aliases: [description, items, goods, item_description]
+    rule_relevant: true
+    group: documents
+
+  - key: incoterms
+    name_en: Incoterms
+    name_zh: 贸易术语
+    type: ENUM
+    applies_to: [LC, INVOICE]
+    source_tags: ["45A"]
+    enum_values: [CIF, CFR, FOB, EXW, FCA, CPT, CIP, DAP, DPU, DDP]
+    invoice_aliases: [trade_terms, delivery_terms, terms]
+    rule_relevant: true
+    group: documents
+
+  - key: documents_required
+    name_en: Documents Required
+    name_zh: 要求单据
+    type: DOCUMENT_LIST
+    applies_to: [LC]
+    source_tags: ["46A"]
+    rule_relevant: true
+    group: documents
+
+  - key: additional_conditions
+    name_en: Additional Conditions
+    name_zh: 附加条件
+    type: MULTILINE_TEXT
+    applies_to: [LC]
+    source_tags: ["47A"]
+    rule_relevant: false
+    group: documents
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Invoice-only Tier A
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: invoice_number
+    name_en: Invoice Number
+    name_zh: 发票号
+    type: STRING
+    applies_to: [INVOICE]
+    invoice_aliases: [invoice_no, inv_number, invoicenumber]
+    rule_relevant: true
+    group: header
+
+  - key: invoice_date
+    name_en: Invoice Date
+    name_zh: 发票日期
+    type: DATE
+    applies_to: [INVOICE]
+    invoice_aliases: [date, invoicedate, inv_date]
+    rule_relevant: true
+    group: header
+
+  - key: signed
+    name_en: Signed
+    name_zh: 已签字
+    type: STRING
+    applies_to: [INVOICE]
+    invoice_aliases: [signature, is_signed]
+    rule_relevant: true
+    group: meta
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Invoice-only Tier B (touched by current rules)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - key: quantity
+    name_en: Quantity
+    name_zh: 数量
+    type: AMOUNT
+    applies_to: [INVOICE]
+    invoice_aliases: [qty, number_of_units]
+    rule_relevant: true
+    group: amount
+
+  - key: unit
+    name_en: Unit
+    name_zh: 单位
+    type: STRING
+    applies_to: [INVOICE]
+    invoice_aliases: []
+    rule_relevant: true
+    group: amount
+
+  - key: unit_price
+    name_en: Unit Price
+    name_zh: 单价
+    type: AMOUNT
+    applies_to: [INVOICE]
+    invoice_aliases: [unitprice, price_per_unit]
+    rule_relevant: false
+    group: amount
+
+  - key: country_of_origin
+    name_en: Country of Origin
+    name_zh: 原产国
+    type: STRING
+    applies_to: [INVOICE]
+    invoice_aliases: [origin, coo, manufacturing_country, countryoforigin]
+    rule_relevant: true
+    group: documents

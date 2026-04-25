@@ -1,0 +1,46 @@
+# infra/docker-compose.yml — Local development infrastructure only
+#
+# Services: PostgreSQL 16 (session persistence)
+#
+# Note: Extractors and LLM run natively on Mac, NOT in Docker.
+# This compose only provides the database.
+#
+# Usage:
+#   cd infra && docker compose up -d
+#   docker compose down  (stops DB, keeps volumes)
+#
+# For full stack (including Java API in Docker):
+#   cd .. && docker compose up -d
+#
+# ---------------------------------------------------------------------------
+
+name: lc-checker-infra
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: lc-checker-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: lc_checker
+      POSTGRES_USER: lcuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-lcpass123}
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lcuser -d lc_checker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - lc-checker-net
+
+networks:
+  lc-checker-net:
+    name: lc-checker-net
+    driver: bridge

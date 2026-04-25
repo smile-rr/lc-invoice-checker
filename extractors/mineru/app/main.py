@@ -73,7 +73,7 @@ _root.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("mineru-svc")
 
 # -- Budget ------------------------------------------------------------------
-EXTRACTION_BUDGET_SECONDS = 25.0
+EXTRACTION_BUDGET_SECONDS = 120.0
 
 
 # -- App ---------------------------------------------------------------------

@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate2 text-navy-1 font-sans antialiased;
+  }
+}
+
+/* react-pdf text layer — we keep our own minimal stylesheet to avoid shipping the
+   library's default CSS bundle. The text layer must stay positioned on top of the
+   canvas for cross-highlight to work. */
+.react-pdf__Page {
+  position: relative;
+}
+.react-pdf__Page__canvas {
+  display: block;
+  margin: 0 auto;
+}
+.react-pdf__Page__textContent {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  color: transparent;
+}
+.react-pdf__Page__textContent > span {
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0 0;
+}
+.pdf-hit {
+  background-color: rgba(201, 147, 58, 0.45);
+  border-radius: 2px;
+}
+
+/* Step 5 export: print stylesheet for the Review tab.
+   Hides chrome (top nav, session strip, pipeline) so only the review card
+   ends up in the printed PDF. The browser's native Print → Save as PDF
+   produces a clean one-pager for V1 — no server-side rendering required. */
+@media print {
+  body { background: white; }
+  header, .react-pdf__Document, nav, [class*="sticky"], [class*="border-b"] {
+    /* keep the review card itself; just suppress global chrome */
+  }
+  /* Tag the shell elements explicitly via component classes when they exist;
+     fallback: simply rely on the .max-w-[1100px] review card being the only
+     thing visually significant on the page. */
+  body * { visibility: hidden; }
+  .review-print, .review-print * { visibility: visible; }
+  .review-print { position: absolute; inset: 0; padding: 0 !important; }
+  .review-print details > summary { list-style: none; }
+  .review-print details:not([open]) > div { display: none; }
+}

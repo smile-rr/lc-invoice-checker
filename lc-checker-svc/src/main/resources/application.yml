@@ -1,0 +1,148 @@
+# lc-checker-api — runtime configuration
+#
+# Environment overrides (see .env.example at repo root).
+#
+# Profiles:
+#   default — console logging (logback-spring.xml)
+#   prod    — JSON logging (logback-json.xml), for Loki/ELK ingest
+
+spring:
+  application:
+    name: lc-checker-api
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:default}
+  ai:
+    openai:
+      api-key: ${LLM_API_KEY:}
+      base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+      chat:
+        # base-url already includes /v1 per OpenAI-compatible endpoint convention
+        # (Qwen Bailian, OpenAI, DeepSeek, Ollama). Override Spring AI's default
+        # `/v1/chat/completions` to just `/chat/completions` so we don't end up
+        # with a double-/v1/ path.
+        completions-path: /chat/completions
+        options:
+          model: ${LLM_MODEL:deepseek-chat}
+          temperature: 0.0
+
+  # Multipart limits for /api/v1/lc-check (20MB PDF cap per InputValidator).
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+  # Database (PostgreSQL 16)
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/lc_checker
+    username: ${DB_USER:lcuser}
+    password: ${DB_PASSWORD:lcpass123}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      idle-timeout: 30000
+      connection-timeout: 20000
+  # JDBC Template uses datasource above; NamedParameterJdbcTemplate used in JdbcCheckSessionStore.
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# --- Extractor sources (Stage 1b) --------------------------------------------
+# Each enabled source is invoked and its result persisted as a separate row in
+# stage_invoice_extract (one per session per source). The orchestrator then
+# selects one row (first source above confidence-threshold, in priority order)
+# and marks it is_selected=true for downstream rule checks.
+#
+# Default matches docker-compose.yml: vision only. Enable Docling / MinerU
+# locally by setting EXTRACTOR_DOCLING_ENABLED=true and starting the full profile:
+#   docker compose --profile full up -d
+extractor:
+  vision-enabled:  ${EXTRACTOR_VISION_ENABLED:true}
+  docling-enabled: ${EXTRACTOR_DOCLING_ENABLED:false}
+  docling-url:     ${EXTRACTOR_DOCLING_URL:http://localhost:8081}
+  mineru-enabled:  ${EXTRACTOR_MINERU_ENABLED:false}
+  mineru-url:      ${EXTRACTOR_MINERU_URL:http://localhost:8082}
+  confidence-threshold: ${EXTRACTOR_CONFIDENCE_THRESHOLD:0.80}
+  timeout-seconds: ${EXTRACTOR_TIMEOUT_SECONDS:30}
+  retries: 1
+  retry-backoff-ms: 500
+
+# --- Vision LLM extractor (V1.5 primary) ------------------------------------
+# Uses Spring AI ChatModel + Media API. Provider-agnostic — all providers speak
+# OpenAI-compatible /v1/chat/completions.
+#
+# Configuration — no Java code changes needed:
+#   Ollama (local M1 Mac):
+#     vision.base-url = http://host.docker.internal:11434/v1
+#     vision.api-key = (empty)
+#     vision.model  = qwen2.5vl (or moondream:2b for smaller footprint)
+#   Qwen Cloud:
+#     vision.base-url = https://dashscope.aliyuncs.com/compatible-mode/v1
+#     vision.api-key = your-api-key
+#     vision.model  = qwen-vl-plus
+#   Gemini via adapter:
+#     vision.base-url = https://generativelanguage.googleapis.com/v1beta/openai/
+#     vision.api-key = your-api-key
+#     vision.model  = gemini-1.5-flash
+#
+# Unified model (single endpoint for both roles):
+#   Set vision.base-url and spring.ai.openai.base-url to the same Ollama URL,
+#   and vision.model = llm.model = qwen2.5vl-7b-instruct (same model for both).
+vision:
+  base-url: ${VISION_BASE_URL:http://host.docker.internal:11434/v1}
+  api-key: ${VISION_API_KEY:}
+  model: ${VISION_MODEL:qwen2.5vl}
+  temperature: ${VISION_TEMPERATURE:0.0}
+  render-scale: ${VISION_RENDER_SCALE:1.5}
+  timeout-seconds: ${VISION_TIMEOUT_SECONDS:120}
+
+llm:
+  fallback:
+    base-url: ${LLM_FALLBACK_BASE_URL:https://api.minimaxi.chat/v1}
+    model: ${LLM_FALLBACK_MODEL:MiniMax-Text-01}
+
+session:
+  ttl-minutes: 60
+  max-size: 1000
+
+rules:
+  catalog-path: classpath:/rules/catalog.yml
+
+# --- API documentation (springdoc-openapi → /v3/api-docs → Scalar at /docs.html) ---
+# Title/description/version are set via @OpenAPIDefinition on LcCheckerApplication.
+springdoc:
+  api-docs:
+    path: /v3/api-docs               # OpenAPI JSON spec (consumed by Scalar)
+    enabled: true
+  # swagger-ui is disabled — Scalar is our UI layer at /docs.html.
+  swagger-ui:
+    enabled: false
+  default-produces-media-type: application/json
+  packagesToScan: com.lc.checker.api
+
+# --- Actuator + Prometheus -----------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+# --- Logging -------------------------------------------------------------------
+logging:
+  level:
+    root: INFO
+    com.lc.checker: DEBUG
+    org.springframework.ai: INFO
+  pattern:
+    # MDC keys carried: sessionId, stage, ruleId, checkType, llmModel.
+    # See logback-spring.xml / logback-json.xml for concrete encoders.
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %X{sessionId:-} %X{stage:-} %X{ruleId:-} %logger{36} - %msg%n"

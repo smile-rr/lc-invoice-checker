@@ -59,25 +59,10 @@ RUN uv venv /app/.venv \
 # 3. Copy source — always busts cache after this line, but deps step above is cached
 COPY app ./app
 
-# 4. Copy sample PDF for build-time warm-up (model download + init)
-COPY sample_invoice.pdf /tmp/sample_invoice.pdf
-
-# 5. Pre-warm: trigger Docling model download and converter init during build.
+# 4. Pre-warm: trigger Docling model download + converter init during build.
 #    This bakes the models into the image layer so container startup is instant.
 RUN . /app/.venv/bin/activate \
-    && python -c " \
-        import sys, logging; \
-        logging.basicConfig(level=logging.INFO, format='%(message)s'); \
-        sys.path.insert(0, '/app'); \
-        from app.docling_extractor import warm_up, convert_pdf_path; \
-        from pathlib import Path; \
-        print('PRE-WARM: initializing Docling models...'); \
-        warm_up(); \
-        print('PRE-WARM: warming with sample PDF...'); \
-        result = convert_pdf_path(Path('/tmp/sample_invoice.pdf')); \
-        print(f'PRE-WARM: done — confidence={result.confidence}, pages={result.pages}'); \
-    " \
-    && rm /tmp/sample_invoice.pdf
+    && python -c "import sys; sys.path.insert(0,'/app'); from app.docling_extractor import warm_up; print('PRE-WARM: initializing Docling models...'); warm_up(); print('PRE-WARM: done')"
 
 EXPOSE 8081
 

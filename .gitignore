@@ -14,17 +14,26 @@ credentials.json
 # Claude Code
 .claude/
 
+# UI build artifacts
+ui/node_modules/
+ui/dist/
+ui/public/samples/
+
 # macOS
 .DS_Store
 .DS_Store?
 ._*
 
-# Gradle (lc-checker-api)
-lc-checker-api/.gradle/
-lc-checker-api/build/
-lc-checker-api/out/
-!lc-checker-api/.gradle/.gitkeep
-!lc-checker-api/build/.gitkeep
+# Gradle (lc-checker-svc — was lc-checker-api in earlier layout)
+lc-checker-svc/.gradle/
+lc-checker-svc/build/
+lc-checker-svc/out/
+!lc-checker-svc/.gradle/.gitkeep
+!lc-checker-svc/build/.gitkeep
+
+# Large binaries / installers under test/
+test/Ollama.dmg
+test/*.dmg
 
 # Python venvs (local dev)
 .venv/

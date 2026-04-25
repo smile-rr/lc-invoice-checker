@@ -64,7 +64,7 @@ logger = logging.getLogger("docling-svc")
 # -- Budget constants ---------------------------------------------------------
 # Contract §Timeout budget: services SHOULD return 504 if their extraction
 # exceeds 25 s so the Java 30 s read timeout still has room to fall back.
-EXTRACTION_BUDGET_SECONDS = 25.0
+EXTRACTION_BUDGET_SECONDS = 120.0
 
 
 # -- App ----------------------------------------------------------------------

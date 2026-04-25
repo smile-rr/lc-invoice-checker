@@ -1,18 +1,19 @@
 """Extract the 18 contract fields from Docling markdown/text.
 
-Two-tier strategy per CONTRACT.md §Field extraction feasibility:
+Deterministic parser: regex + heuristics only. NO LLM calls inside this
+service — markdown-to-structured-fields semantic work is the responsibility
+of the Java-side Spring-AI pipeline (Vision LLM extractor or a downstream
+post-processor). This service's job is pure OCR + best-effort field capture.
 
-1. **Regex/heuristic tier (always runs, deterministic)**
-   Pulls HIGH-reliability fields directly from the extracted text:
+Tier 1 fields (HIGH-reliability, always populated when present):
    invoice_number, invoice_date, total_amount, currency, lc_reference,
    trade_terms, port_of_loading, port_of_discharge, country_of_origin,
    quantity / unit / unit_price (line-item regex), signed (keyword scan).
 
-2. **LLM tier (runs only if LLM_API_KEY env-var is present)**
-   Fills MED-reliability long-form fields that need contextual judgement:
-   seller_name, seller_address, buyer_name, buyer_address, goods_description.
-   When LLM is unavailable or fails, the tier-1 fallbacks (first recognised
-   address block / joined line-items) populate those fields best-effort.
+MED-reliability fields (seller/buyer names/addresses, goods_description)
+are populated by shallow heuristics; if not confidently extractable they
+remain `null`. Java may choose a different extractor's output when this
+one's confidence is low.
 
 Contract rule: every field in CONTRACT_FIELD_KEYS is always present in
 the output InvoiceFields; unknown values are `null`.
@@ -20,9 +21,7 @@ the output InvoiceFields; unknown values are `null`.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
 from typing import Optional
 
@@ -211,69 +210,6 @@ def _extract_line_item(text: str) -> tuple[Optional[str], Optional[str], Optiona
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 — optional LLM structuring
-# ---------------------------------------------------------------------------
-
-_LLM_PROMPT = """You are a trade-finance document parser.
-Extract the following fields from this invoice and return ONLY valid JSON.
-No explanation, no markdown, no preamble.
-
-Return a JSON object with exactly these keys (use null when unknown):
-seller_name, seller_address, buyer_name, buyer_address, goods_description
-
-`seller_*` = the beneficiary / exporter (who is selling).
-`buyer_*`  = the applicant / importer (who is buying).
-`goods_description` = the full goods text as it should appear on a shipping document.
-
-Addresses joined with "\\n" across lines. If a field is not found, use null. Never guess.
-
-Invoice text:
----
-{invoice_text}
----
-"""
-
-
-def _llm_structure(invoice_text: str) -> dict:
-    """Ask an OpenAI-compatible LLM to structure the MED-reliability fields.
-
-    Returns an empty dict on any failure (missing env-vars, API error, bad JSON)
-    — caller then leaves those fields as-null so the regex/heuristic fallback
-    is still honored for the HIGH-reliability fields.
-    """
-    api_key = os.environ.get("LLM_API_KEY")
-    if not api_key:
-        logger.debug("LLM_API_KEY not set; skipping LLM structuring tier")
-        return {}
-    base_url = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
-    model = os.environ.get("LLM_MODEL", "deepseek-chat")
-
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0)
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "You output only strict JSON."},
-                {"role": "user", "content": _LLM_PROMPT.format(
-                    invoice_text=invoice_text[:8000]  # cap prompt size
-                )},
-            ],
-        )
-        content = response.choices[0].message.content or "{}"
-        parsed = json.loads(content)
-        if not isinstance(parsed, dict):
-            return {}
-        return parsed
-    except Exception as exc:
-        logger.warning("LLM structuring tier failed (%s); continuing with regex-only", exc)
-        return {}
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -281,9 +217,9 @@ def _llm_structure(invoice_text: str) -> dict:
 def extract_fields(raw_markdown: str, raw_text: str) -> InvoiceFields:
     """Build an InvoiceFields from the Docling outputs.
 
-    Regex/heuristic tier runs unconditionally. LLM tier runs only when
-    LLM_API_KEY is present; its output overlays the regex results for the
-    MED-reliability fields.
+    Pure regex/heuristic — deterministic, no LLM call. MED-reliability
+    long-form fields (seller/buyer name and address, goods description)
+    are populated via shallow fallbacks; unknown → null.
     """
     # Prefer raw_text for regex (markdown has extra punctuation); fall back to markdown.
     source = raw_text if raw_text.strip() else raw_markdown
@@ -320,16 +256,7 @@ def extract_fields(raw_markdown: str, raw_text: str) -> InvoiceFields:
         signed=_extract_signed(source),
     )
 
-    # Tier 2 overlay (best-effort; silent on failure)
-    overlay = _llm_structure(source)
-    if overlay:
-        for key in ("seller_name", "seller_address", "buyer_name",
-                    "buyer_address", "goods_description"):
-            val = overlay.get(key)
-            if isinstance(val, str) and val.strip():
-                setattr(fields, key, val.strip())
-
-    # Deterministic fallback for goods_description when LLM was absent or silent.
+    # Deterministic goods description fallback (first line-item-looking line).
     if fields.goods_description is None:
         fallback_desc = _first_goods_like_line(source)
         if fallback_desc:
