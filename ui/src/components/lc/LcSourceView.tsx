@@ -1,22 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getLcRaw } from '../../api/client';
+import { FieldBlockRow } from './FieldBlockRow';
+
+export type SortMode = 'declared' | 'tag-asc';
 
 interface Props {
   sessionId: string;
   selectedTag: string | null;
   onSelect: (tag: string | null) => void;
+  sortMode?: SortMode;
+  /** Called whenever the rendered row order changes — feeds keyboard nav. */
+  onOrderChange?: (tags: string[]) => void;
+  /** When true, this pane "owns" arrow-key traversal — render an active accent. */
+  active?: boolean;
 }
 
 /**
  * Block-level rendering of MT700.
  *
- * Each {@code :XX:} field becomes its own clickable block spanning from the
- * tag to the next tag — so the *value* is part of the highlight target, not
- * just the tag chip. Click toggles selection: click again to release, click
- * another to switch. Selection is bidirectional with {@link LcSidebar}; the
- * parent owns the {@code selectedTag} state.
+ * Source rows include:
+ *   – SWIFT envelope blocks: {1:...}, {2:...}, {3:{108:...}} as `block1`,
+ *     `block2`, `block3:108` so they line up with the parsed pane and
+ *     participate in the shared sort/selection.
+ *   – Block-4 body tags `:XX:` as plain `XX`.
+ *
+ * Tag-asc mode sorts envelope blocks before body tags using the same key
+ * scheme as {@code ParsedRowProjector} on the backend, so row N of source
+ * == row N of parsed.
  */
-export function LcSourceView({ sessionId, selectedTag, onSelect }: Props) {
+export function LcSourceView({
+  sessionId,
+  selectedTag,
+  onSelect,
+  sortMode = 'declared',
+  onOrderChange,
+  active = false,
+}: Props) {
   const [text, setText] = useState<string>('');
   const [err, setErr] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -33,6 +52,20 @@ export function LcSourceView({ sessionId, selectedTag, onSelect }: Props) {
 
   const blocks = useMemo(() => parseBlocks(text), [text]);
 
+  const ordered = useMemo(() => {
+    if (sortMode !== 'tag-asc') return blocks;
+    return [...blocks].sort((a, b) => sortKey(a.tag).localeCompare(sortKey(b.tag), 'en', { numeric: true }));
+  }, [blocks, sortMode]);
+
+  // Push current rendered order up so the parent can drive arrow-key traversal.
+  useEffect(() => {
+    onOrderChange?.(ordered.map((b) => b.tag));
+    // Intentionally DO NOT include onOrderChange in deps — its identity changes
+    // every parent render and would cause a notify loop. The parent's setter
+    // is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordered]);
+
   // Scroll the pinned block into view when selection changes.
   useEffect(() => {
     if (!selectedTag || !containerRef.current) return;
@@ -47,97 +80,86 @@ export function LcSourceView({ sessionId, selectedTag, onSelect }: Props) {
   return (
     <div
       ref={containerRef}
-      className="bg-paper rounded-card border border-line overflow-auto max-h-[72vh]"
+      className={[
+        'bg-slate2 rounded-card overflow-auto max-h-[72vh] transition-colors',
+        active ? 'ring-2 ring-teal-1 border border-teal-1' : 'border border-line',
+      ].join(' ')}
     >
-      {blocks.map((b, i) =>
-        b.tag === null ? (
-          <pre
-            key={`raw-${i}`}
-            className="font-mono text-[11px] text-muted whitespace-pre-wrap px-4 py-1 leading-relaxed"
-          >
-            {b.text}
-          </pre>
-        ) : (
-          <FieldBlock
-            key={`tag-${i}-${b.tag}`}
-            block={b}
-            selected={selectedTag === b.tag}
-            onClick={() => onSelect(selectedTag === b.tag ? null : b.tag)}
-          />
-        ),
-      )}
+      {ordered.map((b) => (
+        <FieldBlockRow
+          key={b.tag}
+          tag={b.tag}
+          value={b.text}
+          pinned={selectedTag === b.tag}
+          tone="source"
+          onClick={() => onSelect(selectedTag === b.tag ? null : b.tag)}
+        />
+      ))}
     </div>
   );
 }
 
 interface Block {
-  tag: string | null;
+  tag: string;
   text: string;
 }
 
-function FieldBlock({
-  block,
-  selected,
-  onClick,
-}: {
-  block: Block;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const tag = block.tag!;
-  const tagStr = `:${tag}:`;
-  // The block text starts with the literal :XX: prefix; split it off so we can
-  // style tag and value distinctly.
-  const value = block.text.startsWith(tagStr)
-    ? block.text.slice(tagStr.length)
-    : block.text;
-  return (
-    <div
-      data-tag={tag}
-      onClick={onClick}
-      className={[
-        'relative cursor-pointer transition-colors px-4 py-1.5',
-        'border-b border-line/50 last:border-b-0',
-        selected ? 'bg-teal-1/10' : 'hover:bg-slate2',
-      ].join(' ')}
-    >
-      {selected && (
-        <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-teal-1" />
-      )}
-      <pre className="font-mono text-[11px] whitespace-pre-wrap leading-relaxed m-0">
-        <span
-          className={[
-            'inline-block px-1.5 py-0.5 rounded mr-2 font-semibold',
-            selected ? 'bg-teal-1 text-white' : 'bg-slate2 text-teal-1',
-          ].join(' ')}
-        >
-          {tagStr}
-        </span>
-        <span className={selected ? 'text-navy-1 font-semibold' : 'text-navy-1'}>
-          {value}
-        </span>
-      </pre>
-    </div>
-  );
+/**
+ * Mirror the backend's {@code ParsedRowProjector#buildSortKey}: envelope
+ * blocks (block1/2/3:nnn) sort before body tags (1_<tag>).
+ */
+function sortKey(tag: string): string {
+  if (tag.startsWith('block')) return '0_' + tag;
+  return '1_' + tag;
 }
 
+/**
+ * Decompose raw MT700 text into rows: one envelope block per `{N:...}` (with
+ * Block 3's inner `{108:...}` etc broken out as `block3:108`), then one
+ * body-tag block per `:XX:` in Block 4.
+ */
 function parseBlocks(text: string): Block[] {
-  const re = /:(\d{2}[A-Z]?):/g;
-  const matches: Array<{ tag: string; index: number }> = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    matches.push({ tag: m[1], index: m.index });
-  }
-  if (matches.length === 0) return text ? [{ tag: null, text }] : [];
+  if (!text) return [];
+  const out: Block[] = [];
 
-  const blocks: Block[] = [];
-  if (matches[0].index > 0) {
-    blocks.push({ tag: null, text: text.slice(0, matches[0].index) });
+  // ── Envelope blocks 1 / 2 / 3 ──────────────────────────────────────────
+  const envRe = /\{(\d):([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = envRe.exec(text)) !== null) {
+    const num = m[1];
+    if (num === '4') continue; // body — handled below
+    const inner = m[2];
+    if (num === '3') {
+      // Block 3 nests user-header tags: {108:LC2024REF001}{431:N}…
+      const sub = /\{(\d+):([^{}]*)\}/g;
+      let s: RegExpExecArray | null;
+      while ((s = sub.exec(inner)) !== null) {
+        out.push({ tag: `block3:${s[1]}`, text: s[2] });
+      }
+    } else {
+      out.push({ tag: `block${num}`, text: inner });
+    }
+  }
+
+  // ── Block 4 body tags ──────────────────────────────────────────────────
+  // Slice out just the body so the regex doesn't pick up false matches
+  // inside envelope content.
+  const bodyMatch = text.match(/\{4:([\s\S]*?)-?\}\s*$/);
+  const body = bodyMatch ? bodyMatch[1] : text;
+  const tagRe = /:(\d{2}[A-Z]?):/g;
+  const matches: Array<{ tag: string; index: number }> = [];
+  let t: RegExpExecArray | null;
+  while ((t = tagRe.exec(body)) !== null) {
+    matches.push({ tag: t[1], index: t.index });
   }
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i].index;
-    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-    blocks.push({ tag: matches[i].tag, text: text.slice(start, end) });
+    const end = i + 1 < matches.length ? matches[i + 1].index : body.length;
+    const slice = body.slice(start, end);
+    const tagStr = `:${matches[i].tag}:`;
+    const value = slice.startsWith(tagStr) ? slice.slice(tagStr.length) : slice;
+    out.push({ tag: matches[i].tag, text: value.replace(/^\s*\n?/, '').trimEnd() });
   }
-  return blocks;
+
+  return out;
 }

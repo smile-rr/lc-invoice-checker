@@ -26,12 +26,23 @@
 
 fields:
 
+  # ─── SWIFT envelope (Blocks 1/2/3) ────────────────────────────────────
+  - { key: sender_bic,          name_en: Sender BIC,          name_zh: 发送方银行 BIC, type: STRING, applies_to: [LC], source_tags: [block1],     group: header }
+  - { key: receiver_bic,        name_en: Receiver BIC,        name_zh: 接收方银行 BIC, type: STRING, applies_to: [LC], source_tags: [block2],     group: header }
+  - { key: message_type,        name_en: Message Type,        name_zh: 报文类型,        type: STRING, applies_to: [LC], source_tags: [block2],     group: header }
+  - { key: user_reference,      name_en: User Reference (108),name_zh: 用户参考号,      type: STRING, applies_to: [LC], source_tags: ["block3:108"], group: header }
+
   # ─── Header / identity ────────────────────────────────────────────────
+  - { key: sequence_of_total,   name_en: Sequence,            name_zh: 序号/总数,    type: STRING,        applies_to: [LC],          source_tags: ["27"],  rule_relevant: false, group: header }
+  - { key: credit_type,         name_en: Credit Type,         name_zh: 信用证类型,   type: STRING,        applies_to: [LC],          source_tags: ["40A"], rule_relevant: true,  group: header }
   - { key: lc_number,           name_en: LC Number,           name_zh: 信用证号,    type: STRING,        applies_to: [LC, INVOICE], source_tags: ["20"],  invoice_aliases: [lc_reference, lc_no, l_c_number, credit_number, reference], rule_relevant: true,  group: header }
   - { key: issue_date,          name_en: Issue Date,          name_zh: 开证日期,    type: DATE,          applies_to: [LC],          source_tags: ["31C"], rule_relevant: false, group: header }
   - { key: expiry_date,         name_en: Expiry Date,         name_zh: 到期日期,    type: DATE,          applies_to: [LC],          source_tags: ["31D"], rule_relevant: true,  group: header }
   - { key: expiry_place,        name_en: Expiry Place,        name_zh: 到期地点,    type: STRING,        applies_to: [LC],          source_tags: ["31D"], rule_relevant: false, group: header }
   - { key: applicable_rules,    name_en: Rules,               name_zh: 适用规则,    type: STRING,        applies_to: [LC],          source_tags: ["40E"], rule_relevant: false, group: header }
+  - { key: confirmation_instructions, name_en: Confirmation,  name_zh: 保兑指示,    type: STRING,        applies_to: [LC],          source_tags: ["49"],  rule_relevant: false, group: header }
+  - { key: available_with,      name_en: Available With,      name_zh: 兑付银行,    type: STRING,        applies_to: [LC],          source_tags: ["41A", "41D"], rule_relevant: false, group: header }
+  - { key: available_by,        name_en: Available By,        name_zh: 兑付方式,    type: STRING,        applies_to: [LC],          source_tags: ["41A", "41D"], rule_relevant: false, group: header }
 
   # ─── Amount ───────────────────────────────────────────────────────────
   - { key: credit_currency,     name_en: Currency,            name_zh: 信用证币种, type: CURRENCY_CODE, applies_to: [LC, INVOICE], source_tags: ["32B"], invoice_aliases: [currency, ccy], rule_relevant: true,  group: amount }
@@ -43,6 +54,7 @@ fields:
   # ─── Parties ──────────────────────────────────────────────────────────
   - { key: applicant_name,      name_en: Applicant,           name_zh: 申请人,      type: STRING,        applies_to: [LC, INVOICE], source_tags: ["50", "50B", "50F"], invoice_aliases: [buyer_name, importer_name, consignee_name, buyer, consignee], rule_relevant: false, group: parties }
   - { key: applicant_address,   name_en: Applicant Address,   name_zh: 申请人地址,  type: STRING,        applies_to: [LC, INVOICE], source_tags: ["50", "50B", "50F"], invoice_aliases: [buyer_address, consignee_address], rule_relevant: false, group: parties }
+  - { key: applicant_bank_bic,  name_en: Applicant Bank,      name_zh: 申请人银行,  type: STRING,        applies_to: [LC],          source_tags: ["51A"], rule_relevant: false, group: parties }
   - { key: beneficiary_name,    name_en: Beneficiary,         name_zh: 受益人,      type: STRING,        applies_to: [LC, INVOICE], source_tags: ["59", "59A", "59F"], invoice_aliases: [seller_name, exporter_name, vendor_name, supplier_name, exporter], rule_relevant: false, group: parties }
   - { key: beneficiary_address, name_en: Beneficiary Address, name_zh: 受益人地址,  type: STRING,        applies_to: [LC, INVOICE], source_tags: ["59", "59A", "59F"], invoice_aliases: [seller_address, vendor_address], rule_relevant: false, group: parties }
 
@@ -62,6 +74,10 @@ fields:
   - { key: incoterms,           name_en: Incoterms,           name_zh: 贸易术语,    type: ENUM,          applies_to: [LC, INVOICE], source_tags: ["45A"], enum_values: [CIF, CFR, FOB, EXW, FCA, CPT, CIP, DAP, DPU, DDP], invoice_aliases: [trade_terms, delivery_terms, terms], rule_relevant: true, group: documents }
   - { key: documents_required,  name_en: Documents Required,  name_zh: 要求单据,    type: DOCUMENT_LIST, applies_to: [LC],          source_tags: ["46A"], rule_relevant: true,  group: documents }
   - { key: additional_conditions, name_en: Additional Conditions, name_zh: 附加条件, type: MULTILINE_TEXT, applies_to: [LC],         source_tags: ["47A"], rule_relevant: false, group: documents }
+  - { key: drafts_at,           name_en: Drafts At,           name_zh: 汇票期限,    type: STRING,        applies_to: [LC],          source_tags: ["42C"], rule_relevant: false, group: documents }
+  - { key: drawee_bic,          name_en: Drawee Bank,         name_zh: 受票行,      type: STRING,        applies_to: [LC],          source_tags: ["42A", "42D"], rule_relevant: false, group: documents }
+  - { key: charges,             name_en: Charges,             name_zh: 费用承担,    type: MULTILINE_TEXT, applies_to: [LC],         source_tags: ["71B"], rule_relevant: false, group: documents }
+  - { key: bank_instructions,   name_en: Bank Instructions,   name_zh: 银行指示,    type: MULTILINE_TEXT, applies_to: [LC],         source_tags: ["78"],  rule_relevant: false, group: documents }
 
   # ─── Invoice-only (Tier A — UCP-mandated) ─────────────────────────────
   - { key: invoice_number,      name_en: Invoice Number,      name_zh: 发票号,      type: STRING,        applies_to: [INVOICE], invoice_aliases: [invoice_no, inv_number, invoicenumber], rule_relevant: true,  group: header }

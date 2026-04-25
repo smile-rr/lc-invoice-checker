@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.lc.checker.domain.common.DocumentRequirement;
 import com.lc.checker.domain.common.FieldEnvelope;
+import com.lc.checker.domain.common.ParsedRow;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -72,13 +73,18 @@ public record LcDocument(
         FieldEnvelope envelope,
 
         // ── Structured :46A: — the highest-value parse upgrade over raw text ─────────────
-        List<DocumentRequirement> documentsRequired
+        List<DocumentRequirement> documentsRequired,
+
+        // ── Display-ready row list for the parsed pane (computed by ParsedRowProjector) ──
+        // The frontend renders these 1:1; no per-tag grouping or value formatting in UI.
+        List<ParsedRow> parsedRows
 ) {
 
     public LcDocument {
         rawFields = rawFields == null ? Map.of() : Map.copyOf(rawFields);
         headerFields = headerFields == null ? Map.of() : Map.copyOf(headerFields);
         documentsRequired = documentsRequired == null ? List.of() : List.copyOf(documentsRequired);
+        parsedRows = parsedRows == null ? List.of() : List.copyOf(parsedRows);
         if (envelope == null) {
             envelope = FieldEnvelope.empty("LC");
         }

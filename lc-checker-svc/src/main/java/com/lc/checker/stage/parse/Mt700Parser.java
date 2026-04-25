@@ -3,12 +3,15 @@ package com.lc.checker.stage.parse;
 import com.lc.checker.domain.common.DocumentRequirement;
 import com.lc.checker.domain.common.FieldEnvelope;
 import com.lc.checker.domain.common.ParseWarning;
+import com.lc.checker.domain.common.ParsedRow;
 import com.lc.checker.domain.lc.LcDocument;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.infra.fields.TagMappingRegistry;
 import com.lc.checker.stage.parse.subfield.DocumentListParser;
 import com.lc.checker.stage.parse.subfield.IncotermsExtractor;
 import com.prowidesoftware.swift.io.parser.SwiftParser;
+import com.prowidesoftware.swift.model.SwiftBlock1;
+import com.prowidesoftware.swift.model.SwiftBlock2;
 import com.prowidesoftware.swift.model.SwiftBlock3;
 import com.prowidesoftware.swift.model.SwiftBlock4;
 import com.prowidesoftware.swift.model.SwiftMessage;
@@ -94,15 +97,18 @@ public class Mt700Parser {
     private final TagMappingRegistry tagMappings;
     private final DocumentListParser documentListParser;
     private final IncotermsExtractor incotermsExtractor;
+    private final ParsedRowProjector rowProjector;
 
     public Mt700Parser(FieldPoolRegistry fieldPool,
                        TagMappingRegistry tagMappings,
                        DocumentListParser documentListParser,
-                       IncotermsExtractor incotermsExtractor) {
+                       IncotermsExtractor incotermsExtractor,
+                       ParsedRowProjector rowProjector) {
         this.fieldPool = fieldPool;
         this.tagMappings = tagMappings;
         this.documentListParser = documentListParser;
         this.incotermsExtractor = incotermsExtractor;
+        this.rowProjector = rowProjector;
     }
 
     public LcDocument parse(String mt700Text) {
@@ -213,9 +219,13 @@ public class Mt700Parser {
 
         // ── Generic envelope build (registry-driven canonical map) ────────────────
         FieldEnvelope envelope = buildEnvelope(
-                raw, lcNumber, issueDate, expiryDate, expiryPlace, currency, amount,
+                raw, header, swift.getBlock1(), swift.getBlock2(),
+                lcNumber, issueDate, expiryDate, expiryPlace, currency, amount,
                 tolerancePlus, toleranceMinus, latestShipmentDate, presentationDays,
                 applicant, beneficiary, documentsRequired);
+
+        // ── Display-ready row list for the parsed pane (UI renders 1:1) ───────────
+        List<ParsedRow> parsedRows = rowProjector.project(envelope);
 
         return new LcDocument(
                 lcNumber,
@@ -247,7 +257,8 @@ public class Mt700Parser {
                 raw,
                 header,
                 envelope,
-                documentsRequired
+                documentsRequired,
+                parsedRows
         );
     }
 
@@ -261,6 +272,9 @@ public class Mt700Parser {
      * from {@code lc-tag-mapping.yaml}.
      */
     private FieldEnvelope buildEnvelope(Map<String, String> raw,
+                                        Map<String, String> header,
+                                        SwiftBlock1 block1,
+                                        SwiftBlock2 block2,
                                         String lcNumber,
                                         LocalDate issueDate,
                                         LocalDate expiryDate,
@@ -340,6 +354,15 @@ public class Mt700Parser {
                     put(fields, "beneficiary_name", beneficiary[0]);
                     put(fields, "beneficiary_address", beneficiary[1]);
                 }
+                case "41A", "41D" -> {
+                    // :41A:/:41D: produces two canonical fields. Heuristic split:
+                    // first line = available_with (bank/place), remainder = available_by.
+                    // Real LCs usually word it as "<bank> BY <method>"; split on " BY " when present,
+                    // otherwise on first newline.
+                    String[] split = splitAvailableWithBy(rawValue);
+                    put(fields, "available_with", split[0]);
+                    put(fields, "available_by", split[1]);
+                }
                 default -> {
                     // Tag is registered in the mapping but the parser doesn't know how
                     // to project it yet — preserve the raw value under each canonical key.
@@ -350,7 +373,52 @@ public class Mt700Parser {
             }
         }
 
+        // ── SWIFT envelope (Blocks 1/2/3) — registry-tagged with synthetic source_tags ──
+        // Block 1 example: F01HSBCHKHHHXXX0000000000 → sender BIC = chars 4-15 (HSBCHKHHHXXX)
+        if (block1 != null) {
+            String lt = block1.getLogicalTerminal();
+            if (lt != null && lt.length() >= 12) {
+                put(fields, "sender_bic", lt.substring(0, Math.min(12, lt.length())));
+            } else if (lt != null) {
+                put(fields, "sender_bic", lt);
+            }
+        }
+        // Block 2 input example: I700CITIUS33XXXXN → message_type = 700, receiver_bic = CITIUS33XXXX
+        if (block2 != null) {
+            String b2 = block2.getValue();
+            if (b2 != null && b2.length() >= 4) {
+                String mt = b2.substring(1, 4); // skip the leading "I" / "O"
+                put(fields, "message_type", mt);
+                if (b2.length() >= 16) {
+                    put(fields, "receiver_bic", b2.substring(4, 16));
+                }
+            }
+        }
+        // Block 3 :108: user reference (already captured into header map; surface as canonical field).
+        String userRef = header.get("108");
+        if (userRef != null) {
+            put(fields, "user_reference", userRef.trim());
+        }
+
         return new FieldEnvelope("LC", fields, extras, raw, warnings);
+    }
+
+    /** Split :41A/D: raw value into [available_with, available_by]. */
+    private static String[] splitAvailableWithBy(String raw) {
+        if (raw == null) return new String[] { null, null };
+        String t = raw.trim();
+        int byIdx = t.toUpperCase().indexOf(" BY ");
+        if (byIdx > 0) {
+            return new String[] {
+                    t.substring(0, byIdx).trim(),
+                    "BY " + t.substring(byIdx + 4).trim()
+            };
+        }
+        int nl = t.indexOf('\n');
+        if (nl > 0) {
+            return new String[] { t.substring(0, nl).trim(), t.substring(nl + 1).trim() };
+        }
+        return new String[] { t, null };
     }
 
     private static void put(Map<String, Object> fields, String key, Object value) {

@@ -74,6 +74,17 @@ export interface DocumentRequirement {
   raw_text: string;
 }
 
+/** A single display-ready row of a parsed document, computed by the backend. */
+export interface ParsedRow {
+  tag: string;
+  group: string;
+  label: string;
+  display_value: string;
+  sublines: Array<{ label: string; value: string }>;
+  meta: Record<string, unknown>;
+  sort_key: string;
+}
+
 export interface LcDocument {
   lc_number: string | null;
   issue_date: string | null;
@@ -105,6 +116,8 @@ export interface LcDocument {
   /** Generic registry-keyed view. Prefer this in new UI. */
   envelope: FieldEnvelope;
   documents_required: DocumentRequirement[];
+  /** Display-ready rows for the parsed pane — backend already grouped, formatted, ordered. */
+  parsed_rows: ParsedRow[];
 }
 
 export interface InvoiceDocument {

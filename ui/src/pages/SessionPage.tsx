@@ -66,18 +66,6 @@ export function SessionPage() {
         </div>
       )}
 
-      {state.haltedAfter && !state.error && (
-        <div className="mx-8 my-4 rounded-card bg-amber-50 border border-amber-300/60 p-3">
-          <div className="text-sm">
-            <span className="font-semibold text-amber-800">Pipeline halted (debug)</span>
-            <span className="text-amber-900/80 ml-2">
-              ran through <span className="font-mono">{state.haltedAfter}</span>; downstream stages disabled by{' '}
-              <span className="font-mono">.endHere()</span> in{' '}
-              <span className="font-mono">pipeline/LcCheckPipeline.java</span>. Comment that line to enable the full pipeline.
-            </span>
-          </div>
-        </div>
-      )}
 
       <div className="flex-1">
         {step === 'upload' && <UploadStep primaryRunCta={true} />}
