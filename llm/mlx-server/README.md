@@ -16,12 +16,15 @@ Streaming (`stream=true`) is rejected with 400 in v1 — the Java pipeline doesn
 
 ## Setup
 
+`make llm` from the repo root handles install + start automatically. If you want to do it by hand:
+
 ```bash
 cd llm/mlx-server
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp .env.example .env
 ```
+
+**Configuration lives in the repo's root `.env`** (under the `MLX_*` prefix and `HF_TOKEN`). There is no per-service `.env` here — everything for the project is in one file. Pydantic-settings reads the root `.env` directly via `Path(__file__).resolve().parents[3] / ".env"`.
 
 First start downloads the preset's model from HuggingFace to `~/.cache/huggingface/hub/`:
 - `light`     ≈ 3 GB (Qwen3-VL-4B 4-bit)

@@ -29,10 +29,10 @@ def _configure_logging() -> None:
 async def lifespan(app: FastAPI):
     _configure_logging()
     log = logging.getLogger("mlx-server")
-    log.info("starting mlx-server preset=%s host=%s port=%d", settings.llm_preset.value, settings.api_host, settings.api_port)
+    log.info("starting mlx-server preset=%s host=%s port=%d", settings.preset.value, settings.api_host, settings.api_port)
 
     mgr = ModelManager(
-        preset=settings.llm_preset,
+        preset=settings.preset,
         vision_override=settings.vision_model_override,
         text_override=settings.text_model_override,
         enable_thinking=settings.enable_thinking,

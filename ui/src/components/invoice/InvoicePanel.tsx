@@ -163,18 +163,21 @@ export function InvoicePanel({
 }
 
 function BodyPlaceholder({ attempts }: { attempts: ExtractAttempt[] }) {
+  const pending = attempts.filter((a) => a.status === 'PENDING').length;
   const running = attempts.filter((a) => a.status === 'RUNNING').length;
   const failed = attempts.filter((a) => a.status === 'FAILED').length;
+  const parts: string[] = [];
+  if (running > 0) parts.push(`${running} running`);
+  if (pending > 0) parts.push(`${pending} queued`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  const headline = running > 0 ? 'Extraction in progress…' : pending > 0 ? 'Waiting for extractors to start…' : 'Awaiting extracted document…';
   return (
     <div className="px-6 py-12 text-center text-muted text-sm">
       <div className="font-serif text-base text-navy-1 mb-1 animate-pulse">
-        Awaiting extracted document…
+        {headline}
       </div>
       <div className="font-mono text-[11px] text-muted/80">
-        {running > 0 && `${running} running`}
-        {running > 0 && failed > 0 && ' · '}
-        {failed > 0 && `${failed} failed`}
-        {running === 0 && failed === 0 && 'no extractor results yet'}
+        {parts.length > 0 ? parts.join(' · ') : 'no extractor results yet'}
       </div>
     </div>
   );
@@ -191,20 +194,25 @@ function ExtractorCard({
   active: boolean;
   onClick: () => void;
 }) {
+  const pending = attempt.status === 'PENDING';
   const running = attempt.status === 'RUNNING';
-  const failed = !running && (attempt.status === 'FAILED' || attempt.document === null);
-  const success = !running && !failed;
+  // FAILED implies status==='FAILED' OR (terminal state with no doc) — but we
+  // must NOT treat PENDING (no doc yet) as failed.
+  const failed = !pending && !running && (attempt.status === 'FAILED' || attempt.document === null);
+  const success = !pending && !running && !failed;
   const conf = attempt.document?.extractor_confidence ?? attempt.confidence ?? 0;
   const pct = Math.round(conf * 100);
   const clickable = success;
 
-  const cls = running
-    ? 'border-status-gold/50 bg-status-goldSoft/40 cursor-progress'
-    : active && success
-      ? 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30'
-      : failed
-        ? 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75'
-        : 'border-line bg-paper hover:border-teal-2/60';
+  const cls = pending
+    ? 'border-line border-dashed bg-slate2/40 cursor-default opacity-70'
+    : running
+      ? 'border-status-gold/50 bg-status-goldSoft/40 cursor-progress'
+      : active && success
+        ? 'border-teal-1 bg-teal-1/5 ring-1 ring-teal-1/30'
+        : failed
+          ? 'border-status-red/30 bg-status-redSoft/30 cursor-not-allowed opacity-75'
+          : 'border-line bg-paper hover:border-teal-2/60';
 
   return (
     <button
@@ -212,29 +220,39 @@ function ExtractorCard({
       disabled={!clickable}
       className={`relative text-left rounded-btn border-2 px-3 py-2.5 transition-colors ${cls}`}
       title={
-        running
-          ? `${attempt.source} · extracting…`
-          : failed
-            ? attempt.error ?? 'failed'
-            : `${attempt.source} · ${pct}% confidence`
+        pending
+          ? `${attempt.source} · queued — will run when its lane is ready`
+          : running
+            ? `${attempt.source} · extracting…`
+            : failed
+              ? attempt.error ?? 'failed'
+              : `${attempt.source} · ${pct}% confidence`
       }
     >
-      {/* Source label + USED / FAILED / RUNNING badge */}
+      {/* Source label + status badge */}
       <div className="flex items-baseline justify-between gap-2">
         <span
           className={[
             'font-mono text-[10px] uppercase tracking-[0.22em] font-semibold',
-            running
-              ? 'text-status-gold'
-              : active && success
-                ? 'text-teal-1'
-                : failed
-                  ? 'text-status-red'
-                  : 'text-muted',
+            pending
+              ? 'text-muted'
+              : running
+                ? 'text-status-gold'
+                : active && success
+                  ? 'text-teal-1'
+                  : failed
+                    ? 'text-status-red'
+                    : 'text-muted',
           ].join(' ')}
         >
           {attempt.source}
         </span>
+        {pending && (
+          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted/80 font-bold inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full border border-dashed border-muted/50" />
+            queued
+          </span>
+        )}
         {running && (
           <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold font-bold inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-status-gold animate-pulse" />
@@ -255,7 +273,11 @@ function ExtractorCard({
 
       {/* Body — primary metric */}
       <div className="mt-1.5 flex items-baseline gap-1.5 flex-wrap">
-        {running ? (
+        {pending ? (
+          <span className="font-mono text-xs text-muted/70 italic">
+            waiting for lane…
+          </span>
+        ) : running ? (
           <span className="font-mono text-xs text-status-gold animate-pulse">
             extracting…
           </span>

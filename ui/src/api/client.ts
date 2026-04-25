@@ -3,7 +3,10 @@ import type { CheckSession, ExtractAttempt, FieldDefinition, SessionSummary, Sta
 const API_BASE = '/api/v1/lc-check';
 
 /** Names of pipeline stages currently wired to run. Drives "skipped" badges in UI. */
-export async function getPipelineConfig(): Promise<{ configured_stages: string[] }> {
+export async function getPipelineConfig(): Promise<{
+  configured_stages: string[];
+  extractor_sources: string[];
+}> {
   const res = await fetch('/api/v1/pipeline');
   if (!res.ok) throw new Error(`pipeline failed: ${res.status}`);
   return res.json();

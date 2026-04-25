@@ -16,6 +16,12 @@ dependencies = [
     "pydantic-settings>=2.5",
     "pillow>=10.4",
     "python-multipart>=0.0.12",
+    # transformers' Qwen3-VL AutoProcessor pulls in Qwen3VLVideoProcessor,
+    # which has hard runtime deps on torch + torchvision (mlx-vlm doesn't
+    # transitively require them). Without these, model load fails with
+    # "Qwen3VLVideoProcessor requires the Torchvision library".
+    "torch>=2.4",
+    "torchvision>=0.19",
 ]
 
 [build-system]

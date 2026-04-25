@@ -128,6 +128,37 @@ but is wired as a separate Spring bean with its own config block.
 
 ---
 
+## Field canonicalisation across all four sources
+
+`field-pool.yaml` (in `lc-checker-svc/src/main/resources/fields/`) is the
+single source of truth for invoice field names. Every extractor's output —
+regardless of whether it's a regex-driven Python parser (docling/mineru) or
+an LLM (remote_vision/local_vision) — flows through `InvoiceFieldMapper`,
+which calls `FieldPoolRegistry.resolveInvoiceAlias(rawKey)` for each entry:
+
+| Outcome | Behaviour |
+|---|---|
+| Raw key matches a canonical key | written under canonical name into `fields` |
+| Raw key matches a registered `invoice_alias` | rewritten to canonical key, written into `fields` |
+| Raw key matches nothing | preserved verbatim in `envelope.extras` + an `UNKNOWN_ALIAS` warning recorded |
+
+So **adding a new invoice field is a single edit to `field-pool.yaml`** —
+just add the row plus any extractor variant names under `invoice_aliases`.
+The change immediately reaches:
+- the Java typed-record / canonical-map view (InvoiceDocument + envelope)
+- the `/api/v1/fields` endpoint the UI consumes
+- the **vision LLM prompt's field reference list** (rendered at runtime
+  from `FieldPoolRegistry.appliesToInvoice()` — the prompt template uses a
+  `{{fields}}` placeholder, see `prompts/vision-invoice-extract.st`)
+- rule-catalog activation expressions via `#fields['canonical_key']`
+
+The Python extractors keep their own internal field names. The mapper
+canonicalises whatever they emit; if a Python parser starts emitting a new
+key the registry doesn't know about, the trace logs `UNKNOWN_ALIAS` so
+operators can register the alias.
+
+---
+
 ## Debug endpoint
 
 Compare every enabled source against the same PDF without persisting:

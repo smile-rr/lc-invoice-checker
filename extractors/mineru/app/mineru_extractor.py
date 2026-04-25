@@ -25,6 +25,7 @@ pre-OCR text density measured via PyMuPDF; if chars/page < 50 we flag image-base
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -32,6 +33,44 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline knobs — env-driven so quality/speed can be tuned without redeploy.
+#
+# MINERU_TABLE_ENABLED   default true   — render markdown tables (line items)
+# MINERU_FORMULA_ENABLED default true   — render formulas (rare in invoices)
+# MINERU_LANG            default "en"   — comma-separated OCR languages
+# MINERU_MD_MODE         default "mm"   — "mm"=MakeMode.MM_MD (rich, keeps tables),
+#                                         "nlp"=MakeMode.NLP_MD (text-stripped)
+# ---------------------------------------------------------------------------
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_lang_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
+
+def _resolved_md_mode():
+    """Return MakeMode enum value chosen by MINERU_MD_MODE (lazy import)."""
+    from mineru.backend.pipeline.pipeline_middle_json_mkcontent import MakeMode
+
+    mode = os.getenv("MINERU_MD_MODE", "mm").strip().lower()
+    if mode == "nlp":
+        return MakeMode.NLP_MD
+    if mode == "mm":
+        return MakeMode.MM_MD
+    logger.warning("unknown MINERU_MD_MODE=%r; falling back to MM_MD", mode)
+    return MakeMode.MM_MD
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +146,6 @@ def _run_mineru(pdf_bytes: bytes) -> tuple[str, str]:
     """
     from mineru.backend.pipeline import pipeline_analyze
     from mineru.backend.pipeline import pipeline_middle_json_mkcontent as mk
-    from mineru.backend.pipeline.pipeline_middle_json_mkcontent import MakeMode
     from mineru.data.data_reader_writer.filebase import FileBasedDataWriter
 
     # Thread-safe result collection from the on_doc_ready callback
@@ -127,14 +165,23 @@ def _run_mineru(pdf_bytes: bytes) -> tuple[str, str]:
             result_holder["middle_json"] = middle_json
             result_holder["out_dir"] = out_dir
 
+    table_enabled = _env_bool("MINERU_TABLE_ENABLED", True)
+    formula_enabled = _env_bool("MINERU_FORMULA_ENABLED", True)
+    lang_list = _env_lang_list("MINERU_LANG", ["en"])
+    md_mode = _resolved_md_mode()
+    logger.info(
+        "mineru pipeline: table=%s formula=%s lang=%s md_mode=%s",
+        table_enabled, formula_enabled, lang_list, md_mode,
+    )
+
     pipeline_analyze.doc_analyze_streaming(
         pdf_bytes_list=[pdf_bytes],
         image_writer_list=[img_writer],
-        lang_list=["en"],
+        lang_list=lang_list,
         on_doc_ready=on_doc_ready,
         parse_method="auto",
-        formula_enable=False,
-        table_enable=False,
+        formula_enable=formula_enabled,
+        table_enable=table_enabled,
     )
 
     middle_json = result_holder.get("middle_json")
@@ -143,7 +190,7 @@ def _run_mineru(pdf_bytes: bytes) -> tuple[str, str]:
 
     # middle_json is {'pdf_info': [...], ...} — extract the pdf_info list
     pdf_info: list = middle_json.get("pdf_info", [])
-    md_text = mk.union_make(pdf_info, make_mode=MakeMode.NLP_MD, img_buket_path=out_dir)
+    md_text = mk.union_make(pdf_info, make_mode=md_mode, img_buket_path=out_dir)
     plain_text = _markdown_to_text(md_text)
     return md_text, plain_text
 
@@ -254,14 +301,16 @@ def warm_up() -> None:
             b"%%EOF"
         )
 
+        # Warm-up uses the same env-driven knobs as a real extraction so the
+        # right model bundle (table / formula) is loaded ahead of first request.
         pipeline_analyze.doc_analyze_streaming(
             pdf_bytes_list=[fake_pdf],
             image_writer_list=[img_writer],
-            lang_list=["en"],
+            lang_list=_env_lang_list("MINERU_LANG", ["en"]),
             on_doc_ready=on_doc_ready,
             parse_method="auto",
-            formula_enable=False,
-            table_enable=False,
+            formula_enable=_env_bool("MINERU_FORMULA_ENABLED", True),
+            table_enable=_env_bool("MINERU_TABLE_ENABLED", True),
         )
         logger.info("mineru warm-up complete (version=%s)", library_version())
     except Exception as exc:

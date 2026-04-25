@@ -237,9 +237,13 @@ export interface StartResponse {
 
 export interface ExtractAttempt {
   source: string;
-  /** RUNNING is a UI-only state synthesized from extract.source.started events
-   *  that haven't yet seen their matching extract.source.completed. */
-  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
+  /** Status lifecycle (UI-driven, not all values come from the backend):
+   *    PENDING — synthesized from /api/v1/pipeline.extractor_sources before any
+   *              SSE event arrives; the source is configured but hasn't started.
+   *    RUNNING — saw extract.source.started, no matching completed yet.
+   *    SUCCESS / FAILED — terminal states from extract.source.completed
+   *                       (also what /extracts returns once persisted). */
+  status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
   is_selected: boolean;
   document: InvoiceDocument | null;
   duration_ms: number;

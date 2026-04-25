@@ -94,7 +94,7 @@ def health(request: Request):
     if mgr is None:
         return HealthResponse(
             status="warming",
-            preset=settings.llm_preset.value,
+            preset=settings.preset.value,
             vision_model=settings.vision_model_override or "",
             text_model=settings.text_model_override or "",
             model_loaded=[],

@@ -3,6 +3,7 @@ import { listExtracts } from '../../api/client';
 import { InvoicePanel } from '../invoice/InvoicePanel';
 import { InvoiceViewer } from '../invoice/InvoiceViewer';
 import { useCheckSession } from '../../hooks/useCheckSession';
+import { usePipelineConfig } from '../../hooks/usePipelineConfig';
 import type { ExtractAttempt, InvoiceDocument } from '../../types';
 
 interface Props {
@@ -11,23 +12,27 @@ interface Props {
 }
 
 /**
- * Stage 1b inspection. The PDF render and the extractor inspector live
- * side-by-side; the inspector itself owns the extractor tabs and the inner
- * view tabs (Fields vs. Markdown). Picking a non-canonical attempt surfaces
- * a banner inside the inspector.
+ * Stage 1b inspection. PDF render and extractor inspector live side-by-side.
  *
- * Source-of-truth precedence for the cards row:
- *   1. SSE-driven `state.extractorStatus` — live RUNNING / SUCCESS / FAILED.
- *      Each source appears as soon as its `extract.source.started` lands.
- *   2. `/extracts` (one-shot fetch) — fills in missing details (raw_markdown,
- *      raw_text, full document) once the stage has persisted.
- * Disabled sources never appear in either source, so they don't render.
+ * Source-of-truth precedence for the cards row (most specific wins):
+ *   1. SSE-driven `state.extractorStatus` — RUNNING / SUCCESS / FAILED.
+ *   2. `/extracts` (one-shot fetch) — full document + raw_markdown after persist.
+ *   3. `/api/v1/pipeline.extractor_sources` — pre-populated PENDING placeholders
+ *      so the user sees the configured shape (3 cards / 4 cards) before any
+ *      extractor has even started.
+ *
+ * Disabled sources never appear in any layer, so they don't render.
+ *
+ * Critically: the layout is rendered as soon as the session exists. The PDF
+ * loads independently from /api/v1/lc-check/{sid}/invoice; the extractor pane
+ * starts with PENDING cards and updates live. Nothing blocks the whole page.
  */
 export function InvoiceAuditTab({ sessionId, invoice }: Props) {
   const [hover, setHover] = useState<string | null>(null);
   const [persisted, setPersisted] = useState<ExtractAttempt[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const live = useCheckSession(sessionId);
+  const pipeline = usePipelineConfig();
 
   useEffect(() => {
     if (!sessionId) return;
@@ -38,41 +43,71 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
         setPersisted(rows);
       })
       .catch(() => {
-        // Empty list during streaming is fine — live state covers the gap.
+        // Empty list during streaming is fine — live + config cover the gap.
       });
     return () => {
       cancelled = true;
     };
   }, [sessionId, invoice]);
 
-  // Merge live + persisted, preserving chain order. Persisted wins for
-  // documents (it has full raw_markdown / raw_text); live wins for status
-  // (it knows about RUNNING and the freshest completion result).
+  // Merge config (PENDING placeholders) + persisted + live, in chain order.
+  // Live wins on status / confidence / error; persisted wins on document.
   const attempts = useMemo<ExtractAttempt[]>(() => {
+    const order = pipeline.extractorSources.length > 0
+      ? pipeline.extractorSources
+      : Array.from(new Set([
+          ...persisted.map((p) => p.source),
+          ...Object.keys(live.extractorStatus ?? {}),
+        ]));
+
     const liveMap = live.extractorStatus ?? {};
-    const merged = new Map<string, ExtractAttempt>();
-    // Persisted first — preserves backend-defined chain order.
-    for (const row of persisted) merged.set(row.source, row);
-    // Live overlays per source — promote RUNNING, fresh confidence/error,
-    // but keep the persisted document if we have one.
-    for (const [source, liveRow] of Object.entries(liveMap)) {
-      const prior = merged.get(source);
-      merged.set(source, {
-        ...liveRow,
-        document: liveRow.document ?? prior?.document ?? null,
-        is_selected: prior?.is_selected ?? liveRow.is_selected,
-      });
+    const persistedMap = new Map(persisted.map((p) => [p.source, p]));
+
+    const result: ExtractAttempt[] = [];
+    for (const source of order) {
+      const liveRow = liveMap[source];
+      const persistedRow = persistedMap.get(source);
+
+      if (liveRow) {
+        result.push({
+          ...liveRow,
+          document: liveRow.document ?? persistedRow?.document ?? null,
+          is_selected: persistedRow?.is_selected ?? liveRow.is_selected,
+        });
+      } else if (persistedRow) {
+        result.push(persistedRow);
+      } else {
+        // No live state, no persisted row — pure PENDING placeholder.
+        result.push({
+          source,
+          status: 'PENDING',
+          is_selected: false,
+          document: null,
+          duration_ms: 0,
+          started_at: null,
+          error: null,
+        });
+      }
     }
-    return Array.from(merged.values());
-  }, [persisted, live.extractorStatus]);
+    // Append any sources we got from live/persisted that aren't in the
+    // configured order (shouldn't happen, but defensive).
+    for (const source of Object.keys(liveMap)) {
+      if (!order.includes(source)) {
+        const liveRow = liveMap[source];
+        result.push(liveRow);
+      }
+    }
+    return result;
+  }, [pipeline.extractorSources, persisted, live.extractorStatus]);
 
   // Auto-pick an active source: prefer the orchestrator's selected one;
-  // else first SUCCESS; else first attempt with any state at all.
+  // else first SUCCESS; else first non-PENDING; else first.
   useEffect(() => {
     if (active) return;
     const cand =
       attempts.find((a) => a.is_selected) ??
       attempts.find((a) => a.status === 'SUCCESS') ??
+      attempts.find((a) => a.status !== 'PENDING') ??
       attempts[0];
     if (cand) setActive(cand.source);
   }, [attempts, active]);
@@ -84,18 +119,6 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
   const currentDoc: InvoiceDocument | null = activeAttempt?.document ?? invoice ?? null;
   const currentSource = activeAttempt?.source ?? invoice?.extractor_used ?? '';
   const selectedSource = attempts.find((a) => a.is_selected)?.source ?? null;
-
-  // No source has even started — wait for the very first SSE event.
-  if (attempts.length === 0 && !currentDoc) {
-    return (
-      <div className="mx-8 my-10 bg-paper rounded-card border border-dashed border-line py-12 text-center">
-        <div className="font-serif text-xl text-navy-1 mb-1 animate-pulse">Extracting invoice…</div>
-        <div className="text-sm text-muted">
-          The PDF render and extractor fields will appear once Stage 1b begins.
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="px-6 py-5">
@@ -110,7 +133,7 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
             sub={
               currentDoc
                 ? `${currentSource} · ${(currentDoc.extractor_confidence * 100).toFixed(0)}% conf`
-                : `${attempts.length} source${attempts.length === 1 ? '' : 's'} running`
+                : extractorSummary(attempts)
             }
           />
           <InvoicePanel
@@ -125,6 +148,24 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
       </div>
     </div>
   );
+}
+
+function extractorSummary(attempts: ExtractAttempt[]): string {
+  if (attempts.length === 0) return 'awaiting pipeline configuration…';
+  const counts = attempts.reduce(
+    (acc, a) => {
+      const k = a.status as keyof typeof acc;
+      if (k in acc) acc[k]++;
+      return acc;
+    },
+    { PENDING: 0, RUNNING: 0, SUCCESS: 0, FAILED: 0 } as Record<string, number>,
+  );
+  const parts: string[] = [];
+  if (counts.RUNNING) parts.push(`${counts.RUNNING} running`);
+  if (counts.PENDING) parts.push(`${counts.PENDING} queued`);
+  if (counts.SUCCESS) parts.push(`${counts.SUCCESS} done`);
+  if (counts.FAILED) parts.push(`${counts.FAILED} failed`);
+  return parts.join(' · ');
 }
 
 function SectionHead({ title, sub }: { title: string; sub: string }) {

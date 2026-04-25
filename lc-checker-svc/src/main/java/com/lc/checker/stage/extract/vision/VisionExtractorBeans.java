@@ -1,6 +1,7 @@
 package com.lc.checker.stage.extract.vision;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -35,6 +36,7 @@ public class VisionExtractorBeans {
             PdfRenderer renderer,
             VisionInvoiceMapper mapper,
             ObjectMapper json,
+            FieldPoolRegistry fieldPool,
             @Value("${vision.base-url}") String baseUrl,
             @Value("${vision.api-key:}") String apiKey,
             @Value("${vision.model}") String model,
@@ -42,7 +44,7 @@ public class VisionExtractorBeans {
             @Value("${vision.timeout-seconds:120}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
                 "remote_vision", baseUrl, apiKey, model, renderScale, timeoutSeconds);
-        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json);
+        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, fieldPool);
     }
 
     @Bean(name = "localVisionExtractor")
@@ -52,6 +54,7 @@ public class VisionExtractorBeans {
             PdfRenderer renderer,
             VisionInvoiceMapper mapper,
             ObjectMapper json,
+            FieldPoolRegistry fieldPool,
             @Value("${local-vision.base-url:http://localhost:11434/v1}") String baseUrl,
             @Value("${local-vision.api-key:}") String apiKey,
             @Value("${local-vision.model:qwen2.5vl}") String model,
@@ -59,6 +62,6 @@ public class VisionExtractorBeans {
             @Value("${local-vision.timeout-seconds:300}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
                 "local_vision", baseUrl, apiKey, model, renderScale, timeoutSeconds);
-        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json);
+        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, fieldPool);
     }
 }

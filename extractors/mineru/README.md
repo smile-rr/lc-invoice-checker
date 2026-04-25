@@ -130,5 +130,17 @@ at first `/extract` call instead.
 
 ## Environment variables
 
-Same set as docling-svc (LOG_LEVEL, optional LLM_API_KEY / LLM_BASE_URL /
-LLM_MODEL for the Tier-2 structuring pass). See docling's README.
+Read from the **repo-root `.env`** (the Makefile sources it before launching uvicorn).
+
+| Var                       | Default | Purpose                                                                                       |
+|---------------------------|---------|-----------------------------------------------------------------------------------------------|
+| `MINERU_TABLE_ENABLED`    | `true`  | Render markdown tables in `raw_markdown` (line items, totals). Flip off only to save cycles. |
+| `MINERU_FORMULA_ENABLED`  | `true`  | Render formulas (rare in invoices, cheap when off).                                          |
+| `MINERU_LANG`             | `en`    | Comma-separated OCR languages. Use `en,ch` for mixed Chinese/English invoices.               |
+| `MINERU_MD_MODE`          | `mm`    | `mm` → `MakeMode.MM_MD` (rich, keeps tables). `nlp` → `MakeMode.NLP_MD` (text-stripped).      |
+| `LOG_LEVEL`               | `INFO`  | Standard Python logging level.                                                                |
+
+Plus the standard logger / contract knobs shared with docling-svc.
+
+Knob philosophy: defaults are tuned for invoice extraction (tables ON, MM_MD
+mode). Don't change them without a reason.

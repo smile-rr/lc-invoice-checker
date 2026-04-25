@@ -2,6 +2,9 @@ package com.lc.checker.stage.extract.vision;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lc.checker.domain.common.FieldType;
+import com.lc.checker.infra.fields.FieldDefinition;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractionResult;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
@@ -14,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -47,6 +51,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     private final PdfRenderer renderer;
     private final VisionInvoiceMapper mapper;
     private final ObjectMapper json;
+    private final FieldPoolRegistry fieldPool;
     private final String name;
     private final String model;
     private final float renderScale;
@@ -58,7 +63,8 @@ public class VisionLlmExtractor implements InvoiceExtractor {
             VisionExtractorConfig config,
             PdfRenderer renderer,
             VisionInvoiceMapper mapper,
-            ObjectMapper json) {
+            ObjectMapper json,
+            FieldPoolRegistry fieldPool) {
         this.name = config.name();
         this.model = config.model();
         this.renderScale = config.renderScale();
@@ -66,6 +72,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         this.renderer = renderer;
         this.mapper = mapper;
         this.json = json;
+        this.fieldPool = fieldPool;
 
         // Standalone RestClient for the OpenAI-compatible /v1/chat/completions endpoint.
         // Auth: empty api-key (e.g. local Ollama) → no header; non-empty → Bearer token.
@@ -147,32 +154,42 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         LlmTrace trace = new LlmTrace(name + ".extract", model, promptRendered,
                 contentText, null, null, llmLatency, null);
 
-        // 5. Parse JSON from response (fallback to key:value text parser for non-JSON models)
-        Map<String, Object> fields;
+        // 5. Parse the JSON envelope: {markdown, fields, confidence, raw_text}.
+        //    Backward-compat: if the model returns a flat map (old prompt shape
+        //    or a model that ignored the new schema), treat it as `fields` and
+        //    leave markdown empty.
+        Map<String, Object> root;
         try {
-            fields = json.readValue(contentText, new TypeReference<>() {});
+            root = json.readValue(contentText, new TypeReference<>() {});
         } catch (Exception jsonFail) {
-            log.debug("Vision LLM response is not JSON (model may have written prose); "
-                    + "using key:value text parser. JSON error: {}",
+            log.debug("Vision LLM response is not JSON; using key:value text parser. JSON error: {}",
                     jsonFail.getMessage());
-            fields = parseTextFormat(contentText);
+            root = parseTextFormat(contentText);
         }
 
-        // 6. Build InvoiceDocument
-        // Tolerate common extractor-meta variants ("confidence_score", "rawtext")
-        // — these are extractor-internal (not invoice fields), so the field-pool
-        // doesn't cover them. Field-pool aliases handle every actual invoice field.
-        Object confidenceVal = fields.getOrDefault("confidence",
-                fields.getOrDefault("confidence_score", fields.get("score")));
-        double confidence = asDouble(confidenceVal, 0.8);
-        Object rawTextVal = fields.getOrDefault("raw_text",
-                fields.getOrDefault("rawtext", fields.get("raw_text_summary")));
-        String rawText = rawTextVal == null ? "" : String.valueOf(rawTextVal);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> fields = root.get("fields") instanceof Map
+                ? (Map<String, Object>) root.get("fields")
+                : root;
 
+        String markdown = stringOrEmpty(root.get("markdown"));
+        String rawText = stringOrEmpty(root.getOrDefault("raw_text",
+                root.getOrDefault("rawtext", root.get("raw_text_summary"))));
+        Object confidenceVal = root.getOrDefault("confidence",
+                root.getOrDefault("confidence_score", root.get("score")));
+        double confidence = asDouble(confidenceVal, 0.8);
+
+        // 6. Build InvoiceDocument. rawMarkdown carries the structured layout
+        //    rendering for the UI's Markdown tab; rawText carries free text.
         long durMs = System.currentTimeMillis() - start;
+        String rawMarkdown = markdown.isBlank() ? contentText : markdown;
         InvoiceDocument doc = mapper.toDocument(fields, name, confidence, true, pages.size(), durMs,
-                contentText, rawText);
+                rawMarkdown, rawText);
         return new ExtractionResult(doc, List.of(trace));
+    }
+
+    private static String stringOrEmpty(Object v) {
+        return v == null ? "" : String.valueOf(v);
     }
 
     /**
@@ -231,16 +248,44 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     private String loadPrompt() {
         String cached = cachedPrompt;
         if (cached != null) return cached;
+        String template;
         try {
-            cached = StreamUtils.copyToString(
+            template = StreamUtils.copyToString(
                     new ClassPathResource(PROMPT_TEMPLATE).getInputStream(),
                     StandardCharsets.UTF_8);
-            cachedPrompt = cached;
-            return cached;
         } catch (IOException e) {
             log.warn("Could not load {}; using inline fallback prompt", PROMPT_TEMPLATE);
-            return FALLBACK_PROMPT;
+            template = FALLBACK_PROMPT;
         }
+        // Render {{fields}} from the canonical registry — single source of truth
+        // for what the LLM is asked to produce. Adding a new invoice field is
+        // a one-line YAML edit; the prompt updates automatically on next boot.
+        String fieldList = renderFieldList();
+        cached = template.replace("{{fields}}", fieldList);
+        cachedPrompt = cached;
+        return cached;
+    }
+
+    /** Render the canonical-field reference block injected into the prompt. */
+    private String renderFieldList() {
+        if (fieldPool == null) return "";
+        return fieldPool.appliesToInvoice().stream()
+                .map(this::renderFieldLine)
+                .collect(Collectors.joining("\n"));
+    }
+
+    private String renderFieldLine(FieldDefinition f) {
+        String typeHint = switch (f.type()) {
+            case DATE -> "DATE — ISO yyyy-MM-dd";
+            case CURRENCY_CODE -> "CURRENCY_CODE — ISO 4217";
+            case ENUM -> "ENUM — one of " + String.join(", ", f.enumValues());
+            case AMOUNT -> "AMOUNT (number)";
+            case INTEGER -> "INTEGER";
+            case MULTILINE_TEXT -> "MULTILINE_TEXT";
+            default -> f.type().name();
+        };
+        String label = f.nameEn() == null ? f.key() : f.nameEn();
+        return "- " + f.key() + " (" + label + ", " + typeHint + ")";
     }
 
     private double asDouble(Object v, double def) {

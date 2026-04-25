@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import type { SessionState } from '../../hooks/useCheckSession';
+import type { StageName } from '../../types';
 
 export type StepKey = 'upload' | 'lc' | 'invoice' | 'compare' | 'rules' | 'review';
 
@@ -21,14 +22,19 @@ const KEYS: StepKey[] = STEPS.map((s) => s.key);
  * the step to render meaningfully.
  *
  * `compare` has no backend stage of its own, but it cross-references
- * lc_parse + invoice_extract output, so it inherits both as requirements.
+ * lc / invoice output AGAINST the rule outcomes — i.e. it's the
+ * "what did rule-check find" view layered on the LC↔invoice diff. So it
+ * inherits all three (lc_parse, invoice_extract, rule_check) as
+ * requirements; until rule_check is wired in, compare stays skipped and
+ * auto-advance lands on `invoice` instead.
+ *
  * `upload` has no backend stage and stays always-enabled.
  */
 const STEP_TO_STAGES: Record<StepKey, string[]> = {
   upload: [],
   lc: ['lc_parse'],
   invoice: ['invoice_extract'],
-  compare: ['lc_parse', 'invoice_extract'],
+  compare: ['lc_parse', 'invoice_extract', 'rule_check'],
   rules: ['rule_activation', 'rule_check'],
   review: ['report_assembly'],
 };
@@ -79,13 +85,26 @@ export function useStep(
  */
 function derivedStep(s: SessionState, configured: Set<string> | null): StepKey {
   const enabled = (k: StepKey) => !isStepSkipped(k, configured);
+  // A step is "visible" the moment its backing stage is active OR there's
+  // any live signal for it — even before the stage has produced its output.
+  // Without this, a session that has just started invoice_extract (s.lc set,
+  // s.invoice still null) would auto-advance to LC and the user would miss
+  // watching the live extractor cards on the Invoice tab.
+  const stageActive = (n: StageName) =>
+    s.stages[n].status === 'running' || s.stages[n].status === 'done';
+  const lcVisible = !!s.lc || stageActive('lc_parse');
+  const invoiceVisible =
+    !!s.invoice ||
+    stageActive('invoice_extract') ||
+    Object.keys(s.extractorStatus ?? {}).length > 0;
+
   // Honour the .endHere() debug halt: don't pretend a final report exists for
   // navigation purposes even though earlyFinalize synthesised a placeholder.
   if (s.haltedAfter) {
     if (s.checks.length > 0 && enabled('rules')) return 'rules';
     if (s.invoice && s.lc && enabled('compare')) return 'compare';
-    if (s.invoice && enabled('invoice')) return 'invoice';
-    if (s.lc && enabled('lc')) return 'lc';
+    if (invoiceVisible && enabled('invoice')) return 'invoice';
+    if (lcVisible && enabled('lc')) return 'lc';
     return 'upload';
   }
   // Don't auto-advance to a step whose required backend stages aren't wired in.
@@ -93,8 +112,8 @@ function derivedStep(s: SessionState, configured: Set<string> | null): StepKey {
   if (s.report && enabled('review')) candidates.push('review');
   if ((s.checks.length > 0 || s.inFlightRuleIds.size > 0) && enabled('rules')) candidates.push('rules');
   if (s.invoice && s.lc && enabled('compare')) candidates.push('compare');
-  if (s.invoice && enabled('invoice')) candidates.push('invoice');
-  if (s.lc && enabled('lc')) candidates.push('lc');
+  if (invoiceVisible && enabled('invoice')) candidates.push('invoice');
+  if (lcVisible && enabled('lc')) candidates.push('lc');
   candidates.push('upload');
   return candidates[0];
 }

@@ -311,6 +311,16 @@ public class InvoiceExtractionOrchestrator implements InvoiceExtractor {
     }
 
     /**
+     * Names of the extractor sources currently configured to run, in chain
+     * priority order. The UI uses this to pre-populate PENDING cards before
+     * any SSE event arrives, so the user immediately sees the shape of the
+     * work (e.g. "3 cards, all queued") rather than empty space.
+     */
+    public List<String> configuredSources() {
+        return chain.stream().map(InvoiceExtractor::extractorName).toList();
+    }
+
+    /**
      * Debug helper — runs every enabled source in chain order and returns a plain-text
      * dump. Used by {@code /api/v1/debug/invoice/compare}. Does NOT persist to DB.
      */
