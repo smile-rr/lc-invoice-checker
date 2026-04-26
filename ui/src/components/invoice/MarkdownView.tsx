@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 
 interface Props {
   source: string;
@@ -20,6 +21,7 @@ export function MarkdownView({ source }: Props) {
     <div className="text-sm leading-relaxed text-navy-1 space-y-3">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
         components={{
           h1: ({ children }) => (
             <h1 className="font-serif text-xl text-navy-1 border-b border-line pb-1 mt-2 mb-2">

@@ -111,13 +111,13 @@ local-llm-vl:
 # Markdown tab alongside the structured field extraction.
 docling:
   base-url:        ${DOCLING_BASE_URL:http://docling-svc:8081}
-  timeout-seconds: ${DOCLING_TIMEOUT_SECONDS:60}
+  timeout-seconds: ${DOCLING_TIMEOUT_SECONDS:180}
 
 # --- MiniRU sidecar (text-layout extraction, supplementary source) ------------
 # Enable with EXTRACTOR_MINERU_ENABLED=true + docker compose --profile full up -d
 mineru:
   base-url:        ${MINERU_BASE_URL:http://mineru-svc:8082}
-  timeout-seconds: ${MINERU_TIMEOUT_SECONDS:60}
+  timeout-seconds: ${MINERU_TIMEOUT_SECONDS:180}
 
 session:
   ttl-minutes: 60

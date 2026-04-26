@@ -87,7 +87,7 @@ def llm_extract_fields(markdown: str, prompt: str) -> tuple[dict[str, Any], floa
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=120.0) as client:
             resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
         raw_content: str = resp.json()["choices"][0]["message"]["content"]

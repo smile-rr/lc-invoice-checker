@@ -25,7 +25,7 @@ public class DoclingExtractorBeans {
             ObjectMapper objectMapper,
             PromptBuilder promptBuilder,
             @Value("${docling.base-url:http://docling-svc:8081}") String baseUrl,
-            @Value("${docling.timeout-seconds:60}") int timeoutSeconds) {
+            @Value("${docling.timeout-seconds:180}") int timeoutSeconds) {
         return new DoclingExtractorClient(restClientBuilder, mapper, objectMapper,
                 new DoclingExtractorConfig("docling", baseUrl, timeoutSeconds), promptBuilder);
     }

@@ -25,7 +25,7 @@ public class MineruExtractorBeans {
             ObjectMapper objectMapper,
             PromptBuilder promptBuilder,
             @Value("${mineru.base-url:http://mineru-svc:8082}") String baseUrl,
-            @Value("${mineru.timeout-seconds:60}") int timeoutSeconds) {
+            @Value("${mineru.timeout-seconds:180}") int timeoutSeconds) {
         return new MineruExtractorClient(restClientBuilder, mapper, objectMapper,
                 new MineruExtractorConfig("mineru", baseUrl, timeoutSeconds), promptBuilder);
     }
