@@ -37,10 +37,12 @@ export function SamplePreview({
   runLabel,
 }: Props) {
   return (
-    <div className="max-w-[1600px] mx-auto px-8 py-5 space-y-4">
-      {/* Sticky header — title on the left, primary CTA on the right.
-          Always visible without scrolling. */}
-      <div className="flex items-center gap-3 border-b border-line pb-3">
+    // Fill the available height of the page body so the side-by-side panes
+    // stretch to the bottom instead of stopping at a fixed 560px and leaving
+    // a big empty band below. The parent wrapper (UploadPage / SessionPage's
+    // Scrollable) provides the height; we just claim it.
+    <div className="max-w-[1600px] mx-auto px-8 py-5 h-full flex flex-col gap-4 min-h-0">
+      <div className="flex items-center gap-3 border-b border-line pb-3 shrink-0">
         <div className="flex-1 min-w-0">
           <h2 className="font-serif text-lg text-navy-1 leading-tight">Pair preview</h2>
           <span className="font-mono text-[11px] text-muted">
@@ -64,7 +66,7 @@ export function SamplePreview({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 flex-1 min-h-0">
         <LcPane file={lc} onReplace={onLcChange} />
         <InvoicePane file={invoice} onReplace={onInvoiceChange} />
       </div>
@@ -119,7 +121,7 @@ function LcPane({ file, onReplace }: { file: File; onReplace: (f: File) => void 
   }
 
   return (
-    <section className="rounded-card border border-line bg-paper flex flex-col h-[560px] overflow-hidden">
+    <section className="rounded-card border border-line bg-paper flex flex-col h-full min-h-0 overflow-hidden">
       <PaneHead
         slotLabel="LETTER OF CREDIT · MT700"
         filename={file.name}
@@ -172,7 +174,7 @@ function InvoicePane({ file, onReplace }: { file: File; onReplace: (f: File) => 
   }
 
   return (
-    <section className="rounded-card border border-line bg-paper flex flex-col h-[560px] overflow-hidden">
+    <section className="rounded-card border border-line bg-paper flex flex-col h-full min-h-0 overflow-hidden">
       <PaneHead
         slotLabel="COMMERCIAL INVOICE · PDF"
         filename={file.name}

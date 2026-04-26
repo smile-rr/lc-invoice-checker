@@ -24,7 +24,11 @@ type Side = 'source' | 'parsed';
  */
 export function LcAuditTab({ sessionId, lc }: Props) {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [sortMode, setSortMode] = useState<SortMode>('declared');
+  // Default to tag-ascending so the MT700 source and the parsed fields line
+  // up row-for-row out of the box — same tag at the same vertical position
+  // on both sides. Operators can flip to "Declared order" via the toggle if
+  // they want to see the raw MT700 sequence.
+  const [sortMode, setSortMode] = useState<SortMode>('tag-asc');
   const [activeSide, setActiveSide] = useState<Side | null>(null);
   const [sourceOrder, setSourceOrder] = useState<string[]>([]);
   const [parsedOrder, setParsedOrder] = useState<string[]>([]);
