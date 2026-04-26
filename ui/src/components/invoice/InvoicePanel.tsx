@@ -151,10 +151,10 @@ function BodyPlaceholder({ attempts }: { attempts: ExtractAttempt[] }) {
   const headline = running > 0 ? 'Extraction in progress…' : pending > 0 ? 'Waiting for extractors to start…' : 'Awaiting extracted document…';
   return (
     <div className="px-6 py-12 text-center text-muted text-sm">
-      <div className="font-serif text-base text-navy-1 mb-1 animate-pulse">
+      <div className="font-sans text-base font-semibold text-navy-1 mb-1 animate-pulse">
         {headline}
       </div>
-      <div className="font-mono text-[11px] text-muted/80">
+      <div className="font-mono text-[11px] text-muted">
         {parts.length > 0 ? parts.join(' · ') : 'no extractor results yet'}
       </div>
     </div>
@@ -249,33 +249,33 @@ function ExtractorCard({
           {fmtSource(attempt.source)}
         </span>
         {pending && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-muted/80 font-bold inline-flex items-center gap-1 shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full border border-dashed border-muted/50" />
+          <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-muted font-bold inline-flex items-center gap-1 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full border border-dashed border-muted" />
             queued
           </span>
         )}
         {running && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold font-bold inline-flex items-center gap-1 shrink-0">
+          <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-status-gold font-bold inline-flex items-center gap-1 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-status-gold animate-pulse" />
             running
           </span>
         )}
         {success && attempt.is_selected && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-green font-bold shrink-0">
+          <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-status-green font-bold shrink-0">
             ✓ used
           </span>
         )}
         {isReference && (
           <span
-            className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-gold/85 font-bold inline-flex items-center gap-1 shrink-0"
+            className="font-mono text-[11px] uppercase tracking-[0.10em] text-status-gold font-bold inline-flex items-center gap-1 shrink-0"
             title="Reference output — extracted in parallel for comparison; rule checks did not use this result"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-status-gold/60" />
+            <span className="w-1.5 h-1.5 rounded-full bg-status-gold" />
             ref
           </span>
         )}
         {failed && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.2em] text-status-red font-bold shrink-0">
+          <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-status-red font-bold shrink-0">
             failed
           </span>
         )}
@@ -284,7 +284,7 @@ function ExtractorCard({
       {/* Body — primary metric */}
       <div className="mt-1.5 flex items-baseline gap-1.5 flex-wrap">
         {pending ? (
-          <span className="font-mono text-xs text-muted/70 italic">
+          <span className="font-mono text-xs text-muted italic">
             waiting for lane…
           </span>
         ) : running ? (
@@ -292,7 +292,7 @@ function ExtractorCard({
             extracting…
           </span>
         ) : failed ? (
-          <span className="text-xs text-status-red/80">
+          <span className="text-xs text-status-red">
             {truncate(attempt.error ?? 'error', 56)}
           </span>
         ) : (
@@ -300,7 +300,7 @@ function ExtractorCard({
             <span className="font-mono text-xl font-bold text-navy-1 leading-none">
               {pct}%
             </span>
-            <span className="font-mono text-[9px] uppercase tracking-widest text-muted ml-0.5">
+            <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-muted ml-0.5">
               conf
             </span>
             <Sep />
@@ -310,7 +310,7 @@ function ExtractorCard({
             {attempt.document?.image_based && (
               <>
                 <Sep />
-                <span className="font-mono text-[9px] uppercase tracking-widest text-status-gold">
+                <span className="font-mono text-[11px] uppercase tracking-[0.10em] text-status-gold">
                   image
                 </span>
               </>
@@ -323,7 +323,7 @@ function ExtractorCard({
 }
 
 function Sep() {
-  return <span className="text-muted/40 select-none">·</span>;
+  return <span className="text-muted select-none">·</span>;
 }
 
 function ViewTab({
@@ -431,7 +431,7 @@ function LineItemsSection({
     <tr className="border-b border-line">
       <td colSpan={2} className="px-0 py-0">
         {/* Section header */}
-        <div className="px-4 py-2 bg-slate2/50 border-b border-line flex items-center gap-2">
+        <div className="px-4 py-2 bg-slate2 border-b border-line flex items-center gap-2">
           <span className="text-sm text-muted">{row.label}</span>
           {wasExtracted ? (
             <span className="font-mono text-[10px] bg-teal-1/10 text-teal-1 px-1.5 py-0.5 rounded">
@@ -447,7 +447,7 @@ function LineItemsSection({
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-line bg-slate2/30">
+                <tr className="border-b border-line bg-slate2">
                   {columns.map((col) => (
                     <th
                       key={col}
@@ -462,7 +462,7 @@ function LineItemsSection({
                 {tableRows.map((rowData, i) => (
                   <tr
                     key={i}
-                    className="border-b border-line/50 last:border-0 hover:bg-slate2/40"
+                    className="border-b border-line last:border-0 hover:bg-slate2"
                   >
                     {columns.map((col) => {
                       const cell = rowData[col] != null ? String(rowData[col]) : null;
@@ -472,7 +472,7 @@ function LineItemsSection({
                           className="px-3 py-1.5 font-mono"
                           onMouseEnter={() => cell != null && onFieldHover(cell)}
                         >
-                          {cell ?? <span className="text-muted/50">—</span>}
+                          {cell ?? <span className="text-muted">—</span>}
                         </td>
                       );
                     })}

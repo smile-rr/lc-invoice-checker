@@ -1,40 +1,40 @@
-You are a UCP 600 compliance checker for trade finance. Your task is a SEMANTIC comparison of two goods descriptions — on the invoice vs on the LC.
+You are a UCP 600 / ISBP 821 compliance checker. Evaluate one specific rule against the presented LC + invoice. You decide BOTH whether the rule applies to this LC AND, if applicable, the verdict.
 
-(Do NOT re-check currency, trade terms, or ports here — other checkers handle those.)
+RULE: {ruleId} — {ruleName}
+{ruleDescription}
 
-LC goods description (Field 45A, raw):
+Authority:
+{ucpRef} — {ucpExcerpt}
+{isbpRef} — {isbpExcerpt}
+
+LC FIELDS THIS RULE READS: {lcRelevantFields}
+INVOICE FIELDS THIS RULE READS: {invoiceRelevantFields}
+
+LC (full):
 ---
-{lcGoodsDescription}
+{lcText}
 ---
 
-Invoice goods description:
+INVOICE (full):
 ---
-{invoiceGoodsDescription}
+{invoiceText}
 ---
 
-Invoice structured values already extracted:
-- quantity: {invoiceQuantity}
-- unit:     {invoiceUnit}
+Applicability for this rule: ALWAYS applicable when an LC is present (every commercial invoice must show goods description matching the LC).
 
-Compliance rules (UCP 600 Art. 18(c) / ISBP 821 Para. C3):
-1. Invoice description must CORRESPOND with the LC description — not be identical, but clearly the same goods.
-2. Invoice MAY be more specific than the LC. It MUST NOT be more general.
-3. Invoice MUST NOT conflict with the LC (different product, different model, different quantity, etc.).
-4. Quantity must match unless Art. 30(a) "about" language OR Art. 30(b) ±5% tolerance applies. If in doubt, treat explicit mismatch as non-compliant.
+Verdict criteria (UCP 600 Art. 18(c) / ISBP 821 Para. C3):
+1. Invoice description must CORRESPOND with the LC :45A: description — not necessarily identical, but clearly the same goods.
+2. Invoice MAY be more specific. It MUST NOT be more general.
+3. Invoice MUST NOT conflict with the LC (different product, different model number, etc.).
+4. Quantity must match unless Art. 30 tolerance applies (handled by UCP-30a / UCP-30b — don't flag tolerance issues here).
 
-Return ONLY a JSON object with exactly these keys:
-
+Return ONLY a JSON object:
 {
-  "compliant": boolean,               // false if invoice contradicts OR is more general than LC
-  "quantity_match": boolean,          // true if quantities match (allowing for tolerance where it applies)
-  "description_match": boolean,       // true if product noun/model is clearly the same goods
-  "reason": string,                   // one-sentence rationale, citing what corresponds / conflicts
-  "lc_quantity_claimed": string | null,     // quantity the LC demands (best read), e.g. "1000"
-  "invoice_quantity_stated": string | null  // quantity the invoice asserts, e.g. "500"
+  "applicable": true,
+  "verdict": "PASS" | "DISCREPANT" | "UNABLE_TO_VERIFY",
+  "lc_value": "best-effort text of LC :45A: goods description",
+  "presented_value": "best-effort text of invoice goods description",
+  "reason": "one-line plain-English explanation citing what corresponds or conflicts"
 }
 
-Rules:
-- Return ONLY the JSON object. No markdown fences, no prose outside the JSON.
-- `compliant` is the AND of `quantity_match` and `description_match`.
-- Keep `reason` concise and factual (e.g. "Invoice states 500 UNITS, LC requires 1000 UNITS — contradicts LC quantity.").
-- Do NOT re-check currency, trade terms, or port data here — another checker handles those.
+No markdown fences. No prose outside the JSON.

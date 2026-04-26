@@ -1,13 +1,16 @@
 package com.lc.checker.api.controller;
 
-import com.lc.checker.pipeline.LcCheckPipeline;
-import com.lc.checker.api.exception.SessionNotFoundException;
-import com.lc.checker.domain.session.CheckSession;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.lc.checker.domain.result.DiscrepancyReport;
+import com.lc.checker.domain.session.CheckSession;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
+import com.lc.checker.infra.stream.CheckEvent;
+import com.lc.checker.pipeline.LcCheckPipeline;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -19,21 +22,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-import com.lc.checker.infra.observability.MdcFilter;
 
 /**
  * Public V1 API surface.
  *
  * <ul>
- *   <li>{@code POST /api/v1/lc-check} — single-shot multipart endpoint: supply LC text +
- *       invoice PDF, receive {@link DiscrepancyReport} synchronously.</li>
- *   <li>{@code GET /api/v1/lc-check/{sessionId}/trace} — full intermediate state of a
- *       previous run, for UI / debugging.</li>
+ *   <li>{@code POST /api/v1/lc-check} — sync multipart endpoint: returns a
+ *       {@link DiscrepancyReport} when the pipeline finishes.</li>
+ *   <li>{@code GET /api/v1/lc-check/{sessionId}/trace} — returns the unified
+ *       envelope event log: {@code {sessionId, events: Event[]}}. The frontend
+ *       reducer consumes both this and the live SSE stream identically.</li>
  * </ul>
- *
- * <p>{@code sessionId} is sourced from the {@link MdcKeys#SESSION_ID} value that
- * {@code MdcFilter} puts into MDC on every request, so the log lines emitted during
- * the pipeline and the returned report are trivially correlatable.
  */
 @RestController
 @RequestMapping("/api/v1/lc-check")
@@ -62,10 +61,16 @@ public class LcCheckController {
         return ResponseEntity.ok(session.finalReport());
     }
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record TraceResponse(String sessionId, List<CheckEvent> events) {}
+
+    /**
+     * Replay the full envelope event log for the session — same shape and order
+     * as the live SSE stream. Empty {@code events} when the session is unknown.
+     */
     @GetMapping("/{sessionId}/trace")
-    public ResponseEntity<CheckSession> trace(@PathVariable String sessionId) {
-        CheckSession session = store.find(sessionId)
-                .orElseThrow(() -> new SessionNotFoundException(sessionId));
-        return ResponseEntity.ok(session);
+    public ResponseEntity<TraceResponse> trace(@PathVariable String sessionId) {
+        List<CheckEvent> events = store.findEvents(sessionId);
+        return ResponseEntity.ok(new TraceResponse(sessionId, events));
     }
 }

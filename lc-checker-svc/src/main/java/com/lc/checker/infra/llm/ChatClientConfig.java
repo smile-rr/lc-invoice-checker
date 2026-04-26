@@ -7,13 +7,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import com.lc.checker.stage.check.strategy.TypeABStrategy;
-import com.lc.checker.stage.check.strategy.TypeBStrategy;
 import com.lc.checker.stage.extract.vision.VisionLlmExtractor;
 
 /**
  * Single point where Spring AI enters the application — for the <b>text LLM</b>
- * only (Type-B / Type-AB semantic rule checks).
+ * only (AGENT rule checks).
  *
  * <p><b>Vision LLM extraction does NOT use Spring AI.</b> {@code VisionLlmExtractor}
  * goes through a plain {@code RestClient} against an OpenAI-compatible
@@ -39,7 +37,7 @@ public class ChatClientConfig {
 
     /**
      * Default system message applied to every ChatClient call. Individual call sites
-     * (TypeBStrategy, TypeABStrategy, VisionLlmExtractor) override with task-specific instructions.
+     * (AgentStrategy, VisionLlmExtractor) override with task-specific instructions.
      */
     private static final String DEFAULT_SYSTEM = """
             You are a trade finance compliance assistant working strictly from UCP 600 and ISBP 821.

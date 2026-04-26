@@ -18,6 +18,10 @@ public class PipelineMetrics {
     public static final String TIMER_PARSE = "lc_checker.parse.duration";
     public static final String TIMER_EXTRACT = "lc_checker.extract.duration";
     public static final String TIMER_ACTIVATE = "lc_checker.activate.duration";
+    /** Stage-level timer for the merged {@code lc_check} stage (one tick per pipeline run). */
+    public static final String TIMER_LC_CHECK = "lc_checker.lc_check.duration";
+    /** Per-rule timer — tagged with rule_id/type. Distinct meter name from stage-level
+     *  to avoid Prometheus tag-key conflict with {@link #TIMER_LC_CHECK}. */
     public static final String TIMER_CHECK = "lc_checker.check.duration";
     public static final String TIMER_ASSEMBLE = "lc_checker.assemble.duration";
     public static final String COUNTER_LLM_CALLS = "lc_checker.llm.calls";

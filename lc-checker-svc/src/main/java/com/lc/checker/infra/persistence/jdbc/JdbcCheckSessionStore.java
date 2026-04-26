@@ -9,9 +9,8 @@ import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.lc.LcDocument;
 import com.lc.checker.domain.result.LlmTrace;
-import com.lc.checker.domain.result.RuleActivationTrace;
-import com.lc.checker.domain.result.RuleActivationTrace.RuleActivation;
 import com.lc.checker.domain.result.StageTrace;
+import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.domain.session.enums.StageStatus;
@@ -42,8 +41,11 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
 
     private static final String STAGE_LC_PARSE        = "lc_parse";
     private static final String STAGE_INVOICE_EXTRACT = "invoice_extract";
-    private static final String STAGE_RULE_ACTIVATION = "rule_activation";
-    private static final String STAGE_RULE_CHECK      = "rule_check";
+    /**
+     * Stage owning per-rule check rows. Each row's {@code step_key} is the rule id
+     * (e.g. {@code "UCP-18b-amount"}); summary phase rows use {@code "phase:<name>"}.
+     */
+    private static final String STAGE_LC_CHECK        = "lc_check";
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -170,14 +172,13 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
 
             StageTrace lcParsing       = loadLcParse(sessionId);
             StageTrace invoiceExtract  = loadSelectedInvoiceExtract(sessionId);
-            RuleActivationTrace activation = loadActivation(sessionId);
             List<CheckTrace> checks    = loadRuleChecks(sessionId);
             DiscrepancyReport report   = fromJson(header.finalReport(), DiscrepancyReport.class);
 
             return Optional.of(new CheckSession(
                     sessionId, null, null,
                     header.createdAt(), header.completedAt(),
-                    lcParsing, invoiceExtract, activation,
+                    lcParsing, invoiceExtract,
                     checks, report, header.error()));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -230,9 +231,11 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
                 SELECT s.id::text AS id, s.lc_reference, s.beneficiary, s.applicant,
                        s.status, s.compliant, s.created_at, s.completed_at,
                        (SELECT COUNT(*) FROM pipeline_steps
-                          WHERE session_id = s.id AND stage = 'rule_check')      AS rules_run,
+                          WHERE session_id = s.id AND stage = 'lc_check'
+                          AND step_key NOT LIKE 'phase:%')                       AS rules_run,
                        (SELECT COUNT(*) FROM pipeline_steps
-                          WHERE session_id = s.id AND stage = 'rule_check'
+                          WHERE session_id = s.id AND stage = 'lc_check'
+                          AND step_key NOT LIKE 'phase:%'
                           AND status = 'DISCREPANT')                             AS discrepancies
                 FROM   check_sessions s
                 ORDER BY s.created_at DESC
@@ -314,35 +317,14 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
         }
     }
 
-    private RuleActivationTrace loadActivation(String sessionId) {
-        try {
-            return jdbc.queryForObject("""
-                    SELECT duration_ms, result::text AS result
-                    FROM   pipeline_steps
-                    WHERE  session_id = ?::uuid AND stage = ?
-                    ORDER BY started_at DESC
-                    LIMIT 1
-                    """,
-                    (rs, i) -> {
-                        Map<String, Object> resMap = parseObjectMap(rs.getString("result"));
-                        List<RuleActivation> acts = resMap == null ? List.of()
-                                : mapper.convertValue(
-                                        resMap.getOrDefault("activations", List.of()),
-                                        mapper.getTypeFactory().constructCollectionType(List.class, RuleActivation.class));
-                        return new RuleActivationTrace(acts, rs.getLong("duration_ms"));
-                    },
-                    sessionId, STAGE_RULE_ACTIVATION);
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        }
-    }
-
     private List<CheckTrace> loadRuleChecks(String sessionId) {
+        // Filter out the phase:* summary rows — only per-rule outcomes (step_key = rule_id) here.
         return jdbc.query("""
                 SELECT step_key, status, duration_ms, result::text AS result, error
                 FROM   pipeline_steps
                 WHERE  session_id = ?::uuid AND stage = ?
-                ORDER BY (result->>'tier')::int NULLS LAST, step_key
+                  AND  step_key NOT LIKE 'phase:%'
+                ORDER BY started_at, step_key
                 """,
                 (rs, i) -> {
                     Map<String, Object> resMap = parseObjectMap(rs.getString("result"));
@@ -351,14 +333,14 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
                         if (trace != null) return trace;
                     }
                     // Fallback — synthesize minimal CheckTrace from the row.
-                    CheckType ct = resMap == null ? CheckType.A
+                    CheckType ct = resMap == null ? CheckType.PROGRAMMATIC
                             : parseCheckType(String.valueOf(resMap.get("check_type")));
                     CheckStatus st = parseCheckStatus(rs.getString("status"));
                     return new CheckTrace(rs.getString("step_key"), ct, st,
                             Map.of(), null, null,
                             rs.getLong("duration_ms"), rs.getString("error"));
                 },
-                sessionId, STAGE_RULE_CHECK);
+                sessionId, STAGE_LC_CHECK);
     }
 
     // ── JSON helpers ────────────────────────────────────────────────────────
@@ -404,11 +386,50 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
     }
 
     private static CheckType parseCheckType(String s) {
-        if (s == null) return CheckType.A;
+        if (s == null) return CheckType.PROGRAMMATIC;
         try {
             return CheckType.valueOf(s);
         } catch (IllegalArgumentException e) {
-            return CheckType.A;
+            return CheckType.PROGRAMMATIC;
+        }
+    }
+
+    // ── Unified event log (Step 7 envelope) ────────────────────────────────
+
+    @Override
+    public void appendEvent(String sessionId, CheckEvent event) {
+        if (event == null) return;
+        String eventJson = toJson(event);
+        try {
+            jdbc.update("""
+                    INSERT INTO pipeline_events (session_id, seq, event)
+                    VALUES (?::uuid, ?, to_jsonb(?::json))
+                    ON CONFLICT (session_id, seq) DO NOTHING
+                    """,
+                    sessionId, event.seq(), eventJson);
+        } catch (Exception e) {
+            log.warn("appendEvent failed for session={} seq={}: {}",
+                    sessionId, event.seq(), e.getMessage());
+        }
+    }
+
+    @Override
+    public List<CheckEvent> findEvents(String sessionId) {
+        try {
+            return jdbc.query("""
+                    SELECT event::text AS event
+                    FROM   pipeline_events
+                    WHERE  session_id = ?::uuid
+                    ORDER BY seq
+                    """,
+                    (rs, i) -> {
+                        String json = rs.getString("event");
+                        return fromJson(json, CheckEvent.class);
+                    },
+                    sessionId);
+        } catch (Exception e) {
+            log.warn("findEvents failed for session={}: {}", sessionId, e.getMessage());
+            return List.of();
         }
     }
 

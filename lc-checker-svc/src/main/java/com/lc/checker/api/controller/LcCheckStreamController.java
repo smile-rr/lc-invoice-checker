@@ -6,7 +6,6 @@ import com.lc.checker.pipeline.LcCheckPipeline;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
-import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import java.io.IOException;
@@ -111,10 +110,11 @@ public class LcCheckStreamController {
 
         final String sid = sessionId;
         final CheckEventPublisher publisher = bus.publisherFor(sid);
-        publisher.emit(CheckEvent.of(CheckEvent.Type.SESSION_STARTED,
+        publisher.status("session", "started",
+                "Run started for invoice " + (pdfName == null ? "" : pdfName),
                 Map.of("sessionId", sid,
                         "invoiceFilename", pdfName == null ? "" : pdfName,
-                        "invoiceBytes", pdfBytes.length)));
+                        "invoiceBytes", pdfBytes.length));
 
         executor.execute(() -> {
             MDC.put(MdcKeys.SESSION_ID, sid);

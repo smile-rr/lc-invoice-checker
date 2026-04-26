@@ -1,20 +1,20 @@
 package com.lc.checker.stage.check.strategy;
 
-import com.lc.checker.domain.result.CheckResult;
-import com.lc.checker.domain.result.CheckTrace;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.lc.LcDocument;
+import com.lc.checker.domain.result.CheckResult;
+import com.lc.checker.domain.result.CheckTrace;
 import com.lc.checker.domain.rule.Rule;
 import com.lc.checker.domain.rule.enums.CheckType;
-import com.lc.checker.stage.check.CheckExecutor;
 
 /**
- * Common contract for all check strategies (Type A / B / AB). The dispatcher in
- * {@code CheckExecutor} looks up by {@link #type()} and delegates.
+ * Common contract for the two check strategies — {@link ProgrammaticStrategy}
+ * and {@link AgentStrategy}. {@code CheckExecutor} dispatches on
+ * {@link Rule#checkType()}.
  *
- * <p>Every strategy returns both a {@link CheckResult} (decision surface) and a
- * {@link CheckTrace} (forensic surface) — the executor stitches them together into
- * the session record.
+ * <p>Each strategy returns both a {@link CheckResult} (decision surface
+ * consumed by {@code ReportAssembler}) and a {@link CheckTrace} (forensic
+ * surface consumed by {@code /trace}).
  */
 public interface CheckStrategy {
 
@@ -22,7 +22,7 @@ public interface CheckStrategy {
 
     StrategyOutcome execute(Rule rule, LcDocument lc, InvoiceDocument inv);
 
-    /** Two-field tuple: decision + trace. Records everywhere, no builders. */
+    /** Decision + trace tuple. */
     record StrategyOutcome(CheckResult result, CheckTrace trace) {
     }
 }

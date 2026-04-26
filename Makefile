@@ -206,13 +206,65 @@ llm-test:  ## ping local Ollama (model from LOCAL_LLM_VL_MODEL in .env)
 	@ollama ps 2>/dev/null || echo "  (ollama CLI unavailable)"
 
 # --- db (Docker compose) -----------------------------------------------------
+#
+# `make db` will boot the Docker daemon (colima via brew services) on first run
+# and then bring postgres up. After the container is up, it applies any
+# missing schema additions from infra/postgres/init/01-schema.sql against the
+# existing volume — `01-schema.sql` only auto-runs on a *fresh* volume, so new
+# CREATE TABLEs added after the volume was created would otherwise be missed.
 
-db:        ## start Postgres in Docker (background) — postgres://localhost:5432
-	@$(COMPOSE) up -d
+db: _docker-up  ## start Postgres in Docker (background) — postgres://localhost:5432
+	@$(COMPOSE) up -d postgres
 	@echo "✓ db up → postgres://localhost:5432"
+	@$(MAKE) --no-print-directory _db-apply-schema
 
 db-down:   ## stop Postgres (keeps volume)
 	@$(COMPOSE) down
+
+# Boot the Docker daemon if it isn't already responding. On macOS this uses
+# colima (installed via brew). The flow:
+#   1. If `docker ps` already works → done.
+#   2. Else, if `colima status` says it's running, just switch the docker
+#      context to colima (a fresh terminal often defaults to desktop-linux
+#      and finds nothing).
+#   3. Else, start colima via brew services and poll for readiness.
+_docker-up:
+	@if docker ps >/dev/null 2>&1; then \
+	   exit 0; \
+	 fi; \
+	 if ! command -v brew >/dev/null 2>&1; then \
+	   echo "✗ brew not installed — start Docker Desktop manually"; exit 1; \
+	 fi; \
+	 if ! brew list --formula 2>/dev/null | grep -q '^colima$$'; then \
+	   echo "✗ colima not installed — run: brew install colima"; exit 1; \
+	 fi; \
+	 if colima status >/dev/null 2>&1 && docker context inspect colima >/dev/null 2>&1; then \
+	   echo "→ colima is up; switching docker context"; \
+	   docker context use colima >/dev/null; \
+	 else \
+	   echo "→ docker daemon not responding — starting colima via brew"; \
+	   brew services start colima >/dev/null 2>&1 || true; \
+	   docker context use colima >/dev/null 2>&1 || true; \
+	 fi; \
+	 for i in $$(seq 1 60); do \
+	   if docker ps >/dev/null 2>&1; then echo "✓ docker ready (context: $$(docker context show))"; exit 0; fi; \
+	   sleep 2; \
+	 done; \
+	 echo "✗ docker still not responding after 120s"; exit 1
+
+# Idempotent re-application of the init script. CREATE TABLE/INDEX statements
+# in 01-schema.sql use IF NOT EXISTS, and the views all use OR REPLACE, so a
+# second run is safe and only adds new objects (e.g. the pipeline_events
+# table introduced after the original volume was created).
+_db-apply-schema:
+	@for i in $$(seq 1 30); do \
+	   if docker exec lc-checker-postgres pg_isready -U lcuser -d lc_checker >/dev/null 2>&1; then break; fi; \
+	   sleep 1; \
+	 done; \
+	 docker cp infra/postgres/init/01-schema.sql lc-checker-postgres:/tmp/01-schema.sql >/dev/null 2>&1 && \
+	 docker exec lc-checker-postgres psql -q -U lcuser -d lc_checker -f /tmp/01-schema.sql >/dev/null 2>&1 && \
+	   echo "✓ schema applied (idempotent)" || \
+	   echo "⚠ schema apply skipped (db not ready or psql failed)"
 
 # --- svc (Java/Gradle) -------------------------------------------------------
 
@@ -294,7 +346,7 @@ _ui-samples:
 	@cp docs/refer-doc/invoice-3-color-image.pdf $(UI_DIR)/public/samples/invoice-3-color-image.pdf 2>/dev/null || true
 
 .PHONY: help all all-down status health llm-test \
-        db db-down \
+        db db-down _docker-up _db-apply-schema \
         svc svc-down \
         docling docling-down \
         mineru mineru-down \

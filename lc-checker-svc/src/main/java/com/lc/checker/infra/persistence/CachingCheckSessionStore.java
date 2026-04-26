@@ -3,6 +3,7 @@ package com.lc.checker.infra.persistence;
 import com.lc.checker.domain.session.CheckSession;
 import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.infra.persistence.jdbc.JdbcCheckSessionStore;
+import com.lc.checker.infra.stream.CheckEvent;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -87,5 +88,15 @@ public class CachingCheckSessionStore implements CheckSessionStore {
     @Override
     public List<ExtractAttempt> findInvoiceExtracts(String sessionId) {
         return l2.findInvoiceExtracts(sessionId);
+    }
+
+    @Override
+    public void appendEvent(String sessionId, CheckEvent event) {
+        l2.appendEvent(sessionId, event);
+    }
+
+    @Override
+    public List<CheckEvent> findEvents(String sessionId) {
+        return l2.findEvents(sessionId);
     }
 }

@@ -8,8 +8,7 @@ import { SessionStrip } from '../components/shell/SessionStrip';
 import { useStep } from '../components/shell/steps';
 import { LcAuditTab } from '../components/tabs/LcAuditTab';
 import { InvoiceAuditTab } from '../components/tabs/InvoiceAuditTab';
-import { CompareTab } from '../components/tabs/CompareTab';
-import { RuleChecksTab } from '../components/tabs/RuleChecksTab';
+import { ComplianceCheckPanel } from '../components/check/ComplianceCheckPanel';
 import { ReviewTab } from '../components/tabs/ReviewTab';
 import { UploadStep } from '../components/upload/UploadStep';
 
@@ -38,15 +37,14 @@ export function SessionPage() {
     return <div className="p-6 text-status-red">Missing session id</div>;
   }
 
+  // App-shell layout: SessionStrip + PipelineFlow are fixed at top; the active
+  // step body fills the remaining viewport and provides its OWN scroll context.
+  // Compliance Check needs this so the sidebar stays anchored while the rule
+  // list scrolls inside the panel — not the document. Other steps wrap their
+  // body in an internal scroller so behaviour is uniform.
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-screen overflow-hidden">
       <SessionStrip state={state} onOpenTrace={() => setShowTrace(true)} />
-      {/* Always show the current session's pipeline statuses, even when the
-          operator is browsing Step 0 to set up a new run. The fresh "all
-          pending" view only appears once they actually start a new session
-          (which navigates to /session/<new-id> and remounts this component
-          with empty state). Resetting earlier would erase the result they
-          haven't yet committed to discarding. */}
       <PipelineFlow
         state={state}
         active={step}
@@ -55,7 +53,7 @@ export function SessionPage() {
       />
 
       {state.error && (
-        <div className="mx-8 my-4 rounded-card bg-status-redSoft border border-status-red/30 p-4">
+        <div className="mx-8 my-4 rounded-card bg-status-redSoft border border-status-red/30 p-4 shrink-0">
           <div className="font-semibold text-status-red">Pipeline error</div>
           <div className="text-sm mt-1">
             {state.error.stage && (
@@ -66,30 +64,22 @@ export function SessionPage() {
         </div>
       )}
 
-
-      <div className="flex-1">
-        {step === 'upload' && <UploadStep primaryRunCta={true} />}
-        {step === 'lc' && <LcAuditTab sessionId={sessionId} lc={state.lc} />}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {step === 'upload' && <Scrollable><UploadStep primaryRunCta={true} /></Scrollable>}
+        {step === 'lc' && <Scrollable><LcAuditTab sessionId={sessionId} lc={state.lc} /></Scrollable>}
         {step === 'invoice' && (
-          <InvoiceAuditTab sessionId={sessionId} invoice={state.invoice} />
+          <Scrollable><InvoiceAuditTab sessionId={sessionId} invoice={state.invoice} /></Scrollable>
         )}
-        {step === 'compare' && (
-          <CompareTab lc={state.lc} invoice={state.invoice} checks={state.checks} />
-        )}
-        {step === 'rules' && (
-          <RuleChecksTab
-            checks={state.checks}
-            inFlightRuleIds={state.inFlightRuleIds}
-            activatedRuleIds={state.activatedRuleIds}
-          />
-        )}
+        {step === 'check' && <ComplianceCheckPanel state={state} />}
         {step === 'review' && (
-          <ReviewTab
-            lc={state.lc}
-            invoice={state.invoice}
-            checks={state.checks}
-            report={state.report}
-          />
+          <Scrollable>
+            <ReviewTab
+              lc={state.lc}
+              invoice={state.invoice}
+              checks={state.checks}
+              report={state.report}
+            />
+          </Scrollable>
         )}
       </div>
 
@@ -98,4 +88,9 @@ export function SessionPage() {
       )}
     </div>
   );
+}
+
+/** Wraps a step body in its own y-scroll so the page chrome stays fixed. */
+function Scrollable({ children }: { children: React.ReactNode }) {
+  return <div className="h-full overflow-y-auto">{children}</div>;
 }

@@ -6,28 +6,20 @@ import io.swagger.v3.oas.annotations.info.Info;
 import io.swagger.v3.oas.annotations.servers.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import com.lc.checker.domain.result.DiscrepancyReport;
-import com.lc.checker.stage.activate.RuleActivator;
-import com.lc.checker.stage.assemble.ReportAssembler;
-import com.lc.checker.stage.check.CheckExecutor;
-import com.lc.checker.stage.extract.InvoiceExtractionOrchestrator;
-import com.lc.checker.stage.parse.Mt700Parser;
-
 /**
  * Entry point for the LC Invoice Checker API.
  *
- * <p>Pipeline (see docs/refer-doc/logic-flow.md):
+ * <p>Pipeline:
  * <ol>
- *   <li>Stage 1a — Mt700Parser (pure regex, no LLM)</li>
- *   <li>Stage 1b — InvoiceExtractionOrchestrator (multi-source: vision / docling / mineru)</li>
- *   <li>Stage 2  — RuleActivator (catalog-driven activation)</li>
- *   <li>Stage 3  — CheckExecutor Tier 1 (Type A) → Tier 2 (Type B) → Tier 3 (Type AB)</li>
- *   <li>Stage 4  — Holistic sweep (designed, executor deferred)</li>
- *   <li>Stage 5  — ReportAssembler (DiscrepancyReport JSON)</li>
+ *   <li>Stage 1a — Mt700Parser (regex; no LLM)</li>
+ *   <li>Stage 1b — InvoiceExtractionOrchestrator (vision / docling / mineru)</li>
+ *   <li>Stage 2  — ProgrammaticChecksStage (deterministic SpEL rules)</li>
+ *   <li>Stage 3  — AgentChecksStage (one LLM call per AGENT rule)</li>
+ *   <li>Stage 4  — ReportAssembler (DiscrepancyReport JSON)</li>
  * </ol>
  *
- * <p>Session storage: L1 Caffeine (in-process cache) + L2 PostgreSQL
- * (unified {@code pipeline_steps} table, progressive recording via JDBC Template).
+ * <p>Session storage: L1 Caffeine + L2 PostgreSQL (unified {@code pipeline_steps}
+ * table, progressive recording via JDBC Template).
  */
 @SpringBootApplication
 @OpenAPIDefinition(

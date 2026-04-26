@@ -13,6 +13,14 @@ public record Summary(
         int passed,
         int discrepant,
         int unableToVerify,
-        int notApplicable
+        int notApplicable,
+        /**
+         * Items that the Layer-3 Holistic Sweep agent flagged for human review.
+         * These never count as DISCREPANT — a bank cannot reject a presentation
+         * on an unaudited LLM finding (Art 16 protocol). Surfaced separately so
+         * the officer sees what the AI flagged without conflating it with hard
+         * deterministic failures.
+         */
+        int requiresHumanReview
 ) {
 }

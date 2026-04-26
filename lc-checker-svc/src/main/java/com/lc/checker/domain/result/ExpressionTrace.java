@@ -5,14 +5,11 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import com.lc.checker.stage.check.strategy.TypeABStrategy;
-import com.lc.checker.stage.check.strategy.TypeAStrategy;
-
 /**
  * Deterministic-strategy forensic record: the SpEL expression evaluated, the bound
  * variables at evaluation time, and the final result. Captured by
- * {@code TypeAStrategy} / {@code TypeABStrategy} so a reviewer (or the V2 HTML UI)
- * can see exactly <em>why</em> a Type-A rule passed or failed.
+ * {@code ProgrammaticStrategy} so a reviewer can see exactly <em>why</em>
+ * a deterministic rule passed or failed.
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record ExpressionTrace(

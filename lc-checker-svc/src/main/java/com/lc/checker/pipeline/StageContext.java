@@ -5,9 +5,7 @@ import com.lc.checker.domain.lc.LcDocument;
 import com.lc.checker.domain.result.CheckResult;
 import com.lc.checker.domain.result.CheckTrace;
 import com.lc.checker.domain.result.DiscrepancyReport;
-import com.lc.checker.domain.result.RuleActivationTrace;
 import com.lc.checker.domain.result.StageTrace;
-import com.lc.checker.domain.rule.Rule;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,9 +31,6 @@ public final class StageContext {
 
     public InvoiceDocument invoice;
     public StageTrace invoiceExtractTrace;
-
-    public RuleActivationTrace activationTrace;
-    public List<Rule> activeRules;
 
     public final List<CheckResult> checkResults = new ArrayList<>();
     public final List<CheckTrace> checkTraces = new ArrayList<>();

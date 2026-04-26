@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.lc.checker.domain.session.CheckSession;
 import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.domain.invoice.InvoiceDocument;
+import com.lc.checker.infra.stream.CheckEvent;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -21,10 +22,15 @@ import java.util.Optional;
  * </ul>
  *
  * <p>Level-1 {@code stage} values: {@code lc_parse}, {@code invoice_extract},
- * {@code rule_activation}, {@code rule_check}, {@code holistic_sweep}.
- * Level-2 {@code stepKey} distinguishes multiple steps inside one stage
- * (invoice source, rule id, sweep pass number). Use {@code "-"} when the
- * stage has no sub-steps.
+ * {@code lc_check}, {@code report_assembly}.
+ * Level-2 {@code stepKey} distinguishes multiple steps inside one stage:
+ * <ul>
+ *   <li>{@code invoice_extract}: source name (vision / docling / mineru)</li>
+ *   <li>{@code lc_check}: {@code "phase:<name>"} for phase summaries
+ *       (activation / parties / money / goods / logistics / procedural / holistic)
+ *       OR rule id (e.g. {@code "INV-011"}) for per-rule outcomes</li>
+ *   <li>everything else: {@code "-"}</li>
+ * </ul>
  */
 public interface CheckSessionStore {
 
@@ -48,9 +54,8 @@ public interface CheckSessionStore {
     /**
      * Upsert a pipeline-step row. Idempotent on {@code (sessionId, stage, stepKey)}.
      *
-     * @param stage        level-1 stage — {@code lc_parse | invoice_extract |
-     *                     rule_activation | rule_check | holistic_sweep}
-     * @param stepKey      level-2 step key — source name / rule id / pass number /
+     * @param stage        level-1 stage — {@code lc_parse | invoice_extract | lc_check | report_assembly}
+     * @param stepKey      level-2 step key — source name / rule id / {@code "phase:<name>"} /
      *                     {@code "-"} when not applicable
      * @param status       SUCCESS / FAILED / PASS / DISCREPANT / UNABLE_TO_VERIFY /
      *                     NOT_APPLICABLE / REQUIRES_HUMAN_REVIEW / SKIPPED
@@ -123,6 +128,23 @@ public interface CheckSessionStore {
             String error) {}
 
     default List<ExtractAttempt> findInvoiceExtracts(String sessionId) {
+        return List.of();
+    }
+
+    // ── Unified event log ──────────────────────────────────────────────────
+
+    /**
+     * Append one envelope event to the session's append-only event log. Called
+     * by {@code CheckEventBus} on every emission so the {@code /trace} API can
+     * replay the full sequence, even after the in-memory ring buffer rolls.
+     * Default impl is a no-op for tests / pure-cache stores.
+     */
+    default void appendEvent(String sessionId, CheckEvent event) {
+        // no-op in non-persistent stores
+    }
+
+    /** Returns all events for a session, in seq order. Empty if unknown session. */
+    default List<CheckEvent> findEvents(String sessionId) {
         return List.of();
     }
 }

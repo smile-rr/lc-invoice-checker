@@ -10,12 +10,6 @@ interface Props {
 
 type Decision = 'pending' | 'approve' | 'amend' | 'reject';
 
-/**
- * Step 5 — consolidated review. Single-page deliverable that an officer can
- * scan, annotate, and print/PDF-export. State is intentionally local (note
- * + decision) — V1 doesn't persist sign-off; the case management system
- * remains the system of record.
- */
 export function ReviewTab({ lc, invoice, checks, report }: Props) {
   const [note, setNote] = useState('');
   const [decision, setDecision] = useState<Decision>('pending');
@@ -23,7 +17,7 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
   if (!report) {
     return (
       <div className="px-8 py-12 text-center">
-        <div className="font-serif text-xl text-navy-1 mb-1 animate-pulse">
+        <div className="font-sans text-lg font-semibold text-navy-1 mb-1 animate-pulse">
           Pipeline still running…
         </div>
         <div className="text-sm text-muted">
@@ -44,36 +38,36 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
 
   return (
     <div className="px-6 py-6">
-      <div className="review-print max-w-[1100px] mx-auto bg-paper rounded-card border border-line">
+      <div className="review-print max-w-[1100px] mx-auto bg-paper rounded-card border border-line shadow-sm">
         {/* Title bar */}
         <div className="px-6 py-4 border-b border-line flex items-center gap-3">
-          <h2 className="font-serif text-2xl text-navy-1">Review &amp; sign-off</h2>
+          <h2 className="font-sans text-xl font-semibold text-navy-1">Review &amp; Sign-off</h2>
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={() => window.print()}
-              className="text-xs px-3 py-1.5 rounded-btn border border-line hover:border-teal-2"
+              className="text-xs px-3 py-1.5 rounded-btn border border-line text-muted hover:border-teal-2 hover:text-navy-1 transition-colors"
             >
-              📄 Export PDF
+              Export PDF
             </button>
           </div>
         </div>
 
         {/* Two-card summary */}
         <div className="grid grid-cols-2 gap-px bg-line">
-          <SummaryCard title="LC Summary" body={lcSummary(lc)} />
+          <SummaryCard title="LC Summary"      body={lcSummary(lc)} />
           <SummaryCard title="Invoice Summary" body={invoiceSummary(invoice)} />
         </div>
 
         {/* Verdict band */}
         <div
           className={[
-            'px-6 py-3 border-b border-line flex items-center gap-4',
+            'px-6 py-4 border-b border-line flex items-center gap-4',
             report.compliant ? 'bg-status-greenSoft' : 'bg-status-redSoft',
           ].join(' ')}
         >
           <span
             className={[
-              'px-3 py-1 rounded font-mono text-[12px] font-bold',
+              'px-3 py-1.5 rounded font-mono text-[12px] font-bold',
               report.compliant
                 ? 'bg-status-green text-white'
                 : 'bg-status-red text-white',
@@ -99,33 +93,40 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
         {/* Discrepancies */}
         {discs.length > 0 && (
           <Section title="Discrepancies">
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {discs.map((c) => {
                 const refs = [c.ucp_ref, c.isbp_ref].filter(Boolean).join(' · ');
                 return (
                   <li
                     key={c.rule_id}
-                    className="border-l-4 border-l-status-red pl-3 py-1"
+                    className="border-l-4 border-l-status-red pl-4 py-2 bg-status-redSoft/20 rounded-r-sm"
                   >
                     <div className="flex items-baseline gap-3">
-                      <span className="font-mono text-[11px] text-muted w-20 shrink-0">
+                      {/* Rule ID — monospace (it's a code), 12px minimum */}
+                      <span className="font-mono text-xs text-muted shrink-0 w-24">
                         {c.rule_id}
                       </span>
-                      <span className="text-sm text-navy-1 flex-1">
+                      {/* Rule name — sans-serif, 14px */}
+                      <span className="font-sans text-sm font-medium text-navy-1 flex-1">
                         {c.rule_name ?? c.description}
                       </span>
                       {c.severity && (
-                        <span className="font-mono text-[9px] uppercase text-status-red">
+                        /* Severity — was 9px (unreadable), now 11px minimum */
+                        <span className="font-mono text-[11px] uppercase tracking-[0.08em] font-semibold text-status-red shrink-0">
                           {c.severity}
                         </span>
                       )}
                     </div>
-                    <div className="ml-[92px] mt-1 text-xs font-mono text-muted flex items-baseline gap-3 flex-wrap">
-                      <span>
-                        LC: {c.lc_value ?? '—'} · INV: {c.presented_value ?? '—'}
-                      </span>
+                    {/* Description — the most important text, give it room */}
+                    {c.description && c.rule_name && (
+                      <div className="ml-[6.5rem] mt-1.5 font-sans text-sm text-navy-1 leading-relaxed">
+                        {c.description}
+                      </div>
+                    )}
+                    <div className="ml-[6.5rem] mt-1.5 font-mono text-xs text-muted flex items-baseline gap-3 flex-wrap">
+                      <span>LC: {c.lc_value ?? '—'} · INV: {c.presented_value ?? '—'}</span>
                       {refs && (
-                        <span className="text-status-red/70">{refs}</span>
+                        <span className="text-status-red">{refs}</span>
                       )}
                     </div>
                   </li>
@@ -135,41 +136,41 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
           </Section>
         )}
 
-        {/* Unable to verify (only if any) */}
+        {/* Unable to verify */}
         {unverified.length > 0 && (
           <Section title="Unable to verify">
-            <ul className="space-y-1">
+            <ul className="space-y-2">
               {unverified.map((c) => (
                 <li key={c.rule_id} className="flex items-baseline gap-3 text-sm">
-                  <span className="font-mono text-[11px] text-muted w-20 shrink-0">
+                  <span className="font-mono text-xs text-muted shrink-0 w-24">
                     {c.rule_id}
                   </span>
-                  <span>{c.rule_name ?? c.description}</span>
+                  <span className="font-sans text-sm text-navy-1">{c.rule_name ?? c.description}</span>
                 </li>
               ))}
             </ul>
           </Section>
         )}
 
-        {/* Passed (collapsed) */}
+        {/* Passed checks (collapsed) */}
         {passes.length > 0 && (
           <details className="border-t border-line">
-            <summary className="px-6 py-3 cursor-pointer text-sm hover:bg-slate2 select-none">
-              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted mr-3">
+            <summary className="px-6 py-3 cursor-pointer text-sm hover:bg-slate2 select-none flex items-center gap-3">
+              <span className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted">
                 Passed checks
               </span>
-              <span className="text-status-green font-mono">{passes.length}</span>
+              <span className="font-mono font-semibold text-status-green">{passes.length}</span>
             </summary>
             <div className="px-6 pb-4">
-              <ul className="space-y-1 grid grid-cols-2 gap-x-4">
+              <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
                 {passes.map((c) => (
                   <li
                     key={c.rule_id}
-                    className="flex items-baseline gap-2 text-xs font-mono text-muted"
+                    className="flex items-baseline gap-2 text-xs"
                   >
-                    <span className="text-status-green">✓</span>
-                    <span className="text-muted">{c.rule_id}</span>
-                    <span className="text-navy-1 truncate">{c.rule_name}</span>
+                    <span className="text-status-green font-semibold">✓</span>
+                    <span className="font-mono text-muted">{c.rule_id}</span>
+                    <span className="font-sans text-navy-1 truncate">{c.rule_name}</span>
                   </li>
                 ))}
               </ul>
@@ -184,36 +185,18 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
             onChange={(e) => setNote(e.target.value)}
             placeholder="Add reviewer commentary (kept local — V1 does not persist this)…"
             rows={4}
-            className="w-full text-sm px-3 py-2 rounded border border-line bg-paper focus:border-teal-2 focus:outline-none font-sans"
+            className="w-full text-sm px-3 py-2.5 rounded border border-line bg-paper focus:border-teal-2 focus:outline-none font-sans text-navy-1 placeholder:text-muted"
           />
         </Section>
 
         {/* Decision */}
         <Section title="Decision">
           <div className="flex flex-wrap items-center gap-4">
-            <DecisionRadio
-              value="approve"
-              current={decision}
-              onPick={setDecision}
-              label="Approve"
-              tone="green"
-            />
-            <DecisionRadio
-              value="amend"
-              current={decision}
-              onPick={setDecision}
-              label="Request amendment"
-              tone="gold"
-            />
-            <DecisionRadio
-              value="reject"
-              current={decision}
-              onPick={setDecision}
-              label="Reject"
-              tone="red"
-            />
+            <DecisionRadio value="approve" current={decision} onPick={setDecision} label="Approve"           tone="green" />
+            <DecisionRadio value="amend"   current={decision} onPick={setDecision} label="Request amendment" tone="gold"  />
+            <DecisionRadio value="reject"  current={decision} onPick={setDecision} label="Reject"            tone="red"   />
             <div className="flex-1" />
-            <div className="text-xs text-muted font-mono">
+            <div className="font-mono text-xs text-muted">
               Reviewed: __________________ · {new Date().toISOString().slice(0, 10)}
             </div>
           </div>
@@ -227,8 +210,11 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="px-6 py-4 border-t border-line">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-muted mb-3">{title}</div>
+    <div className="px-6 py-5 border-t border-line">
+      {/* Section label — 11px sans, not mono; less aggressive tracking */}
+      <div className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted mb-3">
+        {title}
+      </div>
       {children}
     </div>
   );
@@ -237,8 +223,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function SummaryCard({ title, body }: { title: string; body: React.ReactNode }) {
   return (
     <div className="bg-paper p-5">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-muted mb-3">{title}</div>
-      <div className="space-y-1.5 text-sm font-mono">{body}</div>
+      <div className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted mb-3">
+        {title}
+      </div>
+      <div className="space-y-2 text-sm">{body}</div>
     </div>
   );
 }
@@ -247,20 +235,13 @@ function lcSummary(lc: LcDocument | undefined): React.ReactNode {
   if (!lc) return <span className="text-muted italic">unavailable</span>;
   return (
     <>
-      <KV label="LC No." value={lc.lc_number} />
-      <KV
-        label="Amount"
-        value={
-          lc.currency && lc.amount != null
-            ? `${lc.currency} ${fmtNum(lc.amount)} (+${lc.tolerance_plus}/-${lc.tolerance_minus}%)`
-            : null
-        }
-      />
-      <KV label="Beneficiary" value={lc.beneficiary_name} />
-      <KV label="Applicant" value={lc.applicant_name} />
-      <KV label="Expiry" value={lc.expiry_date && lc.expiry_place ? `${lc.expiry_date} ${lc.expiry_place}` : lc.expiry_date} />
-      <KV label="Latest shipment" value={lc.latest_shipment_date} />
-      <KV label="Loading / Discharge" value={lc.port_of_loading && lc.port_of_discharge ? `${lc.port_of_loading} → ${lc.port_of_discharge}` : null} />
+      <KV label="LC No."            value={lc.lc_number} />
+      <KV label="Amount"            value={lc.currency && lc.amount != null ? `${lc.currency} ${fmtNum(lc.amount)} (+${lc.tolerance_plus}/-${lc.tolerance_minus}%)` : null} />
+      <KV label="Beneficiary"       value={lc.beneficiary_name} />
+      <KV label="Applicant"         value={lc.applicant_name} />
+      <KV label="Expiry"            value={lc.expiry_date && lc.expiry_place ? `${lc.expiry_date} ${lc.expiry_place}` : lc.expiry_date} />
+      <KV label="Latest shipment"   value={lc.latest_shipment_date} />
+      <KV label="Loading/Discharge" value={lc.port_of_loading && lc.port_of_discharge ? `${lc.port_of_loading} → ${lc.port_of_discharge}` : null} />
     </>
   );
 }
@@ -269,29 +250,13 @@ function invoiceSummary(inv: InvoiceDocument | undefined): React.ReactNode {
   if (!inv) return <span className="text-muted italic">unavailable</span>;
   return (
     <>
-      <KV label="Invoice No." value={inv.invoice_number} />
-      <KV label="Issued" value={inv.invoice_date} />
-      <KV label="Seller" value={inv.seller_name} />
-      <KV label="Buyer" value={inv.buyer_name} />
-      <KV
-        label="Goods"
-        value={
-          inv.goods_description
-            ? inv.goods_description.length > 60
-              ? inv.goods_description.slice(0, 57) + '…'
-              : inv.goods_description
-            : null
-        }
-      />
-      <KV
-        label="Total"
-        value={
-          inv.total_amount != null && inv.currency
-            ? `${inv.currency} ${fmtNum(inv.total_amount)}`
-            : null
-        }
-      />
-      <KV label="Trade terms" value={inv.trade_terms} />
+      <KV label="Invoice No."  value={inv.invoice_number} />
+      <KV label="Issued"       value={inv.invoice_date} />
+      <KV label="Seller"       value={inv.seller_name} />
+      <KV label="Buyer"        value={inv.buyer_name} />
+      <KV label="Goods"        value={inv.goods_description ? inv.goods_description.length > 60 ? inv.goods_description.slice(0, 57) + '…' : inv.goods_description : null} />
+      <KV label="Total"        value={inv.total_amount != null && inv.currency ? `${inv.currency} ${fmtNum(inv.total_amount)}` : null} />
+      <KV label="Trade terms"  value={inv.trade_terms} />
       <KV label="LC ref on inv" value={inv.lc_reference} />
     </>
   );
@@ -300,9 +265,10 @@ function invoiceSummary(inv: InvoiceDocument | undefined): React.ReactNode {
 function KV({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div className="flex items-baseline gap-3">
-      <span className="text-[11px] text-muted w-32 shrink-0">{label}</span>
-      <span className="text-navy-1 break-words min-w-0">
-        {value ?? <em className="text-muted italic">—</em>}
+      {/* Label — 12px (text-xs) minimum, solid muted colour, no opacity reduction */}
+      <span className="font-sans text-xs text-muted w-32 shrink-0">{label}</span>
+      <span className="font-sans text-sm text-navy-1 break-words min-w-0">
+        {value ?? <em className="text-muted italic not-italic">—</em>}
       </span>
     </div>
   );
@@ -323,15 +289,15 @@ function DecisionRadio({
 }) {
   const on = current === value;
   const toneCls: Record<string, string> = {
-    green: on ? 'bg-status-greenSoft border-status-green text-status-green' : '',
-    gold:  on ? 'bg-status-goldSoft  border-status-gold  text-status-gold'  : '',
-    red:   on ? 'bg-status-redSoft   border-status-red   text-status-red'   : '',
+    green: on ? 'bg-status-greenSoft border-status-green text-status-green font-semibold' : '',
+    gold:  on ? 'bg-status-goldSoft  border-status-gold  text-status-gold  font-semibold' : '',
+    red:   on ? 'bg-status-redSoft   border-status-red   text-status-red   font-semibold' : '',
   };
   return (
     <button
       onClick={() => onPick(value)}
       className={[
-        'px-3 py-1.5 rounded-btn text-sm border transition',
+        'px-4 py-2 rounded-btn text-sm border transition',
         on ? toneCls[tone] : 'border-line text-navy-1 hover:border-teal-2',
       ].join(' ')}
     >

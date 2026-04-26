@@ -1,26 +1,18 @@
 import { useEffect, useRef } from 'react';
-import type { CheckEvent, CheckEventType } from '../types';
+import type { Event } from '../types';
 
-const EVENT_TYPES: CheckEventType[] = [
-  'session.started',
-  'stage.started',
-  'stage.completed',
-  'check.started',
-  'check.completed',
-  'extract.source.started',
-  'extract.source.completed',
-  'report.complete',
-  'error',
-];
+const EVENT_NAMES: Array<Event['type']> = ['status', 'rule', 'error', 'complete'];
 
 /**
- * Subscribes to the SSE stream for a session and dispatches every event to the
- * supplied handler. Reconnects are not attempted — the backend bus buffers
- * recent events so a manual remount will replay history.
+ * Subscribe to the unified SSE stream for a session. Every message arrives as
+ * one {@link Event}; the consumer's reducer decides what to do with it.
+ *
+ * <p>Reconnects are not attempted — the backend buffers recent events and the
+ * trace API replays the full history, so a manual remount restores state.
  */
 export function useSseEvents(
   sessionId: string | null,
-  onEvent: (e: CheckEvent) => void,
+  onEvent: (e: Event) => void,
 ) {
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
@@ -30,22 +22,21 @@ export function useSseEvents(
     const url = `/api/v1/lc-check/${sessionId}/stream`;
     const es = new EventSource(url);
 
-    const listeners: Array<[CheckEventType, (e: MessageEvent) => void]> = [];
-    for (const type of EVENT_TYPES) {
+    const listeners: Array<[string, (e: MessageEvent) => void]> = [];
+    for (const name of EVENT_NAMES) {
       const listener = (ev: MessageEvent) => {
         try {
-          const data = JSON.parse(ev.data);
-          handlerRef.current({ ...data, type });
+          const data = JSON.parse(ev.data) as Event;
+          handlerRef.current(data);
         } catch (e) {
           // eslint-disable-next-line no-console
-          console.error('SSE parse error', type, e);
+          console.error('SSE parse error', name, e);
         }
       };
-      es.addEventListener(type, listener as EventListener);
-      listeners.push([type, listener]);
+      es.addEventListener(name, listener as EventListener);
+      listeners.push([name, listener]);
     }
     es.onerror = () => {
-      // readyState CLOSED ⇒ backend completed the stream normally. Don't retry.
       if (es.readyState === EventSource.CLOSED) return;
     };
 

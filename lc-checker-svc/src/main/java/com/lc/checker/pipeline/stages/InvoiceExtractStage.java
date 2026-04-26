@@ -5,14 +5,12 @@ import com.lc.checker.domain.result.StageTrace;
 import com.lc.checker.domain.session.enums.StageStatus;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.observability.PipelineMetrics;
-import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.pipeline.PipelineErrorHandler;
 import com.lc.checker.pipeline.Stage;
 import com.lc.checker.pipeline.StageContext;
 import com.lc.checker.stage.extract.InvoiceExtractionOrchestrator;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -47,7 +45,7 @@ public class InvoiceExtractStage implements Stage {
     @Override
     public void execute(StageContext ctx) {
         long t0 = System.currentTimeMillis();
-        ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_STARTED, name(), null));
+        ctx.publisher.status(name(), "started", "Extracting invoice fields");
         try {
             MDC.put(MdcKeys.STAGE, name());
             InvoiceDocument inv = extractionOrchestrator.runAndPersist(
@@ -57,15 +55,14 @@ public class InvoiceExtractStage implements Stage {
             ctx.invoiceExtractTrace = new StageTrace(name(), StageStatus.SUCCESS,
                     Instant.now(), dur, inv, List.of(), null);
             metrics.recordStage(PipelineMetrics.TIMER_EXTRACT, dur, "success");
-            ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_COMPLETED, name(),
-                    Map.of("durationMs", dur, "output", inv)));
+            ctx.publisher.status(name(), "completed",
+                    "Invoice extracted via " + extractionOrchestrator.lastUsedSource(), inv);
             log.debug("Stage 1b complete: invoice_extract selected={}",
                     extractionOrchestrator.lastUsedSource());
         } catch (RuntimeException e) {
             long dur = System.currentTimeMillis() - t0;
             metrics.recordStage(PipelineMetrics.TIMER_EXTRACT, dur, "failed");
-            ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.ERROR, name(),
-                    Map.of("message", String.valueOf(e.getMessage()))));
+            ctx.publisher.error(name(), String.valueOf(e.getMessage()));
             errorHandler.onStageFailure(ctx.sessionId, name(), e);
             throw e;
         } finally {

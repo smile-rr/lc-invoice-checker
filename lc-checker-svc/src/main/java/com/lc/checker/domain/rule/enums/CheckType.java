@@ -1,22 +1,11 @@
 package com.lc.checker.domain.rule.enums;
 
-import com.lc.checker.stage.check.spi.RuleImpl;
-
 /**
- * Dispatch discriminator for the three check strategies defined in the plan (§ Check Execution).
- *
- * <ul>
- *   <li>{@link #A} — pure deterministic code / SpEL expression, no LLM.</li>
- *   <li>{@link #B} — semantic check executed via prompt template + ChatClient.</li>
- *   <li>{@link #AB} — deterministic pre-gate followed by semantic confirmation.</li>
- *   <li>{@link #SPI} — escape hatch: a {@code @RuleImpl(id)} bean handles this rule in Java.
- *       V1 uses zero SPI rules; the value exists so the catalog loader and dispatcher
- *       do not need to change when the first exotic rule arrives.</li>
- * </ul>
+ * Two-type rule engine. Every rule is either deterministic (PROGRAMMATIC) or
+ * resolved by an LLM agent (AGENT). The agent handles applicability
+ * (replaces the old activation gate) and verdict in one round-trip.
  */
 public enum CheckType {
-    A,
-    B,
-    AB,
-    SPI
+    PROGRAMMATIC,
+    AGENT
 }

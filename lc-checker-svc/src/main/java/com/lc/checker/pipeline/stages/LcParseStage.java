@@ -6,7 +6,6 @@ import com.lc.checker.domain.session.enums.StageStatus;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.observability.PipelineMetrics;
 import com.lc.checker.infra.persistence.CheckSessionStore;
-import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.pipeline.Stage;
 import com.lc.checker.pipeline.StageContext;
 import com.lc.checker.stage.parse.Mt700Parser;
@@ -49,7 +48,7 @@ public class LcParseStage implements Stage {
     @Override
     public void execute(StageContext ctx) {
         long t0 = System.currentTimeMillis();
-        ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_STARTED, name(), null));
+        ctx.publisher.status(name(), "started", "Parsing MT700");
         try {
             MDC.put(MdcKeys.STAGE, name());
             LcDocument lc = parser.parse(ctx.lcText);
@@ -58,14 +57,13 @@ public class LcParseStage implements Stage {
             ctx.lcParseTrace = new StageTrace(name(), StageStatus.SUCCESS,
                     Instant.now(), dur, lc, List.of(), null);
             metrics.recordStage(PipelineMetrics.TIMER_PARSE, dur, "success");
-            ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.STAGE_COMPLETED, name(),
-                    Map.of("durationMs", dur, "output", lc)));
+            ctx.publisher.status(name(), "completed",
+                    "MT700 parsed (LC " + lc.lcNumber() + ")", lc);
         } catch (RuntimeException e) {
             long dur = System.currentTimeMillis() - t0;
             metrics.recordStage(PipelineMetrics.TIMER_PARSE, dur, "failed");
             log.error("Stage 1a (lc_parse) failed before session persistence: {}", e.getMessage());
-            ctx.publisher.emit(CheckEvent.ofStage(CheckEvent.Type.ERROR, name(),
-                    Map.of("message", String.valueOf(e.getMessage()))));
+            ctx.publisher.error(name(), String.valueOf(e.getMessage()));
             throw e;
         } finally {
             MDC.remove(MdcKeys.STAGE);

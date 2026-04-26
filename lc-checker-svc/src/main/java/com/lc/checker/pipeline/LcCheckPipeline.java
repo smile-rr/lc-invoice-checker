@@ -4,15 +4,13 @@ import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.domain.result.Summary;
 import com.lc.checker.domain.session.CheckSession;
 import com.lc.checker.infra.persistence.CheckSessionStore;
-import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import com.lc.checker.infra.validation.InputValidator;
-import com.lc.checker.pipeline.stages.CheckExecutionStage;
-import com.lc.checker.pipeline.stages.HolisticSweepStage;
+import com.lc.checker.pipeline.stages.AgentChecksStage;
 import com.lc.checker.pipeline.stages.InvoiceExtractStage;
 import com.lc.checker.pipeline.stages.LcParseStage;
+import com.lc.checker.pipeline.stages.ProgrammaticChecksStage;
 import com.lc.checker.pipeline.stages.ReportAssemblyStage;
-import com.lc.checker.pipeline.stages.RuleActivationStage;
 import java.time.Instant;
 import java.util.List;
 import org.slf4j.Logger;
@@ -31,12 +29,17 @@ import org.springframework.stereotype.Service;
  * │   Stage 0   ─ Input validation       (no session row yet)           │
  * │   Stage 1a  ─ lc_parse               MT700 SWIFT regex parse        │
  * │   Stage 1b  ─ invoice_extract        PDF → InvoiceDocument          │
- * │   Stage 2   ─ rule_activation        catalog → active rule list     │
- * │   Stage 3   ─ rule_check             Tier 1 (A) / 2 (B) / 3 (AB)    │
- * │   Stage 4   ─ holistic_sweep         (V1: no-op placeholder)        │
- * │   Stage 5   ─ report_assembly        DiscrepancyReport + finalize   │
+ * │   Stage 2   ─ lc_check               Activation → 5 business phases │
+ * │                                      → holistic sweep (slice 4)     │
+ * │   Stage 3   ─ report_assembly        DiscrepancyReport + finalize   │
  * └─────────────────────────────────────────────────────────────────────┘
  * </pre>
+ *
+ * <p>The merged {@code lc_check} stage replaces the former three (rule_activation,
+ * rule_check, holistic_sweep). It emits {@code PHASE_*} sub-events around each
+ * business phase the banker walks (parties / money / goods / logistics /
+ * procedural / holistic) — the UI renders these as a vertical phase stepper inside
+ * one Compliance Check card.
  *
  * <p><b>Controlling the flow (debug only)</b><br>
  * Insert {@code .endHere()} between any two {@code .then(...)} lines in the
@@ -60,28 +63,20 @@ public class LcCheckPipeline {
 
     public LcCheckPipeline(InputValidator validator,
                            CheckSessionStore store,
-                           LcParseStage         lcParse,
-                           InvoiceExtractStage  invoiceExtract,
-                           RuleActivationStage  ruleActivation,
-                           CheckExecutionStage  ruleCheck,
-                           HolisticSweepStage   holisticSweep,
-                           ReportAssemblyStage  reportAssembly) {
+                           LcParseStage              lcParse,
+                           InvoiceExtractStage       invoiceExtract,
+                           ProgrammaticChecksStage   programmaticChecks,
+                           AgentChecksStage          agentChecks,
+                           ReportAssemblyStage       reportAssembly) {
         this.validator = validator;
         this.store = store;
 
-        // ╔══════════════════════════════════════════════════════════════════╗
-        // ║  PIPELINE FLOW                                                   ║
-        // ║  – stage order = position in this chain                          ║
-        // ║  – debug end    = uncomment an .endHere() between two .then()    ║
-        // ╚══════════════════════════════════════════════════════════════════╝
         this.stages = Flow.start()
-                .then(lcParse)         // Stage 1a │ MT700 SWIFT parse  → LcDocument
-                .then(invoiceExtract)  // Stage 1b │ PDF extract        → InvoiceDocument
-                .endHere()             // ◄── DEBUG: ends and returns here. Comment to enable downstream.
-                .then(ruleActivation)  // Stage 2  │ Catalog walk       → active rule list
-                .then(ruleCheck)       // Stage 3  │ Tier 1 (A) / 2 (B) / 3 (AB)
-                .then(holisticSweep)   // Stage 4  │ Layer 3 LLM sweep  (V1: no-op)
-                .then(reportAssembly)  // Stage 5  │ Assemble report    → DiscrepancyReport
+                .then(lcParse)             // Stage 1a │ MT700 SWIFT parse  → LcDocument
+                .then(invoiceExtract)      // Stage 1b │ PDF extract        → InvoiceDocument
+                .then(programmaticChecks)  // Stage 2  │ Deterministic SpEL rules
+                .then(agentChecks)         // Stage 3  │ One LLM call per AGENT rule
+                .then(reportAssembly)      // Stage 4  │ Assemble DiscrepancyReport
                 .build();
 
         log.info("Pipeline configured: stages={}",
@@ -127,13 +122,12 @@ public class LcCheckPipeline {
         long total = System.currentTimeMillis() - pipelineStart;
         log.info("Pipeline complete in {}ms: compliant={} discrepancies={}",
                 total, ctx.report.compliant(), ctx.report.discrepancies().size());
-        publisher.emit(CheckEvent.of(CheckEvent.Type.REPORT_COMPLETE, ctx.report));
+        publisher.complete(ctx.report);
 
         return new CheckSession(
                 sessionId, null, null,
                 started, completedAt,
                 ctx.lcParseTrace, ctx.invoiceExtractTrace,
-                ctx.activationTrace,
                 List.copyOf(ctx.checkTraces),
                 ctx.report, null);
     }
@@ -148,19 +142,20 @@ public class LcCheckPipeline {
     private CheckSession earlyFinalize(StageContext ctx, String haltedAfter) {
         DiscrepancyReport halted = new DiscrepancyReport(
                 ctx.sessionId,
-                false,                         // compliant — no decision can be made
-                List.of(), List.of(), List.of(), List.of(), List.of(),
-                new Summary(0, 0, 0, 0, 0));
+                false,                                  // compliant — no decision can be made
+                List.of(),                              // discrepancies
+                List.of(),                              // requires_human_review
+                List.of(), List.of(), List.of(), List.of(),  // typed lists
+                new Summary(0, 0, 0, 0, 0, 0));
         ctx.report = halted;
         Instant completedAt = Instant.now();
         store.finalizeSession(ctx.sessionId, null,
                 "halted_after:" + haltedAfter, halted, completedAt);
-        ctx.publisher.emit(CheckEvent.of(CheckEvent.Type.REPORT_COMPLETE, halted));
+        ctx.publisher.complete(halted);
         return new CheckSession(
                 ctx.sessionId, null, null,
                 ctx.pipelineStarted, completedAt,
                 ctx.lcParseTrace, ctx.invoiceExtractTrace,
-                ctx.activationTrace,
                 List.copyOf(ctx.checkTraces),
                 halted,
                 "halted_after:" + haltedAfter);

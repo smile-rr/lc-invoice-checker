@@ -188,3 +188,37 @@ docker volume ls | grep lc-checker
 ```
 
 On subsequent runs, models load from cache — startup is instant after the first run.
+
+
+
+
+
+
+
+```
+1. we only need 2 types  Programtic,  Agent.  though chck patterns can be variy per needed. but no need many steps to complex logic.
+so check will be , 
+  a. activation. (by default we'll analysis all rules to identofy required by default ,  and conditional . activation major looking for condition rule -> but condiation rule if need agent. actually no need activation stage then direct give to agent sage to check)
+  thinking,   step by activation(agent for condiational rule) -> programatic -> agent check
+  or step by programic(required rule) -> agent check -> programic(for conditional rule)
+** or step by programic(required rule) -> agent check (with tools for conditial rule)  [prefer this as this more intellegent]
+2. ui side no need much progress update. just flow our point1's step execution or just mask show backend give sse message. not restrict to current stage, but also for all stage. 
+sse event will be (stage, status_desc)
+trace api query by session id get the sage(stage, status_desc) no need hard binding backend progress for ui and backend. only stage binding
+3. for programtic. review rules and identify fields for all mandatory checks irrispective for lc or letter
+4. agent loop
+   condiional rule , agent rule check one by one with tools , rag of rule, rag of lc, rag of invoice ?
+   or full of lc, and full of invoice?
+    question, one time check one rule or one time multiple rule check?
+    
+ 5 reulst store in each step of above.  ui display completed rule on the ui appendingly by default view in the business sections as append, by sse response  or by query of rule level like the requriement designed
+ 6 no hard binding of status of backend and frontend except the stage of upload/lc parser, / invlice extractor / compliance check
+ if all done, it will go to review page for display review.
+```
+
+1. in lc check , we still need the view full rule and all rule chips and click one rule to routing or filtering for that specific rule matching. this need you to think about the ui design properly. and we need to consider the design that we put all category rules for check. which one checked and passed/not passed why. and which one not chcked and also tell why. so those should be category and showed like previous activiations though we do not have that stage but the concept required. people need to understand which checked and which not checked and reason for lc check 
+2. invoice sample redefine the pairs to include all new invoice pdf in test/invoice folder . earlier ones should be ignored
+3. post parse, I'll give to llm to generate new sample lc check mt700 message or the pair. so finally we'll have around 7 mt700 message by default in you can use the default sample mt700 first for the 7 inoice pair. 
+4. ui change when click one it will show both mt700 and invoice on right as side by side. and in the side by side will have option to choose to upload new one like the default upload feature. but has validation on mt700 to be txt and invoice to be pdf
+5. allow upload mt700.txt + invoice pdf.  for lc parser need to ensure no error just parse. no mandatory check? if mandatory check we should check in begining before showing to next stage and alert out and stop the flow
+6. and last small fix is the root level page should not have veritical or horizontal scroll. only the inside content section may have scroll per need. that should not impact the root level causing scroll

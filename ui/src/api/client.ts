@@ -1,4 +1,4 @@
-import type { CheckSession, ExtractAttempt, FieldDefinition, SessionSummary, StartResponse } from '../types';
+import type { ExtractAttempt, FieldDefinition, RuleSummary, SessionSummary, StartResponse, TraceResponse } from '../types';
 
 const API_BASE = '/api/v1/lc-check';
 
@@ -10,6 +10,14 @@ export async function getPipelineConfig(): Promise<{
   const res = await fetch('/api/v1/pipeline');
   if (!res.ok) throw new Error(`pipeline failed: ${res.status}`);
   return res.json();
+}
+
+/** Rule catalog — read-only metadata used by the Compliance Check panel. */
+export async function listRules(): Promise<RuleSummary[]> {
+  const res = await fetch('/api/v1/rules');
+  if (!res.ok) throw new Error(`rules failed: ${res.status}`);
+  const body = (await res.json()) as { rules: RuleSummary[] };
+  return body.rules;
 }
 
 /** Field-pool registry — single source of truth for canonical field metadata. */
@@ -45,8 +53,13 @@ export function invoiceUrl(sessionId: string): string {
   return `${API_BASE}/${sessionId}/invoice`;
 }
 
-/** Full forensic trace for a completed (or ongoing) session. */
-export async function getTrace(sessionId: string): Promise<CheckSession> {
+/**
+ * Full envelope event log for a session — same shape as the live SSE stream.
+ * The frontend reducer consumes both this and live events identically, which
+ * lets a page reload mid-run rebuild the exact state it would have had if the
+ * SSE connection had stayed open.
+ */
+export async function getTrace(sessionId: string): Promise<TraceResponse> {
   const res = await fetch(`${API_BASE}/${sessionId}/trace`);
   if (!res.ok) throw new Error(`trace failed: ${res.status}`);
   return res.json();

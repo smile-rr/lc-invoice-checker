@@ -6,10 +6,26 @@
   html, body, #root {
     height: 100%;
   }
+
   body {
     @apply bg-slate2 text-navy-1 font-sans antialiased;
+    /*
+     * Apple HIG body typography:
+     *   line-height 1.5  — HIG recommends 1.4–1.6 for comfortable reading
+     *   letter-spacing   — optical tracking for SF Pro/DM Sans at 14–17 px
+     *   font-feature     — enable kerning, standard ligatures, contextual alternates
+     */
+    line-height: 1.5;
+    letter-spacing: -0.01em;
+    font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+  }
+
+  /* Apple-blue text selection */
+  ::selection {
+    background-color: rgba(0, 122, 255, 0.15);
   }
 }
+
 
 /* react-pdf text layer — we keep our own minimal stylesheet to avoid shipping the
    library's default CSS bundle. The text layer must stay positioned on top of the
@@ -33,8 +49,9 @@
   white-space: pre;
   transform-origin: 0 0;
 }
+/* Highlight color updated to match new gold token */
 .pdf-hit {
-  background-color: rgba(201, 147, 58, 0.45);
+  background-color: rgba(255, 185, 0, 0.40);
   border-radius: 2px;
 }
 

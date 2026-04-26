@@ -9,7 +9,9 @@ import com.lc.checker.infra.validation.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -74,7 +76,16 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiError> fallback(Exception e) {
+    public ResponseEntity<ApiError> fallback(Exception e, HttpServletResponse response) {
+        // SSE responses are locked to text/event-stream — writing a JSON body here
+        // causes a secondary HttpMessageNotWritableException. For committed or
+        // streaming responses just log and let the emitter close naturally.
+        if (response.isCommitted()
+                || MediaType.TEXT_EVENT_STREAM_VALUE.equals(response.getContentType())) {
+            log.debug("Exception on SSE/committed response (likely client disconnect): {}",
+                    e.getMessage());
+            return null;
+        }
         log.error("Unhandled pipeline error", e);
         return ResponseEntity.internalServerError()
                 .body(new ApiError("INTERNAL_ERROR", null, e.getMessage(), null, mdcSession()));

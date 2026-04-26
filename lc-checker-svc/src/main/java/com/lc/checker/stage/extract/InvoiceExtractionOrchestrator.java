@@ -3,7 +3,6 @@ package com.lc.checker.stage.extract;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
 import com.lc.checker.infra.persistence.CheckSessionStore;
-import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -13,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -128,12 +128,39 @@ public class InvoiceExtractionOrchestrator {
                 .concat(selectionChain.stream(), supplementary.stream())
                 .toList();
 
+        List<String> sourceNames = allSources.stream()
+                .map(InvoiceExtractor::extractorName).toList();
+        int totalSources = allSources.size();
+        AtomicInteger doneCount = new AtomicInteger(0);
+
+        publisher.progress("invoice_extract",
+                "Running " + totalSources + " extractor"
+                        + (totalSources == 1 ? "" : "s") + ": "
+                        + String.join(", ", sourceNames),
+                Map.of("sources", sourceNames, "done", 0, "total", totalSources));
+
         List<CompletableFuture<Attempt>> futures = allSources.stream()
                 .map(e -> {
                     boolean isSelection = selectionChain.contains(e);
                     return CompletableFuture.supplyAsync(
                             () -> runAndPersistOne(e, isSelection, sessionId, pdfBytes, filename, publisher),
-                            executor);
+                            executor)
+                        .whenComplete((attempt, ex) -> {
+                            int done = doneCount.incrementAndGet();
+                            String label = attempt != null ? attempt.source() : e.extractorName();
+                            String outcome = attempt != null && attempt.success() ? "ok"
+                                    : (attempt != null ? "failed" : "errored");
+                            long dur = attempt != null ? attempt.durationMs() : 0L;
+                            publisher.progress("invoice_extract",
+                                    label + " " + outcome + " (" + dur + "ms) · "
+                                            + done + "/" + totalSources + " sources complete",
+                                    Map.of(
+                                            "source", label,
+                                            "status", outcome,
+                                            "durationMs", dur,
+                                            "done", done,
+                                            "total", totalSources));
+                        });
                 })
                 .toList();
 
@@ -178,8 +205,6 @@ public class InvoiceExtractionOrchestrator {
                                      String sessionId, byte[] pdfBytes, String filename,
                                      CheckEventPublisher publisher) {
         String source = e.extractorName();
-        publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_STARTED,
-                Map.of("source", source)));
         Instant stepStart = Instant.now();
         long t0 = System.currentTimeMillis();
         try {
@@ -193,14 +218,6 @@ public class InvoiceExtractionOrchestrator {
                     stepStart, Instant.now(), result, null);
             log.info("Stage 1b source={} SUCCESS confidence={} duration={}ms",
                     source, r.document().extractorConfidence(), dur);
-            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
-                    Map.of(
-                            "source", source,
-                            "success", true,
-                            "confidence", r.document().extractorConfidence(),
-                            "durationMs", dur,
-                            "imageBased", r.document().imageBased(),
-                            "pages", r.document().pages())));
             return new Attempt(source, true, isSelectionSource, r.document(), r.llmCalls(), null, dur);
         } catch (ExtractionException ex) {
             long dur = System.currentTimeMillis() - t0;
@@ -213,12 +230,6 @@ public class InvoiceExtractionOrchestrator {
                     stepStart, Instant.now(), result, ex.getMessage());
             log.warn("Stage 1b source={} FAILED duration={}ms error={}",
                     source, dur, ex.getMessage());
-            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
-                    Map.of(
-                            "source", source,
-                            "success", false,
-                            "durationMs", dur,
-                            "error", ex.getMessage() == null ? "" : ex.getMessage())));
             return new Attempt(source, false, isSelectionSource, null, trc, ex.getMessage(), dur);
         } catch (RuntimeException ex) {
             long dur = System.currentTimeMillis() - t0;
@@ -230,12 +241,6 @@ public class InvoiceExtractionOrchestrator {
             store.putStep(sessionId, "invoice_extract", source, "FAILED",
                     stepStart, Instant.now(), result, msg);
             log.error("Stage 1b source={} crashed duration={}ms", source, dur, ex);
-            publisher.emit(CheckEvent.of(CheckEvent.Type.EXTRACT_SOURCE_COMPLETED,
-                    Map.of(
-                            "source", source,
-                            "success", false,
-                            "durationMs", dur,
-                            "error", msg)));
             return new Attempt(source, false, isSelectionSource, null, List.of(), msg, dur);
         }
     }

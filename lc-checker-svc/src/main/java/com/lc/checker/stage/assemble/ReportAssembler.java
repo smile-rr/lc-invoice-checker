@@ -6,6 +6,8 @@ import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.lc.LcDocument;
 import com.lc.checker.domain.result.Summary;
+import com.lc.checker.domain.rule.Rule;
+import com.lc.checker.domain.rule.RuleCatalog;
 import com.lc.checker.domain.rule.enums.CheckStatus;
 import java.math.BigDecimal;
 import java.text.NumberFormat;
@@ -13,18 +15,24 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
-import com.lc.checker.stage.check.CheckExecutor;
 
 /**
- * Stage 5 of the pipeline. Takes the raw {@link CheckResult}s from {@code CheckExecutor}
- * and produces the final {@link DiscrepancyReport} — the JSON body returned by
- * {@code POST /api/v1/lc-check}.
+ * Stage 5 of the pipeline. Takes the raw {@link CheckResult}s from the merged
+ * {@code LcCheckStage} and produces the final {@link DiscrepancyReport} — the JSON
+ * body returned by {@code POST /api/v1/lc-check}.
  *
- * <p>Besides the obvious PASS/DISCREPANT/etc. bucketing, this class shapes the
- * {@link Discrepancy} rows so they match the test-case expected output verbatim:
- * {@code {field, lc_value, presented_value, rule_reference, description}}. For each
- * V1 active rule, the known output format is honoured (e.g. INV-011 prints amounts
- * as "USD 50,000.00"); unknown rules fall through to a generic format.
+ * <p><b>Output contract pinned by spec.</b> {@code discrepancies[]} contains only
+ * {@link CheckStatus#DISCREPANT} items in the test-case shape
+ * {@code {field, lc_value, presented_value, rule_reference, description}}.
+ * {@link CheckStatus#REQUIRES_HUMAN_REVIEW} items go into a separate
+ * {@code requires_human_review[]} top-level array — they are explicitly NOT mixed in
+ * with deterministic discrepancies because no LLM-discovered finding may flip
+ * {@code compliant} (Art 16 protocol).
+ *
+ * <p>Three rules use bespoke formatters to preserve the locked sample-output text
+ * (UCP-18b-amount, ISBP-C3, ISBP-C1). Every other rule — including all future
+ * catalog additions — uses the generic path that pulls {@code output_field} and
+ * {@code rule_reference_label} directly from {@link Rule}: no Java change needed.
  */
 @Component
 public class ReportAssembler {
@@ -38,6 +46,12 @@ public class ReportAssembler {
         AMOUNT_FORMAT.setGroupingUsed(true);
     }
 
+    private final RuleCatalog catalog;
+
+    public ReportAssembler(RuleCatalog catalog) {
+        this.catalog = catalog;
+    }
+
     public DiscrepancyReport assemble(
             String sessionId,
             LcDocument lc,
@@ -45,10 +59,12 @@ public class ReportAssembler {
             List<CheckResult> checks) {
 
         List<Discrepancy> discrepancies = new ArrayList<>();
+        List<Discrepancy> requiresHumanReview = new ArrayList<>();
         List<CheckResult> discrepant = new ArrayList<>();
         List<CheckResult> unableToVerify = new ArrayList<>();
         List<CheckResult> passed = new ArrayList<>();
         List<CheckResult> notApplicable = new ArrayList<>();
+        List<CheckResult> humanReview = new ArrayList<>();
 
         for (CheckResult r : checks) {
             switch (r.status()) {
@@ -59,23 +75,45 @@ public class ReportAssembler {
                 case PASS -> passed.add(r);
                 case UNABLE_TO_VERIFY -> unableToVerify.add(r);
                 case NOT_APPLICABLE -> notApplicable.add(r);
-                case HUMAN_REVIEW -> unableToVerify.add(r); // V1 surfaces these as review items too
+                case REQUIRES_HUMAN_REVIEW -> {
+                    requiresHumanReview.add(toDiscrepancy(r, lc, inv));
+                    humanReview.add(r);
+                }
+                case HUMAN_REVIEW -> {
+                    // Legacy alias — surface in the same bucket as REQUIRES_HUMAN_REVIEW
+                    // so older strategies remain visible without flipping compliance.
+                    requiresHumanReview.add(toDiscrepancy(r, lc, inv));
+                    humanReview.add(r);
+                }
             }
         }
+
+        // Compliance is determined ONLY by deterministic discrepancies. Layer-3
+        // human-review items never flip the verdict — they must be triaged by an
+        // officer per Art 16 protocol.
+        boolean compliant = discrepancies.isEmpty();
 
         Summary summary = new Summary(
                 checks.size(),
                 passed.size(),
                 discrepancies.size(),
                 unableToVerify.size(),
-                notApplicable.size());
+                notApplicable.size(),
+                requiresHumanReview.size());
+
+        // Surface human-review items alongside unable-to-verify in the typed list
+        // for clients that don't yet know about the new bucket. The dedicated
+        // requires_human_review[] array above is the authoritative source.
+        List<CheckResult> mergedUnableToVerify = new ArrayList<>(unableToVerify);
+        mergedUnableToVerify.addAll(humanReview);
 
         return new DiscrepancyReport(
                 sessionId,
-                discrepancies.isEmpty(),
+                compliant,
                 discrepancies,
+                requiresHumanReview,
                 discrepant,
-                unableToVerify,
+                mergedUnableToVerify,
                 passed,
                 notApplicable,
                 summary);
@@ -87,9 +125,9 @@ public class ReportAssembler {
 
     private Discrepancy toDiscrepancy(CheckResult r, LcDocument lc, InvoiceDocument inv) {
         return switch (r.ruleId()) {
-            case "INV-011" -> amountDiscrepancy(r, lc, inv);
-            case "INV-015" -> goodsDescriptionDiscrepancy(r, lc, inv);
-            case "INV-007" -> lcNumberDiscrepancy(r, lc, inv);
+            case "UCP-18b-amount" -> amountDiscrepancy(r, lc, inv);
+            case "ISBP-C3" -> goodsDescriptionDiscrepancy(r, lc, inv);
+            case "ISBP-C1" -> lcNumberDiscrepancy(r, lc, inv);
             default -> genericDiscrepancy(r);
         };
     }
@@ -127,14 +165,38 @@ public class ReportAssembler {
         return new Discrepancy("lc_number_reference", lcValue, presented, ruleRef, description);
     }
 
+    /**
+     * Generic mapping path used by every non-legacy rule. Pulls the spec-locked
+     * {@code field} and {@code rule_reference} strings from the rule definition
+     * itself — no per-rule code path needed when a new rule is added to the catalog.
+     */
     private Discrepancy genericDiscrepancy(CheckResult r) {
-        String ruleRef = combineRefs(r.ucpRef(), r.isbpRef());
+        Rule rule = catalog.findById(r.ruleId()).orElse(null);
+        String field = pickField(rule, r);
+        String ruleRef = pickRuleReference(rule, r);
         return new Discrepancy(
-                r.field() == null ? r.ruleId() : r.field(),
+                field,
                 r.lcValue(),
                 r.presentedValue(),
                 ruleRef,
                 r.description());
+    }
+
+    private static String pickField(Rule rule, CheckResult r) {
+        if (rule != null && rule.outputField() != null && !rule.outputField().isBlank()) {
+            return rule.outputField();
+        }
+        if (r.field() != null && !r.field().isBlank()) {
+            return r.field();
+        }
+        return r.ruleId();
+    }
+
+    private static String pickRuleReference(Rule rule, CheckResult r) {
+        if (rule != null && rule.ruleReferenceLabel() != null && !rule.ruleReferenceLabel().isBlank()) {
+            return rule.ruleReferenceLabel();
+        }
+        return combineRefs(r.ucpRef(), r.isbpRef());
     }
 
     private static String combineRefs(String ucp, String isbp) {

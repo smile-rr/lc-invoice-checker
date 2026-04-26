@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getTrace } from '../../api/client';
-import type { CheckSession } from '../../types';
+import type { TraceResponse } from '../../types';
 
 interface Props {
   sessionId: string;
@@ -8,7 +8,7 @@ interface Props {
 }
 
 export function TraceModal({ sessionId, onClose }: Props) {
-  const [trace, setTrace] = useState<CheckSession | null>(null);
+  const [trace, setTrace] = useState<TraceResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {

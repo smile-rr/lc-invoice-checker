@@ -1,11 +1,15 @@
 -- ============================================================================
--- LC Checker v3 schema — unified pipeline_steps table
+-- LC Checker schema — unified pipeline_steps table
 --
 -- Two domain tables:
 --   check_sessions   — session umbrella (request metadata + final report)
 --   pipeline_steps   — every pipeline step (lc_parse / invoice_extract /
---                      rule_activation / rule_check / holistic_sweep)
---                      as one row. level-1 = stage, level-2 = step_key.
+--                      lc_check / report_assembly) as one row.
+--                      level-1 = stage, level-2 = step_key.
+--
+-- The merged `lc_check` stage discriminates via step_key:
+--   'phase:<name>'   — per-phase summary row (activation, parties, money, …)
+--   '<RULE_ID>'      — per-rule outcome row (e.g. 'INV-011')
 --
 -- Why one table: adding a new stage is zero-DDL; every step uniformly carries
 -- (status, started_at, completed_at, duration_ms, result JSONB, error). Views
@@ -32,24 +36,26 @@ CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON check_sessions(created_at 
 -- Unified pipeline step table — one row per step, any stage.
 --
 -- stage values (level 1):
---   lc_parse          — Stage 1a  (step_key: '-')
---   invoice_extract   — Stage 1b  (step_key: vision | docling | mineru)
---   rule_activation   — Stage 2   (step_key: '-')
---   rule_check        — Stage 3   (step_key: rule_id, e.g. 'INV-011')
---   holistic_sweep    — Stage 4   (step_key: 'pass1' | 'pass2')
+--   lc_parse          — Stage 1a   (step_key: '-')
+--   invoice_extract   — Stage 1b   (step_key: vision | docling | mineru)
+--   lc_check          — Stage 2    (step_key: 'phase:<name>' OR rule_id)
+--   report_assembly   — Stage 3    (step_key: '-')
 --
 -- status values:
 --   SUCCESS | FAILED | SKIPPED | PASS | DISCREPANT |
---   UNABLE_TO_VERIFY | NOT_APPLICABLE | REQUIRES_HUMAN_REVIEW
+--   UNABLE_TO_VERIFY | NOT_APPLICABLE | REQUIRES_HUMAN_REVIEW | HUMAN_REVIEW
 --
 -- result JSONB — stage-specific payload:
 --   lc_parse         {lc_output: LcDocument}
 --   invoice_extract  {document: InvoiceDocument, llm_calls: [LlmTrace], is_selected: bool,
 --                     confidence, pages, is_image_based, raw_markdown, raw_text}
---   rule_activation  {activations: [RuleActivation]}
---   rule_check       {tier, check_type, severity, field, lc_value, presented_value,
---                     ucp_ref, isbp_ref, description, trace: CheckTrace}
---   holistic_sweep   {pass_number, potential_issues: [...], llm_calls: [LlmTrace]}
+--   lc_check         (phase:<name>) {phase, ran, passed, discrepant,
+--                                    unable_to_verify, not_applicable,
+--                                    requires_human_review, rule_ids,
+--                                    activations: [RuleActivation] (activation only)}
+--   lc_check         (rule_id)      {phase, rule_name, check_type, severity, field,
+--                                    lc_value, presented_value, ucp_ref, isbp_ref,
+--                                    description, trace: CheckTrace}
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pipeline_steps (
     id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -70,6 +76,25 @@ CREATE INDEX IF NOT EXISTS idx_ps_session_stage ON pipeline_steps(session_id, st
 CREATE INDEX IF NOT EXISTS idx_ps_status        ON pipeline_steps(status);
 CREATE INDEX IF NOT EXISTS idx_ps_started_at    ON pipeline_steps(started_at DESC);
 
+-- ---------------------------------------------------------------------------
+-- Append-only event log — backs the unified envelope SSE stream and the
+-- /trace API's events[] reply. Frontend reducer consumes both live SSE and
+-- replayed trace events through the same code path; this table is the source
+-- of truth for the latter.
+--
+-- No FK constraint to check_sessions: the session.started event is emitted
+-- before lc_parse populates the session row, and we don't want one race to
+-- lose those early events. session_id is just an opaque correlation key here.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    session_id UUID    NOT NULL,
+    seq        BIGINT  NOT NULL,
+    event      JSONB   NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_pe_session ON pipeline_events(session_id, seq);
+
 -- ============================================================================
 -- Views — project scalars from the unified table.
 -- ============================================================================
@@ -80,6 +105,13 @@ SELECT session_id, stage, step_key, status, started_at, completed_at, duration_m
 FROM   pipeline_steps
 ORDER BY session_id, started_at;
 
+-- Drop views whose column lists changed shape — CREATE OR REPLACE refuses to
+-- rename or reorder columns, so we drop them before recreating below.
+DROP VIEW IF EXISTS v_latest_session         CASCADE;
+DROP VIEW IF EXISTS v_session_overview       CASCADE;
+DROP VIEW IF EXISTS v_latest_rule_checks     CASCADE;
+DROP VIEW IF EXISTS v_rule_checks            CASCADE;
+
 -- Session overview: aggregated per-session progress.
 CREATE OR REPLACE VIEW v_session_overview AS
 SELECT  s.id                                  AS session_id,
@@ -89,13 +121,23 @@ SELECT  s.id                                  AS session_id,
         (SELECT duration_ms FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_parse')   AS lc_parse_ms,
         (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'invoice_extract')                                            AS extract_attempts,
         (SELECT step_key FROM pipeline_steps WHERE session_id = s.id AND stage = 'invoice_extract' AND (result->>'is_selected')::boolean)      AS selected_source,
-        (SELECT status FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_activation') AS activation_status,
-        (SELECT duration_ms FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_activation')                                         AS activation_ms,
-        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_check')                                                 AS rules_run,
-        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_check' AND (result->>'tier')::int = 1)                  AS tier1_count,
-        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_check' AND (result->>'tier')::int = 2)                  AS tier2_count,
-        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_check' AND (result->>'tier')::int = 3)                  AS tier3_count,
-        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'rule_check' AND status = 'DISCREPANT')                       AS discrepancies
+        (SELECT status FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key = 'phase:activation')                   AS activation_status,
+        (SELECT duration_ms FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key = 'phase:activation')              AS activation_ms,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%')                   AS rules_run,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND result->>'phase' = 'parties')                                                                 AS parties_count,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND result->>'phase' = 'money')                                                                   AS money_count,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND result->>'phase' = 'goods')                                                                   AS goods_count,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND result->>'phase' = 'logistics')                                                               AS logistics_count,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND result->>'phase' = 'procedural')                                                              AS procedural_count,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND status = 'DISCREPANT')                                                                        AS discrepancies,
+        (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+                                              AND status IN ('REQUIRES_HUMAN_REVIEW', 'HUMAN_REVIEW'))                                          AS requires_human_review
 FROM    check_sessions s;
 
 -- LC parse — one row per session, every LcDocument field projected as a scalar
@@ -158,6 +200,7 @@ WHERE  stage = 'invoice_extract'
 ORDER BY session_id, started_at;
 
 -- Rule activation — one row per rule per session (unnested from the activations array).
+-- Source row: stage='lc_check' AND step_key='phase:activation'.
 CREATE OR REPLACE VIEW v_rule_activation AS
 SELECT ps.session_id,
        act->>'rule_id'               AS rule_id,
@@ -169,28 +212,43 @@ SELECT ps.session_id,
        ps.started_at, ps.completed_at
 FROM   pipeline_steps ps
 CROSS JOIN LATERAL jsonb_array_elements(ps.result->'activations') AS act
-WHERE  ps.stage = 'rule_activation'
+WHERE  ps.stage = 'lc_check' AND ps.step_key = 'phase:activation'
 ORDER BY ps.session_id, rule_id;
 
--- Rule-check results projected for easy querying.
+-- Rule-check results projected for easy querying. Excludes phase summary rows.
 CREATE OR REPLACE VIEW v_rule_checks AS
 SELECT session_id,
-       (result->>'tier')::int AS tier,
-       step_key               AS rule_id,
-       result->>'rule_name'   AS rule_name,
-       result->>'check_type'  AS check_type,
+       result->>'phase'           AS business_phase,
+       step_key                   AS rule_id,
+       result->>'rule_name'       AS rule_name,
+       result->>'check_type'      AS check_type,
        status,
-       result->>'severity'    AS severity,
-       result->>'field'       AS field,
-       result->>'lc_value'    AS lc_value,
+       result->>'severity'        AS severity,
+       result->>'field'           AS field,
+       result->>'lc_value'        AS lc_value,
        result->>'presented_value' AS presented_value,
-       result->>'ucp_ref'     AS ucp_ref,
-       result->>'isbp_ref'    AS isbp_ref,
-       result->>'description' AS description,
+       result->>'ucp_ref'         AS ucp_ref,
+       result->>'isbp_ref'        AS isbp_ref,
+       result->>'description'     AS description,
        duration_ms, started_at, completed_at, error
 FROM   pipeline_steps
-WHERE  stage = 'rule_check'
-ORDER BY session_id, tier NULLS LAST, rule_id;
+WHERE  stage = 'lc_check' AND step_key NOT LIKE 'phase:%'
+ORDER BY session_id, started_at, rule_id;
+
+-- Phase summaries — one row per phase per session.
+CREATE OR REPLACE VIEW v_lc_check_phases AS
+SELECT session_id,
+       result->>'phase'                                AS phase,
+       (result->>'ran')::int                           AS ran,
+       (result->>'passed')::int                        AS passed,
+       (result->>'discrepant')::int                    AS discrepant,
+       (result->>'unable_to_verify')::int              AS unable_to_verify,
+       (result->>'not_applicable')::int                AS not_applicable,
+       (result->>'requires_human_review')::int         AS requires_human_review,
+       duration_ms, started_at, completed_at
+FROM   pipeline_steps
+WHERE  stage = 'lc_check' AND step_key LIKE 'phase:%'
+ORDER BY session_id, started_at;
 
 -- ---------------------------------------------------------------------------
 -- Latest-session convenience views (always 1 session, most recent by created_at).
@@ -237,6 +295,10 @@ WHERE  session_id = (SELECT id FROM check_sessions ORDER BY created_at DESC LIMI
 
 CREATE OR REPLACE VIEW v_latest_rule_checks AS
 SELECT * FROM v_rule_checks
+WHERE  session_id = (SELECT id FROM check_sessions ORDER BY created_at DESC LIMIT 1);
+
+CREATE OR REPLACE VIEW v_latest_lc_check_phases AS
+SELECT * FROM v_lc_check_phases
 WHERE  session_id = (SELECT id FROM check_sessions ORDER BY created_at DESC LIMIT 1);
 
 -- ---------------------------------------------------------------------------

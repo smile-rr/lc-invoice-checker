@@ -6,7 +6,6 @@ import java.time.Instant;
 import java.util.List;
 import com.lc.checker.domain.result.CheckTrace;
 import com.lc.checker.domain.result.DiscrepancyReport;
-import com.lc.checker.domain.result.RuleActivationTrace;
 import com.lc.checker.domain.result.StageTrace;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 
@@ -31,7 +30,6 @@ public record CheckSession(
         Instant completedAt,
         StageTrace lcParsing,
         StageTrace invoiceExtraction,
-        RuleActivationTrace activation,
         List<CheckTrace> checks,
         DiscrepancyReport finalReport,
         String error

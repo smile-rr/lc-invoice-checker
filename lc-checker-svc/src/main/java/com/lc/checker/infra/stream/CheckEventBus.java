@@ -1,5 +1,6 @@
 package com.lc.checker.infra.stream;
 
+import com.lc.checker.infra.persistence.CheckSessionStore;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -12,25 +13,34 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * In-memory fan-out of {@link CheckEvent}s to any {@link SseEmitter}s registered
- * for a given session id. Also keeps a bounded ring buffer per session so a
- * late-arriving subscriber (e.g. UI that navigates to /session/:id a beat after
- * the pipeline kicked off) still sees the history.
+ * In-memory fan-out of {@link CheckEvent}s to {@link SseEmitter}s registered for
+ * a given session id, with a bounded ring buffer per session so a late-arriving
+ * subscriber still sees the recent history.
  *
- * <p>The bus is intentionally single-JVM only. V2 can swap this for Redis pub/sub
- * or a distributed SSE gateway without touching the engine/publisher API.
+ * <p>Each event is also appended to {@link CheckSessionStore} so the trace API
+ * can replay the full sequence after a restart or after the in-memory buffer
+ * has rolled over.
  */
 @Component
 public class CheckEventBus {
 
     private static final Logger log = LoggerFactory.getLogger(CheckEventBus.class);
-    private static final int BUFFER_CAP = 256;
+    private static final int BUFFER_CAP = 1024;
 
-    /** One entry per in-flight session. Evicted on completion. */
     private final Map<String, SessionChannel> channels = new ConcurrentHashMap<>();
+    private final CheckSessionStore store;
 
-    /** Publishes an event to subscribers and appends it to the replay buffer. */
+    public CheckEventBus(CheckSessionStore store) {
+        this.store = store;
+    }
+
+    /** Publishes an event: persists, buffers, fans out to live subscribers. */
     public void publish(String sessionId, CheckEvent event) {
+        try {
+            store.appendEvent(sessionId, event);
+        } catch (Exception e) {
+            log.warn("Persisting event failed for session={}: {}", sessionId, e.getMessage());
+        }
         SessionChannel ch = channels.computeIfAbsent(sessionId, k -> new SessionChannel());
         ch.append(event);
         for (SseEmitter emitter : ch.emitters) {
@@ -47,13 +57,12 @@ public class CheckEventBus {
     }
 
     /**
-     * Attaches a fresh {@link SseEmitter} for the given session. The caller-supplied
-     * emitter is returned (after receiving any buffered history). On disconnect /
-     * completion the emitter is removed from the subscriber list automatically.
+     * Attach a fresh {@link SseEmitter}; replays the in-memory ring buffer first
+     * so a late subscriber sees what they missed. (For full history beyond the
+     * ring buffer, clients query {@code GET /trace} instead.)
      */
     public SseEmitter register(String sessionId, SseEmitter emitter) {
         SessionChannel ch = channels.computeIfAbsent(sessionId, k -> new SessionChannel());
-        // Replay history first so a late subscriber sees the full timeline.
         for (CheckEvent event : ch.snapshot()) {
             try {
                 emitter.send(SseEmitter.event()
@@ -85,12 +94,16 @@ public class CheckEventBus {
         }
     }
 
-    /** Returns a publisher that routes everything to this bus under the given sessionId. */
+    /** Returns a publisher that routes everything to this bus under {@code sessionId}. */
     public CheckEventPublisher publisherFor(String sessionId) {
-        return event -> publish(sessionId, event);
+        return new CheckEventPublisher() {
+            @Override
+            protected void send(CheckEvent event) {
+                publish(sessionId, event);
+            }
+        };
     }
 
-    /** One per session. Small holder around the subscriber list + replay buffer. */
     private static final class SessionChannel {
         final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
         final Deque<CheckEvent> buffer = new ArrayDeque<>(BUFFER_CAP);

@@ -2,30 +2,67 @@
 // snake_case, so every field here is snake_case to match the wire format
 // without a transformer in between.
 
+/**
+ * Anchor stages emitted by the backend pipeline. The frontend stepper aligns
+ * to these four; backend may emit a `session` status as a fifth marker for
+ * the run start.
+ */
 export type StageName =
+  | 'session'
   | 'lc_parse'
   | 'invoice_extract'
-  | 'rule_activation'
-  | 'rule_check'
-  | 'report_assembly';
+  | 'programmatic'
+  | 'agent';
 
-export type CheckEventType =
-  | 'session.started'
-  | 'stage.started'
-  | 'stage.completed'
-  | 'check.started'
-  | 'check.completed'
-  | 'extract.source.started'
-  | 'extract.source.completed'
-  | 'report.complete'
-  | 'error';
+export type BusinessPhase =
+  | 'PARTIES'
+  | 'MONEY'
+  | 'GOODS'
+  | 'LOGISTICS'
+  | 'PROCEDURAL'
+  | 'HOLISTIC';
 
-export interface CheckEvent<P = unknown> {
-  type: CheckEventType;
-  stage: StageName | null;
-  payload: P;
-  timestamp: string;
+// ─── Unified envelope (single SSE / trace shape) ──────────────────────────
+
+export interface BaseEvent {
+  ts: string;
+  seq: number;
 }
+
+export interface StatusEvent extends BaseEvent {
+  type: 'status';
+  stage: StageName;
+  /**
+   * `started` — first transition into the stage.
+   * `running` — intra-stage progress update (e.g. one of N parallel sources
+   *             completed; one of N rules just started).
+   * `completed` — terminal transition; payload may carry stage output.
+   */
+  state: 'started' | 'running' | 'completed';
+  message: string;
+  /** On `completed`, optionally the structured stage output —
+   *  LcDocument for `lc_parse`, InvoiceDocument for `invoice_extract`,
+   *  a counts summary for `programmatic` / `agent`. */
+  data?: unknown;
+}
+
+export interface RuleEvent extends BaseEvent {
+  type: 'rule';
+  data: CheckResult;
+}
+
+export interface ErrorEvent extends BaseEvent {
+  type: 'error';
+  stage?: string;
+  message: string;
+}
+
+export interface CompleteEvent extends BaseEvent {
+  type: 'complete';
+  data: DiscrepancyReport;
+}
+
+export type Event = StatusEvent | RuleEvent | ErrorEvent | CompleteEvent;
 
 export type FieldType =
   | 'STRING'
@@ -161,7 +198,7 @@ export type CheckStatus =
   | 'HUMAN_REVIEW'
   | 'REQUIRES_HUMAN_REVIEW';
 
-export type CheckTypeEnum = 'A' | 'B' | 'AB' | 'SPI';
+export type CheckTypeEnum = 'PROGRAMMATIC' | 'AGENT';
 
 export type Severity = 'MAJOR' | 'MINOR';
 
@@ -169,6 +206,9 @@ export interface CheckResult {
   rule_id: string;
   rule_name: string | null;
   check_type: CheckTypeEnum | null;
+  /** Business phase this rule belongs to (PARTIES / MONEY / GOODS / etc.).
+   *  Backend serialises the enum constant verbatim — uppercase. */
+  business_phase: BusinessPhase | null;
   status: CheckStatus;
   severity: Severity | null;
   field: string | null;
@@ -185,6 +225,7 @@ export interface Summary {
   discrepant: number;
   unable_to_verify: number;
   not_applicable: number;
+  requires_human_review: number;
 }
 
 export interface Discrepancy {
@@ -198,8 +239,11 @@ export interface Discrepancy {
 export interface DiscrepancyReport {
   session_id: string;
   compliant: boolean;
-  /** Summary objects (no rule_id) — kept for the sync /lc-check API contract. */
+  /** Summary objects (no rule_id) — DISCREPANT items only, in the spec shape. */
   discrepancies: Discrepancy[];
+  /** Items the Layer-3 holistic agent flagged for officer review.
+   *  Same shape as `discrepancies` but never flips `compliant`. */
+  requires_human_review: Discrepancy[];
   /** Typed CheckResults for DISCREPANT rules — UI source of truth. */
   discrepant: CheckResult[];
   unable_to_verify: CheckResult[];
@@ -218,16 +262,61 @@ export interface StageTrace<O = unknown> {
   error: string | null;
 }
 
-export interface CheckSession {
+/**
+ * One forensic record per executed rule. Carries the inputs the strategy bound,
+ * the deterministic expression evaluation (Type A / AB pre-gate), and the LLM
+ * call envelope (Type B / AB confirm). The UI uses {@link llm_trace} to render
+ * the audit pane on LLM rule cards.
+ */
+export interface LlmTrace {
+  purpose: string;
+  model: string;
+  prompt_rendered: string;
+  raw_response: string;
+  parsed_response?: unknown;
+  latency_ms: number;
+  error?: string | null;
+  tokens_in?: number;
+  tokens_out?: number;
+}
+
+export interface CheckTrace {
+  rule_id: string;
+  check_type: CheckTypeEnum | null;
+  status: CheckStatus;
+  input_snapshot: Record<string, unknown>;
+  expression_trace?: unknown;
+  llm_trace?: LlmTrace | null;
+  duration_ms: number;
+  error?: string | null;
+}
+
+/**
+ * One row of the rule catalog as returned by {@code GET /api/v1/rules}.
+ * Read-only metadata used by the UI to enrich {@link CheckResult} rows
+ * without inflating the per-rule SSE wire payload.
+ */
+export interface RuleSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  business_phase: BusinessPhase | null;
+  check_type: CheckTypeEnum | null;
+  ucp_ref: string | null;
+  isbp_ref: string | null;
+  ucp_excerpt: string | null;
+  isbp_excerpt: string | null;
+  rule_reference_label: string | null;
+  output_field: string | null;
+  severity_on_fail: Severity | null;
+  enabled: boolean;
+  disabled_reason: string | null;
+}
+
+/** Trace API reply — same envelope shape as live SSE, ordered by {@link Event.seq}. */
+export interface TraceResponse {
   session_id: string;
-  started_at: string;
-  completed_at: string | null;
-  lc_parsing: StageTrace<LcDocument> | null;
-  invoice_extraction: StageTrace<InvoiceDocument> | null;
-  activation: unknown;
-  checks: unknown[];
-  final_report: DiscrepancyReport | null;
-  error: string | null;
+  events: Event[];
 }
 
 export interface StartResponse {
@@ -239,19 +328,14 @@ export interface StartResponse {
 
 export interface ExtractAttempt {
   source: string;
-  /** Status lifecycle (UI-driven, not all values come from the backend):
-   *    PENDING — synthesized from /api/v1/pipeline.extractor_sources before any
-   *              SSE event arrives; the source is configured but hasn't started.
-   *    RUNNING — saw extract.source.started, no matching completed yet.
-   *    SUCCESS / FAILED — terminal states from extract.source.completed
-   *                       (also what /extracts returns once persisted). */
+  /** Persisted status from the backend `/extracts` endpoint:
+   *    SUCCESS / FAILED — terminal states from one extractor run. */
   status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
   is_selected: boolean;
   document: InvoiceDocument | null;
   duration_ms: number;
   started_at: string | null;
   error: string | null;
-  /** Optional confidence (0..1) — only set when the source completed successfully. */
   confidence?: number;
 }
 

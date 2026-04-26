@@ -19,7 +19,7 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
   const idle = !state.sessionId;
   // "running" means we have a session but no final report yet — distinct from
   // "idle" (no session at all, e.g. on the landing page).
-  const running = !idle && !report && !state.error && !state.haltedAfter;
+  const running = !idle && !report && !state.error;
 
   const nav = useNavigate();
   const goToRules = (filter: 'fail' | 'pass' | 'unable' | 'na') => {
@@ -95,13 +95,6 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
       ) : state.error ? (
         <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-status-redSoft text-status-red">
           ERROR
-        </span>
-      ) : state.haltedAfter ? (
-        <span
-          className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-amber-100 text-amber-800"
-          title={`Pipeline halted after ${state.haltedAfter} via .endHere() — debug build-time chain trim`}
-        >
-          HALTED
         </span>
       ) : (
         <span className="px-2 py-0.5 rounded font-mono text-[10px] text-muted bg-slate2">—</span>

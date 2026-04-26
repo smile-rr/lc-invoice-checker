@@ -20,6 +20,14 @@ public record DiscrepancyReport(
         /** Discrepancy summaries (no rule_id) — preserved for backward compat with
          *  the sync /lc-check consumers and the original test-case JSON contract. */
         List<Discrepancy> discrepancies,
+        /**
+         * Items the Layer-3 Holistic Sweep agent flagged for human review.
+         * Same wire shape as {@link #discrepancies} so spec-compliant clients can
+         * surface them next to deterministic discrepancies, but kept in a separate
+         * top-level array because no LLM-discovered finding may flip
+         * {@link #compliant}. Empty in V1 until the agent ships.
+         */
+        List<Discrepancy> requiresHumanReview,
         /** Typed CheckResults for DISCREPANT rules. UI source of truth: the same
          *  shape as {@link #passed} / {@link #unableToVerify} so the frontend can
          *  treat all four buckets uniformly. */
@@ -32,6 +40,7 @@ public record DiscrepancyReport(
 
     public DiscrepancyReport {
         discrepancies = discrepancies == null ? List.of() : List.copyOf(discrepancies);
+        requiresHumanReview = requiresHumanReview == null ? List.of() : List.copyOf(requiresHumanReview);
         discrepant = discrepant == null ? List.of() : List.copyOf(discrepant);
         unableToVerify = unableToVerify == null ? List.of() : List.copyOf(unableToVerify);
         passed = passed == null ? List.of() : List.copyOf(passed);
