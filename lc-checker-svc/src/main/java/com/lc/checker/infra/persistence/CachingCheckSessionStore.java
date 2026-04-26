@@ -81,6 +81,18 @@ public class CachingCheckSessionStore implements CheckSessionStore {
     }
 
     @Override
+    public void recordSessionFiles(String sessionId,
+                                    String lcFilename, String lcSha256,
+                                    String invoiceFilename, String invoiceSha256) {
+        l2.recordSessionFiles(sessionId, lcFilename, lcSha256, invoiceFilename, invoiceSha256);
+    }
+
+    @Override
+    public Optional<SessionFileRefs> findSessionFiles(String sessionId) {
+        return l2.findSessionFiles(sessionId);
+    }
+
+    @Override
     public List<SessionSummary> findRecent(int limit) {
         return l2.findRecent(limit);
     }

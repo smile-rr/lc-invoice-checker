@@ -95,15 +95,23 @@ def init_observability(app: Any) -> None:
                 OTLPSpanExporter(endpoint=endpoint, headers={"Authorization": f"Basic {auth}"})
             )
         )
-        otel_trace.set_tracer_provider(provider)
-        _TRACER = otel_trace.get_tracer(service_name)
+        # Try to register globally so FastAPI auto-instrumentation finds us,
+        # BUT pull our tracer directly from `provider` so a previously-set
+        # global provider (e.g. from a transitive dep) doesn't silently
+        # silence our generations. set_tracer_provider() has first-call-wins
+        # semantics; the explicit provider.get_tracer(...) below works
+        # regardless of which provider "won" globally.
+        try:
+            otel_trace.set_tracer_provider(provider)
+        except Exception:  # noqa: BLE001
+            pass
+        _TRACER = provider.get_tracer(service_name)
         _TRACING_ENABLED = True
 
-        # FastAPI auto-instrumentation uses the global provider we just set,
-        # so inbound POST /extract spans go to Langfuse too. Also reads the
-        # incoming traceparent header (which we don't currently send from
-        # Java; the langfuse.trace.id merge handles that case anyway).
-        FastAPIInstrumentor.instrument_app(app)
+        # Inbound POST /extract auto-instrumentation. Pass our provider
+        # EXPLICITLY so FastAPI spans land on the same exporter as our
+        # manual generations even if the global provider isn't ours.
+        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
 
         # Capture X-Session-Id on every inbound request.
         @app.middleware("http")

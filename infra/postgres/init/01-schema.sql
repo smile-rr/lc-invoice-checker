@@ -17,20 +17,37 @@
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS check_sessions (
-    id              UUID        PRIMARY KEY,
-    lc_reference    VARCHAR(50),
-    beneficiary     VARCHAR(255),
-    applicant       VARCHAR(255),
-    status          VARCHAR(20) NOT NULL DEFAULT 'RUNNING',  -- RUNNING | COMPLETED | FAILED
-    compliant       BOOLEAN,
-    error           TEXT,
-    final_report    JSONB,                                     -- assembled DiscrepancyReport
-    created_at      TIMESTAMP   NOT NULL DEFAULT NOW(),
-    completed_at    TIMESTAMP
+    id                  UUID        PRIMARY KEY,
+    lc_reference        VARCHAR(50),
+    beneficiary         VARCHAR(255),
+    applicant           VARCHAR(255),
+    status              VARCHAR(20) NOT NULL DEFAULT 'RUNNING',  -- RUNNING | COMPLETED | FAILED
+    compliant           BOOLEAN,
+    error               TEXT,
+    final_report        JSONB,                                     -- assembled DiscrepancyReport
+    -- Original upload metadata. Kept on the session row (not a side table) so
+    -- the listing/history UI gets filename + content-address in one query.
+    -- Bytes themselves live in MinIO at content-addressed keys derived from
+    -- the SHA-256 columns; see infra/storage/MinioFileStore.java.
+    lc_filename         TEXT,
+    lc_sha256           CHAR(64),
+    invoice_filename    TEXT,
+    invoice_sha256      CHAR(64),
+    created_at          TIMESTAMP   NOT NULL DEFAULT NOW(),
+    completed_at        TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_lc_ref     ON check_sessions(lc_reference);
-CREATE INDEX IF NOT EXISTS idx_sessions_status     ON check_sessions(status);
-CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON check_sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_lc_ref         ON check_sessions(lc_reference);
+CREATE INDEX IF NOT EXISTS idx_sessions_status         ON check_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at     ON check_sessions(created_at DESC);
+-- Composite index supports "find prior runs of this same LC + invoice pair"
+-- (used by the optional re-run hint and any future evaluation query).
+CREATE INDEX IF NOT EXISTS idx_sessions_files_pair     ON check_sessions(invoice_sha256, lc_sha256, created_at DESC);
+
+-- Idempotent upgrade for existing installations — runs safely on every init.
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS lc_filename      TEXT;
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS lc_sha256        CHAR(64);
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS invoice_filename TEXT;
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS invoice_sha256   CHAR(64);
 
 -- ---------------------------------------------------------------------------
 -- Unified pipeline step table — one row per step, any stage.
@@ -117,6 +134,8 @@ CREATE OR REPLACE VIEW v_session_overview AS
 SELECT  s.id                                  AS session_id,
         s.lc_reference, s.beneficiary, s.applicant,
         s.status, s.compliant, s.error, s.created_at, s.completed_at,
+        s.lc_filename, s.lc_sha256,
+        s.invoice_filename, s.invoice_sha256,
         (SELECT status FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_parse')        AS lc_parse_status,
         (SELECT duration_ms FROM pipeline_steps WHERE session_id = s.id AND stage = 'lc_parse')   AS lc_parse_ms,
         (SELECT COUNT(*) FROM pipeline_steps WHERE session_id = s.id AND stage = 'invoice_extract')                                            AS extract_attempts,

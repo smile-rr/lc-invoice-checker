@@ -1,5 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useConfirm } from '../../hooks/useConfirm';
+import { HistoryDropdown } from './HistoryDropdown';
 
 export function TopNav() {
   const loc = useLocation();
@@ -41,6 +42,7 @@ export function TopNav() {
         </span>
       </Link>
       <nav className="ml-auto flex items-center gap-1 text-xs">
+        <HistoryDropdown />
         <Link
           to="/"
           onClick={leaveSession}

@@ -59,12 +59,56 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
 
     @Override
     public void createSession(String sessionId, String lcReference, String beneficiary, String applicant) {
+        // The controller may have already inserted a stub row via
+        // recordSessionFiles() before the pipeline started — so on conflict
+        // we UPDATE the parsed-LC fields without touching the file metadata.
         jdbc.update("""
                 INSERT INTO check_sessions (id, lc_reference, beneficiary, applicant, status, created_at)
                 VALUES (?::uuid, ?, ?, ?, 'RUNNING', NOW())
-                ON CONFLICT (id) DO NOTHING
+                ON CONFLICT (id) DO UPDATE SET
+                    lc_reference = COALESCE(EXCLUDED.lc_reference, check_sessions.lc_reference),
+                    beneficiary  = COALESCE(EXCLUDED.beneficiary,  check_sessions.beneficiary),
+                    applicant    = COALESCE(EXCLUDED.applicant,    check_sessions.applicant)
                 """, sessionId, lcReference, beneficiary, applicant);
         log.debug("Created session record: id={}", sessionId);
+    }
+
+    @Override
+    public void recordSessionFiles(String sessionId,
+                                    String lcFilename, String lcSha256,
+                                    String invoiceFilename, String invoiceSha256) {
+        // INSERT-or-UPDATE so this is safe whether or not the LC-parse stage
+        // has run yet. status defaults to 'RUNNING' on a fresh insert; if a
+        // row already exists we never overwrite its status.
+        jdbc.update("""
+                INSERT INTO check_sessions (id, lc_filename, lc_sha256, invoice_filename, invoice_sha256, status, created_at)
+                VALUES (?::uuid, ?, ?, ?, ?, 'RUNNING', NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    lc_filename      = EXCLUDED.lc_filename,
+                    lc_sha256        = EXCLUDED.lc_sha256,
+                    invoice_filename = EXCLUDED.invoice_filename,
+                    invoice_sha256   = EXCLUDED.invoice_sha256
+                """, sessionId, lcFilename, lcSha256, invoiceFilename, invoiceSha256);
+        log.debug("recordSessionFiles: session={} lcFile={} invoiceFile={}", sessionId, lcFilename, invoiceFilename);
+    }
+
+    @Override
+    public Optional<SessionFileRefs> findSessionFiles(String sessionId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                    SELECT lc_filename, lc_sha256, invoice_filename, invoice_sha256
+                    FROM   check_sessions
+                    WHERE  id = ?::uuid
+                    """,
+                    (rs, i) -> new SessionFileRefs(
+                            rs.getString("lc_filename"),
+                            rs.getString("lc_sha256"),
+                            rs.getString("invoice_filename"),
+                            rs.getString("invoice_sha256")),
+                    sessionId));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -230,6 +274,7 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
         return jdbc.query("""
                 SELECT s.id::text AS id, s.lc_reference, s.beneficiary, s.applicant,
                        s.status, s.compliant, s.created_at, s.completed_at,
+                       s.lc_filename, s.invoice_filename,
                        (SELECT COUNT(*) FROM pipeline_steps
                           WHERE session_id = s.id AND stage = 'lc_check'
                           AND step_key NOT LIKE 'phase:%')                       AS rules_run,
@@ -251,7 +296,9 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
                         rs.getTimestamp("created_at") == null ? null : rs.getTimestamp("created_at").toInstant(),
                         rs.getTimestamp("completed_at") == null ? null : rs.getTimestamp("completed_at").toInstant(),
                         rs.getInt("rules_run"),
-                        rs.getInt("discrepancies")),
+                        rs.getInt("discrepancies"),
+                        rs.getString("lc_filename"),
+                        rs.getString("invoice_filename")),
                 cap);
     }
 

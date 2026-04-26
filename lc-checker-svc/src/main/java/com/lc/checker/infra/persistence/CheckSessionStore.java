@@ -49,6 +49,40 @@ public interface CheckSessionStore {
     void finalizeSession(String sessionId, Boolean compliant, String error,
                          DiscrepancyReport finalReport, Instant completedAt);
 
+    // ── Original-file metadata (controller-side, before pipeline) ───────────
+
+    /**
+     * Persist the upload's filename + SHA-256 onto the session row. Called from
+     * the controller on {@code /start}, before the pipeline runs. The bytes
+     * themselves live in MinIO at content-addressed keys derived from the
+     * SHA-256 — see {@code infra.storage.MinioFileStore}.
+     *
+     * <p>Upserts the row: if {@code createSession} hasn't run yet (it fires
+     * later inside the LC-parse stage once the LC reference is known), this
+     * inserts a stub row with just the file metadata; otherwise it updates the
+     * existing row in place. Default impl is a no-op for non-persistent stores.
+     */
+    default void recordSessionFiles(String sessionId,
+                                    String lcFilename, String lcSha256,
+                                    String invoiceFilename, String invoiceSha256) {
+        // no-op for in-process / cache-only stores
+    }
+
+    /**
+     * Fetch the original filename + SHA-256 pair for a session. Used by
+     * {@code /lc-raw} and {@code /invoice} to derive the MinIO key when the
+     * controller's hot-cache misses (e.g. after a server restart). Returns
+     * {@link Optional#empty()} when the session row is absent or the file
+     * metadata wasn't recorded.
+     */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    record SessionFileRefs(String lcFilename, String lcSha256,
+                           String invoiceFilename, String invoiceSha256) {}
+
+    default Optional<SessionFileRefs> findSessionFiles(String sessionId) {
+        return Optional.empty();
+    }
+
     // ── Unified step recording ──────────────────────────────────────────────
 
     /**
@@ -97,7 +131,13 @@ public interface CheckSessionStore {
             Instant createdAt,
             Instant completedAt,
             int rulesRun,
-            int discrepancies) {}
+            int discrepancies,
+            // Original upload metadata. The history dropdown falls back to
+            // {@code invoiceFilename} (or the short session id) as a display
+            // label when {@code lcReference} is null — common for sessions
+            // that fail before LC parse completes.
+            String lcFilename,
+            String invoiceFilename) {}
 
     /**
      * Returns most recent sessions first, capped at {@code limit}. Default

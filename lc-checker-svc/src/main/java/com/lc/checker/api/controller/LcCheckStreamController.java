@@ -6,6 +6,9 @@ import com.lc.checker.pipeline.LcCheckPipeline;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
+import com.lc.checker.infra.persistence.CheckSessionStore.SessionFileRefs;
+import com.lc.checker.infra.storage.InvoiceFileStore;
+import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import io.opentelemetry.context.Context;
@@ -65,10 +68,13 @@ public class LcCheckStreamController {
     private final CheckEventBus bus;
     private final Executor executor;
     private final CheckSessionStore store;
+    private final InvoiceFileStore fileStore;
 
     /**
-     * Session-scoped upload bundle. Held in memory only while the session is alive
-     * so the UI can render the PDF + raw MT700 side-by-side.
+     * Session-scoped upload bundle. The in-memory map is the hot-path cache —
+     * MinIO is the durable backing store keyed by SHA-256. Both are populated
+     * synchronously on {@code /start}; reads prefer memory and fall back to
+     * MinIO via {@link CheckSessionStore#findSessionFiles}.
      */
     public record SessionFiles(String lcText, String invoiceFilename, byte[] invoiceBytes) {}
 
@@ -77,11 +83,13 @@ public class LcCheckStreamController {
     public LcCheckStreamController(LcCheckPipeline pipeline,
                                     CheckEventBus bus,
                                     @Qualifier("lcCheckExecutor") Executor executor,
-                                    CheckSessionStore store) {
+                                    CheckSessionStore store,
+                                    InvoiceFileStore fileStore) {
         this.pipeline = pipeline;
         this.bus = bus;
         this.executor = executor;
         this.store = store;
+        this.fileStore = fileStore;
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -101,14 +109,34 @@ public class LcCheckStreamController {
             sessionId = UUID.randomUUID().toString();
         }
 
-        String lcText = new String(lc.getBytes(), StandardCharsets.UTF_8);
+        byte[] lcBytes = lc.getBytes();
+        String lcText = new String(lcBytes, StandardCharsets.UTF_8);
         byte[] pdfBytes = invoice.getBytes();
         String pdfName = invoice.getOriginalFilename();
+        String lcName  = lc.getOriginalFilename();
 
         filesBySession.put(sessionId, new SessionFiles(lcText, pdfName, pdfBytes));
 
-        log.info("lc-check/start: session={} lcBytes={} invoiceBytes={} invoiceName={}",
-                sessionId, lc.getSize(), invoice.getSize(), pdfName);
+        // Content-address by SHA-256 so identical re-uploads hit the same blob.
+        // Hashes also become the session row's lc_sha256 / invoice_sha256, which
+        // /lc-raw + /invoice use to recover bytes from MinIO after restart.
+        String lcSha      = Sha256.hex(lcBytes);
+        String invoiceSha = Sha256.hex(pdfBytes);
+
+        // Persist filenames + hashes BEFORE the pipeline runs. The session row
+        // may not exist yet (LcParseStage creates it later) — recordSessionFiles
+        // upserts a stub if needed.
+        store.recordSessionFiles(sessionId, lcName, lcSha, pdfName, invoiceSha);
+
+        // Sync put with bounded timeout (configured on the S3Client). Failures
+        // are logged inside the file store; we don't 502 the request because
+        // the pipeline can still complete and live render works from memory.
+        fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
+        fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
+
+        log.info("lc-check/start: session={} lcBytes={} invoiceBytes={} invoiceName={} lcSha={} invSha={}",
+                sessionId, lc.getSize(), invoice.getSize(), pdfName,
+                lcSha.substring(0, 12), invoiceSha.substring(0, 12));
 
         final String sid = sessionId;
         final CheckEventPublisher publisher = bus.publisherFor(sid);
@@ -151,11 +179,21 @@ public class LcCheckStreamController {
 
     @GetMapping(path = "/{sessionId}/lc-raw", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> lcRaw(@PathVariable String sessionId) {
+        // Hot path: in-process cache populated on /start.
         SessionFiles f = filesBySession.get(sessionId);
-        if (f == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok()
-                .contentType(MediaType.TEXT_PLAIN)
-                .body(f.lcText());
+        if (f != null) {
+            return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(f.lcText());
+        }
+        // Cold path: server restarted (or session never registered here, e.g.
+        // synchronous /lc-check entry point). Reach into MinIO via the hash.
+        return store.findSessionFiles(sessionId)
+                .map(SessionFileRefs::lcSha256)
+                .filter(s -> s != null && !s.isBlank())
+                .flatMap(fileStore::getLc)
+                .map(bytes -> ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .body(new String(bytes, StandardCharsets.UTF_8)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
@@ -171,14 +209,28 @@ public class LcCheckStreamController {
 
     @GetMapping(path = "/{sessionId}/invoice")
     public ResponseEntity<byte[]> invoice(@PathVariable String sessionId) {
+        // Hot path: in-process cache.
         SessionFiles f = filesBySession.get(sessionId);
-        if (f == null) return ResponseEntity.notFound().build();
+        if (f != null) {
+            return pdfResponse(f.invoiceBytes(), f.invoiceFilename());
+        }
+        // Cold path: rehydrate from MinIO using the recorded hash. Filename
+        // comes from the session row (preserved across restarts) so the user
+        // still sees the name they uploaded under.
+        return store.findSessionFiles(sessionId)
+                .filter(refs -> refs.invoiceSha256() != null && !refs.invoiceSha256().isBlank())
+                .flatMap(refs -> fileStore.getInvoice(refs.invoiceSha256())
+                        .map(bytes -> pdfResponse(bytes, refs.invoiceFilename())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    private static ResponseEntity<byte[]> pdfResponse(byte[] bytes, String filename) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_PDF);
-        headers.setContentLength(f.invoiceBytes().length);
+        headers.setContentLength(bytes.length);
         // inline so <embed>/pdf.js can render in-browser rather than force download
-        String name = f.invoiceFilename() == null ? "invoice.pdf" : f.invoiceFilename();
+        String name = filename == null ? "invoice.pdf" : filename;
         headers.set(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + name + "\"");
-        return ResponseEntity.ok().headers(headers).body(f.invoiceBytes());
+        return ResponseEntity.ok().headers(headers).body(bytes);
     }
 }

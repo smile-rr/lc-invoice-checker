@@ -3,17 +3,19 @@ import { useNavigate } from 'react-router-dom';
 
 interface Props {
   state: SessionState;
-  onOpenTrace: () => void;
 }
 
 /**
- * Single-line session header. Verdict + LC info + count chips + tools, all
+ * Single-line session header. Verdict + LC info + count chips + session id,
  * crammed into ~40px so the body gets the vertical real estate. Counts come
  * from {@code report.summary} when the report is final (backend source of
  * truth) and only fall back to a live count derived from {@code state.checks}
  * during streaming, when {@code summary} hasn't been assembled yet.
+ *
+ * Forensic tracing now lives in Langfuse — the local trace modal was removed
+ * because it dumped raw JSON that Langfuse renders as a proper timeline.
  */
-export function SessionStrip({ state, onOpenTrace }: Props) {
+export function SessionStrip({ state }: Props) {
   const lc = state.lc;
   const report = state.report;
   const idle = !state.sessionId;
@@ -22,9 +24,12 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
   const running = !idle && !report && !state.error;
 
   const nav = useNavigate();
-  const goToRules = (filter: 'fail' | 'pass' | 'unable' | 'na') => {
+  // Canonical compliance-check statuses: PASS / FAIL / DOUBTS / NOT_REQUIRED.
+  // The Compliance Check step owns the actual filter UI (StatusFilterBar);
+  // the chips here are deep-links into it.
+  const goToCheck = (filter: 'fail' | 'pass' | 'doubts' | 'not_required') => {
     if (!state.sessionId) return;
-    nav(`/session/${state.sessionId}?step=rules&filter=${filter}`);
+    nav(`/session/${state.sessionId}?step=check&filter=${filter}`);
   };
 
   // Idle render: same vertical footprint as the populated strip so the page
@@ -44,10 +49,10 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
         {/* Disabled chip placeholders preserve horizontal balance with the
             populated strip — same widths, same baseline, just dim. */}
         <div className="flex items-center gap-3 font-mono text-[11px] opacity-30 select-none">
-          <span className="px-2 py-0.5">0 Failed</span>
-          <span className="px-2 py-0.5">0 Passed</span>
-          <span className="px-2 py-0.5">0 Unable</span>
-          <span className="px-2 py-0.5">0 N/A</span>
+          <span className="px-2 py-0.5">0 Fail</span>
+          <span className="px-2 py-0.5">0 Pass</span>
+          <span className="px-2 py-0.5">0 Doubts</span>
+          <span className="px-2 py-0.5">0 Not required</span>
         </div>
       </div>
     );
@@ -56,16 +61,16 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
   // Prefer authoritative summary from the report; fall back to live derivation.
   const counts = report?.summary
     ? {
-        pass: report.summary.passed,
-        fail: report.summary.failed,
-        unable: report.summary.doubts,
-        na: report.summary.not_required,
+        pass:         report.summary.passed,
+        fail:         report.summary.failed,
+        doubts:       report.summary.doubts,
+        not_required: report.summary.not_required,
       }
     : {
-        pass: state.checks.filter((c) => c.status === 'PASS').length,
-        fail: state.checks.filter((c) => c.status === 'FAIL').length,
-        unable: state.checks.filter((c) => c.status === 'DOUBTS').length,
-        na: state.checks.filter((c) => c.status === 'NOT_REQUIRED').length,
+        pass:         state.checks.filter((c) => c.status === 'PASS').length,
+        fail:         state.checks.filter((c) => c.status === 'FAIL').length,
+        doubts:       state.checks.filter((c) => c.status === 'DOUBTS').length,
+        not_required: state.checks.filter((c) => c.status === 'NOT_REQUIRED').length,
       };
 
   return (
@@ -111,33 +116,40 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
         </span>
       </div>
 
-      {/* Count chips */}
+      {/* Count chips — labels match the canonical CheckStatus enum
+          (PASS / FAIL / DOUBTS / NOT_REQUIRED) so operators see the same
+          terminology in the strip as on the rule cards. */}
       <div className="flex items-center gap-3 font-mono text-[11px]">
         <Chip
-          label="Failed" n={counts.fail} tone="red"
+          label="Fail" n={counts.fail} tone="red"
           highlight={counts.fail > 0}
-          onClick={() => goToRules('fail')}
+          onClick={() => goToCheck('fail')}
         />
-        <Chip label="Passed" n={counts.pass} tone="green" onClick={() => goToRules('pass')} />
+        <Chip label="Pass" n={counts.pass} tone="green" onClick={() => goToCheck('pass')} />
         <Chip
-          label="Unable" n={counts.unable} tone="gold"
-          highlight={counts.unable > 0}
-          onClick={() => goToRules('unable')}
+          label="Doubts" n={counts.doubts} tone="gold"
+          highlight={counts.doubts > 0}
+          onClick={() => goToCheck('doubts')}
         />
-        <Chip label="N/A" n={counts.na} tone="muted" onClick={() => goToRules('na')} />
+        <Chip
+          label="Not required" n={counts.not_required} tone="muted"
+          onClick={() => goToCheck('not_required')}
+        />
       </div>
 
-      {/* Session id + tools */}
-      <span className="font-mono text-[10px] text-muted">
-        {state.sessionId?.slice(0, 8) ?? '—'}
-      </span>
+      {/* Session id — short label; click to copy the full UUID for log /
+          Langfuse correlation. */}
       <button
-        onClick={onOpenTrace}
+        onClick={() => {
+          if (state.sessionId) {
+            void navigator.clipboard.writeText(state.sessionId);
+          }
+        }}
         disabled={!state.sessionId}
-        className="text-[10px] px-2 py-1 rounded border border-line hover:border-teal-2 disabled:opacity-40 font-mono"
-        title="Open forensic trace"
+        className="font-mono text-[10px] text-muted hover:text-navy-1 disabled:cursor-default"
+        title={state.sessionId ? `Copy session id: ${state.sessionId}` : ''}
       >
-        🔍
+        {state.sessionId?.slice(0, 8) ?? '—'}
       </button>
     </div>
   );

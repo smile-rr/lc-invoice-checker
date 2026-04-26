@@ -6,6 +6,8 @@ import com.lc.checker.domain.result.DiscrepancyReport;
 import com.lc.checker.domain.session.CheckSession;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
+import com.lc.checker.infra.storage.InvoiceFileStore;
+import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.pipeline.LcCheckPipeline;
 import java.io.IOException;
@@ -42,10 +44,12 @@ public class LcCheckController {
 
     private final LcCheckPipeline pipeline;
     private final CheckSessionStore store;
+    private final InvoiceFileStore fileStore;
 
-    public LcCheckController(LcCheckPipeline pipeline, CheckSessionStore store) {
+    public LcCheckController(LcCheckPipeline pipeline, CheckSessionStore store, InvoiceFileStore fileStore) {
         this.pipeline = pipeline;
         this.store = store;
+        this.fileStore = fileStore;
     }
 
     @PostMapping(consumes = "multipart/form-data")
@@ -56,8 +60,21 @@ public class LcCheckController {
         log.info("Received lc-check: lcBytes={} invoiceBytes={} invoiceName={}",
                 lc.getSize(), invoice.getSize(), invoice.getOriginalFilename());
 
-        String lcText = new String(lc.getBytes(), StandardCharsets.UTF_8);
-        CheckSession session = pipeline.run(sessionId, lcText, invoice.getBytes(), invoice.getOriginalFilename());
+        byte[] lcBytes = lc.getBytes();
+        String lcText = new String(lcBytes, StandardCharsets.UTF_8);
+        byte[] pdfBytes = invoice.getBytes();
+        String pdfName = invoice.getOriginalFilename();
+        String lcName  = lc.getOriginalFilename();
+
+        // Persist file metadata + content-addressed bytes so the session URL
+        // remains usable after restart (same contract as the streaming /start).
+        String lcSha      = Sha256.hex(lcBytes);
+        String invoiceSha = Sha256.hex(pdfBytes);
+        store.recordSessionFiles(sessionId, lcName, lcSha, pdfName, invoiceSha);
+        fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
+        fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
+
+        CheckSession session = pipeline.run(sessionId, lcText, pdfBytes, pdfName);
         return ResponseEntity.ok(session.finalReport());
     }
 

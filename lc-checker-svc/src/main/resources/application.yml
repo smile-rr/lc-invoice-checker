@@ -123,6 +123,26 @@ session:
   ttl-minutes: 60
   max-size: 1000
 
+# --- File storage (LC text + invoice PDF) ------------------------------------
+# Files are stored content-addressed by SHA-256 in MinIO so re-uploading the
+# same bytes never duplicates. Session-level retrieval ('/lc-raw', '/invoice')
+# falls back to MinIO when the in-memory hot cache misses (e.g. after restart).
+#
+# When MinIO is unreachable the controller logs a warning and continues with
+# memory-only — the LC check itself doesn't depend on object storage.
+storage:
+  minio:
+    enabled:    ${MINIO_ENABLED:true}
+    endpoint:   ${MINIO_ENDPOINT:http://192.168.31.214:9000}
+    bucket:     ${MINIO_BUCKET:lc-pdfs}
+    region:     ${MINIO_REGION:us-east-1}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    path-style: ${MINIO_PATH_STYLE:true}
+    # Hard ceiling for synchronous put/get on the request thread. Failures or
+    # timeouts are logged and downgraded to memory-only behaviour.
+    request-timeout-seconds: ${MINIO_REQUEST_TIMEOUT_SECONDS:3}
+
 rules:
   catalog-path: classpath:/rules/catalog.yml
 

@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useCheckSession } from '../hooks/useCheckSession';
 import { usePipelineConfig } from '../hooks/usePipelineConfig';
-import { TraceModal } from '../components/results/TraceModal';
 import { PipelineFlow } from '../components/shell/PipelineFlow';
 import { SessionStrip } from '../components/shell/SessionStrip';
 import { useStep } from '../components/shell/steps';
@@ -27,7 +26,6 @@ export function SessionPage() {
   const state = useCheckSession(sessionId);
   const pipeline = usePipelineConfig();
   const [step, setStep] = useStep(state, pipeline.configuredStages);
-  const [showTrace, setShowTrace] = useState(false);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -59,7 +57,7 @@ export function SessionPage() {
   // body in an internal scroller so behaviour is uniform.
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <SessionStrip state={state} onOpenTrace={() => setShowTrace(true)} />
+      <SessionStrip state={state} />
       <PipelineFlow
         state={state}
         active={step}
@@ -97,10 +95,6 @@ export function SessionPage() {
           </Scrollable>
         )}
       </div>
-
-      {showTrace && (
-        <TraceModal sessionId={sessionId} onClose={() => setShowTrace(false)} />
-      )}
     </div>
   );
 }

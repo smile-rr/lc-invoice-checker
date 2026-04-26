@@ -87,6 +87,14 @@ dependencies {
     // The Scalar UI at /static/docs.html consumes this. We use the -api starter
     // (not -ui) because we don't ship Swagger-UI; Scalar is the UI.
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-api:2.8.11")
+
+    // --- AWS SDK v2 (S3 client, used against intranet MinIO) ----------------
+    // BOM keeps every aws SDK module on one version. url-connection-client is
+    // the lightweight sync HTTP client (no Netty pulled in) — fine for our
+    // intranet single-bucket put/get traffic and shaves ~10MB off the artifact.
+    implementation(platform("software.amazon.awssdk:bom:2.31.32"))
+    implementation("software.amazon.awssdk:s3")
+    implementation("software.amazon.awssdk:url-connection-client")
 }
 
 tasks.withType<JavaCompile> {

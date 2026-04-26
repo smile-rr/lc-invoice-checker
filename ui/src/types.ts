@@ -347,4 +347,8 @@ export interface SessionSummary {
   completed_at: string | null;
   rules_run: number;
   discrepancies: number;
+  // Original-upload metadata, used as a display-name fallback when
+  // lc_reference is null (e.g. sessions that failed before LC parse finished).
+  lc_filename: string | null;
+  invoice_filename: string | null;
 }
