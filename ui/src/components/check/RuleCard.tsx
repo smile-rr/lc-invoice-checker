@@ -2,8 +2,11 @@ import { useState } from 'react';
 import type { CheckResult, CheckStatus, RuleSummary } from '../../types';
 
 interface Props {
-  check: CheckResult;
-  rule: RuleSummary | undefined;
+  /** The completed check result. {@code null} means the rule hasn't run yet
+   *  (e.g. its stage is still in flight) — card renders in pending state. */
+  check: CheckResult | null;
+  /** Catalog metadata for this rule. */
+  rule: RuleSummary;
   failuresOnly: boolean;
   onAuthorityClick?: (ref: string) => void;
 }
@@ -13,77 +16,96 @@ const METHOD_LABEL: Record<string, string> = {
   AGENT:        'LLM agent',
 };
 
-// ─── Surface layering (Apple HIG "Materials" / IBM Carbon "Layer" pattern) ───
-//
-// Each card has 4 visual zones from top to bottom:
-//   1. Header   — status-tinted, full opacity → instant triage colour signal
-//   2. Meta     — white (paper), subtle separator
-//   3. Data     — slate header row + white data cells (table pattern)
-//   4. Result   — strongly tinted, thick status border → the verdict
-//   5. Authority — slate, recedes (reference material, not primary)
-//
-// Key rule: every zone uses FULL opacity backgrounds. Semi-transparent tints
-// blend into white and become invisible — that was the prior readability problem.
-
-const HEADER_BG: Record<CheckStatus, string> = {
-  DISCREPANT:            'bg-status-redSoft',       // clearly red-tinted
-  PASS:                  'bg-status-greenSoft/50',   // clearly green-tinted
-  UNABLE_TO_VERIFY:      'bg-status-goldSoft/60',
-  REQUIRES_HUMAN_REVIEW: 'bg-status-goldSoft/60',
-  HUMAN_REVIEW:          'bg-status-goldSoft/60',
-  NOT_APPLICABLE:        'bg-slate2',
+const CATEGORY_BADGE: Record<string, { label: string; cls: string }> = {
+  PROGRAMMATIC: {
+    label: 'PROG',
+    cls:   'bg-teal-1/15 text-teal-2 border-teal-2/40',
+  },
+  AGENT: {
+    label: 'AGENT',
+    cls:   'bg-navy-1/10 text-navy-1 border-navy-1/40',
+  },
 };
 
+function CategoryBadge({ kind }: { kind: string | null | undefined }) {
+  const info = CATEGORY_BADGE[kind ?? 'PROGRAMMATIC'];
+  if (!info) return null;
+  return (
+    <span
+      className={[
+        'shrink-0 inline-flex items-center font-mono text-[10px] uppercase tracking-[0.08em] font-bold',
+        'px-1.5 py-0.5 rounded-sm border',
+        info.cls,
+      ].join(' ')}
+      title={kind === 'AGENT' ? 'Agent rule (LLM call)' : 'Programmatic rule (deterministic SpEL)'}
+    >
+      {info.label}
+    </span>
+  );
+}
+
+// ─── Visual diet ─────────────────────────────────────────────────────────────
+//
+// The card is a NEUTRAL container — white background, muted text, generous
+// whitespace. Status colour appears only where it earns attention:
+//
+//   • Status badge    (top-right of header)   — focal pill
+//   • Border-left     (4-px coloured strip)   — quiet scroll-scan signal
+//   • Verdict word    (in the Result zone)    — coloured prose
+//
+// Everything else (header background, data cells, authority footnote) stays
+// neutral. This keeps the eye on the verdict, not on a competing wash of
+// reds and greens.
+
 export function RuleCard({ check, rule, failuresOnly, onAuthorityClick }: Props) {
+  if (check === null) {
+    return <PendingRuleCard rule={rule} />;
+  }
   if (failuresOnly && check.status === 'PASS') {
     return <CollapsedPassRow check={check} />;
   }
 
   const tone     = statusTone(check.status);
-  const method   = METHOD_LABEL[check.check_type ?? rule?.check_type ?? 'A'] ?? '—';
-  const phase    = (rule?.business_phase ?? check.business_phase ?? '—').toLowerCase();
-  const ucpRef   = check.ucp_ref ?? rule?.ucp_ref ?? null;
-  const isbpRef  = check.isbp_ref ?? rule?.isbp_ref ?? null;
-  const headerBg = HEADER_BG[check.status] ?? 'bg-slate2';
+  const method   = METHOD_LABEL[check.check_type ?? rule.check_type ?? 'PROGRAMMATIC'] ?? '—';
+  const phase    = (rule.business_phase ?? check.business_phase ?? '—').toLowerCase();
+  const ucpRef   = check.ucp_ref ?? rule.ucp_ref ?? null;
+  const isbpRef  = check.isbp_ref ?? rule.isbp_ref ?? null;
 
   return (
     <article
       id={`rule-${check.rule_id}`}
       className={[
-        'border border-line border-l-[4px] rounded-sm shadow-sm mb-5 scroll-mt-6',
-        'overflow-hidden',          // keeps rounded corners on child backgrounds
-        'target:animate-flash',
+        'border border-line border-l-[4px] rounded-sm bg-paper mb-4 scroll-mt-6',
+        'overflow-hidden target:animate-flash',
         tone.borderLeft,
       ].join(' ')}
     >
-      {/* ── Zone 1: Header ── status-tinted for instant triage ─────────────── */}
-      <header className={`flex items-center gap-3 px-4 py-2.5 border-b border-line ${headerBg}`}>
-        {/* Rule ID — monospace (it IS a code) */}
+      {/* Header — neutral white. Status badge is the only coloured element. */}
+      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-line bg-paper">
         <span className="font-mono text-xs font-bold text-navy-1 shrink-0 min-w-[72px]">
           {check.rule_id}
         </span>
-        {/* Rule name — sans, slightly larger, flex fills remaining width */}
+        <CategoryBadge kind={check.check_type ?? rule.check_type} />
         <span className="font-sans text-[14px] font-medium text-navy-1 flex-1 min-w-0 truncate">
-          {check.rule_name ?? rule?.name ?? check.rule_id}
+          {check.rule_name ?? rule.name ?? check.rule_id}
         </span>
-        {/* Status badge */}
         <span
           className={[
             'shrink-0 inline-flex items-center gap-1.5',
             'font-mono text-[11px] uppercase tracking-[0.09em] font-bold',
-            'px-2.5 py-1 rounded-sm',
+            'px-2.5 py-1 rounded-sm border',
             tone.badge,
           ].join(' ')}
         >
           {tone.glyph} {statusShort(check.status)}
         </span>
-        {check.severity && (
+        {check.severity && check.status === 'FAIL' && (
           <span
             className={[
               'shrink-0 font-sans text-[11px] uppercase tracking-[0.07em] font-semibold',
               'px-2 py-0.5 rounded-sm border',
               check.severity === 'MAJOR'
-                ? 'border-status-red/50 text-status-red bg-status-redSoft/50'
+                ? 'border-status-red/40 text-status-red'
                 : 'border-line text-muted',
             ].join(' ')}
           >
@@ -92,8 +114,7 @@ export function RuleCard({ check, rule, failuresOnly, onAuthorityClick }: Props)
         )}
       </header>
 
-      {/* ── Zone 2: Meta breadcrumb ─────────────────────────────────────────── */}
-      {/* font-sans, solid muted (no opacity reduction) so it's actually readable */}
+      {/* Meta breadcrumb — phase / method / authority refs (muted). */}
       <div className="px-4 py-2 border-b border-line bg-paper flex flex-wrap items-center gap-x-2 gap-y-1 font-sans text-[11px] text-muted">
         <span className="uppercase tracking-[0.05em]">{phase}</span>
         <span aria-hidden className="text-line select-none">›</span>
@@ -107,30 +128,66 @@ export function RuleCard({ check, rule, failuresOnly, onAuthorityClick }: Props)
         )}
       </div>
 
-      {/* ── Zone 3: Data grid — table pattern ───────────────────────────────── */}
-      {/*
-          Column header row uses bg-slate2 (off-white) to look like <thead>.
-          Data cells are white.
-          This is the same "layer" pattern used in Apple's tables and IBM Carbon.
-      */}
+      {/* Data + result + authority — all neutral except the verdict word. */}
       <DataGrid check={check} tone={tone} />
-
-      {/* ── Zone 5: Authority footnote — recedes with slate bg ──────────────── */}
       <AuthorityFootnote rule={rule} ucpRef={ucpRef} isbpRef={isbpRef} />
-
-      {/* AGENT prompt/response audit pane is provided by /trace replay; the
-          live card no longer carries the per-rule trace inline. */}
     </article>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Citation chip
+// Pending card — same neutral frame, dashed border + "Waiting…" badge
+// ---------------------------------------------------------------------------
+
+function PendingRuleCard({ rule }: { rule: RuleSummary }) {
+  const phase = (rule.business_phase ?? '—').toLowerCase();
+  const method = METHOD_LABEL[rule.check_type ?? 'PROGRAMMATIC'] ?? '—';
+  const ucpRef = rule.ucp_ref ?? null;
+  const isbpRef = rule.isbp_ref ?? null;
+  return (
+    <article
+      id={`rule-${rule.id}`}
+      className="border border-dashed border-line border-l-[4px] border-l-line/60 rounded-sm bg-paper mb-4"
+    >
+      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-line bg-paper">
+        <span className="font-mono text-xs font-bold text-navy-1 shrink-0 min-w-[72px]">
+          {rule.id}
+        </span>
+        <CategoryBadge kind={rule.check_type} />
+        <span className="font-sans text-[14px] font-medium text-navy-1 flex-1 min-w-0 truncate">
+          {rule.name}
+        </span>
+        <span className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.09em] font-bold px-2.5 py-1 rounded-sm bg-paper text-muted border border-line">
+          <span className="w-1.5 h-1.5 rounded-full bg-muted/60 animate-pulse" />
+          Waiting…
+        </span>
+      </header>
+      <div className="px-4 py-2 border-b border-line bg-paper flex flex-wrap items-center gap-x-2 gap-y-1 font-sans text-[11px] text-muted">
+        <span className="uppercase tracking-[0.05em]">{phase}</span>
+        <span aria-hidden className="text-line select-none">›</span>
+        <span>{method}</span>
+        {(ucpRef || isbpRef) && (
+          <>
+            <span aria-hidden className="text-line select-none">›</span>
+            {ucpRef && <span className="font-mono text-[11px] text-muted">{ucpRef}</span>}
+            {isbpRef && <span className="font-mono text-[11px] text-muted">{isbpRef}</span>}
+          </>
+        )}
+      </div>
+      <div className="px-4 py-3 bg-paper text-sm text-muted italic">
+        Pending verdict…
+      </div>
+    </article>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Citation chip — muted by default, hover hint reveals it's interactive
 // ---------------------------------------------------------------------------
 
 function CitationChip({ ref_, onClick }: { ref_: string; onClick?: (ref: string) => void }) {
-  const cls = 'font-mono text-[11px] text-teal-1 hover:text-teal-2 hover:underline underline-offset-2';
-  if (!onClick) return <span className={`font-mono text-[11px] text-teal-1`}>{ref_}</span>;
+  const cls = 'font-mono text-[11px] text-muted hover:text-navy-1 hover:underline underline-offset-2';
+  if (!onClick) return <span className="font-mono text-[11px] text-muted">{ref_}</span>;
   return (
     <button type="button" onClick={() => onClick(ref_)} className={cls} title={`Filter to ${ref_}`}>
       {ref_}
@@ -139,15 +196,14 @@ function CitationChip({ ref_, onClick }: { ref_: string; onClick?: (ref: string)
 }
 
 // ---------------------------------------------------------------------------
-// Data grid — table-header pattern + result row
+// Data grid + result row
 // ---------------------------------------------------------------------------
 
 function DataGrid({ check, tone }: { check: CheckResult; tone: ReturnType<typeof statusTone> }) {
   return (
     <div className="border-b border-line">
-
-      {/* Column header row — slate bg = visual table-header signal */}
-      <div className="grid grid-cols-2 bg-slate2 border-b border-line">
+      {/* Column header row */}
+      <div className="grid grid-cols-2 bg-slate2/50 border-b border-line">
         <div className="px-4 py-1.5">
           <span className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted">
             LC
@@ -160,7 +216,7 @@ function DataGrid({ check, tone }: { check: CheckResult; tone: ReturnType<typeof
         </div>
       </div>
 
-      {/* Data cells — both white, clear divider between them */}
+      {/* Data cells — neutral, no status tint */}
       <div className="grid grid-cols-1 md:grid-cols-2 bg-paper">
         <div className="px-4 py-3">
           <Value value={check.lc_value} />
@@ -170,22 +226,16 @@ function DataGrid({ check, tone }: { check: CheckResult; tone: ReturnType<typeof
         </div>
       </div>
 
-      {/* ── Zone 4: Result — the verdict, most important zone ─────────────── */}
-      {/*
-          Thick top border in status colour + full-opacity tinted background.
-          "Most important" means strongest visual weight — you should see this
-          section first when scanning a card.
-      */}
-      <div className={`col-span-2 px-4 py-3.5 ${tone.resultBorder} ${tone.resultBg}`}>
-        <div className="flex items-center gap-2 mb-2">
-          <span className={`font-sans text-[11px] uppercase tracking-[0.10em] font-bold ${tone.resultLabel}`}>
-            Result
+      {/* Result row — neutral background; ONLY the verdict word is coloured. */}
+      <div className="col-span-2 px-4 py-3 bg-paper border-t border-line">
+        <div className="flex items-baseline gap-2 mb-1.5">
+          <span className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted">
+            Verdict
           </span>
           <span className={`font-mono text-[11px] font-bold ${tone.resultLabel}`}>
-            {tone.glyph} {statusShort(toneStatus(tone))}
+            {tone.glyph} {statusShort(check.status)}
           </span>
         </div>
-        {/* Description — the verdict prose. 14px sans, navy, readable. */}
         <div className="font-sans text-sm text-navy-1 leading-relaxed">
           {check.description
             ?? <span className="text-muted italic">No verdict text provided.</span>}
@@ -207,7 +257,7 @@ function Value({ value }: { value: string | null }) {
 }
 
 // ---------------------------------------------------------------------------
-// Authority footnote — clearly separated by full-opacity slate background
+// Authority footnote — muted, expandable
 // ---------------------------------------------------------------------------
 
 function AuthorityFootnote({
@@ -224,10 +274,7 @@ function AuthorityFootnote({
   const hasExcerpt = !!(ucpEx || isbpEx);
 
   return (
-    // Full-opacity slate2 — clearly visually separated from the white data cells.
-    // No border-t here: the DataGrid wrapper already provides border-b, adding
-    // border-t would create a visually thicker double-line.
-    <div className="px-4 py-2.5 bg-slate2">
+    <div className="px-4 py-2 bg-slate2/40">
       <button
         type="button"
         onClick={() => hasExcerpt && setOpen((v) => !v)}
@@ -256,14 +303,14 @@ function AuthorityFootnote({
 function ExcerptRow({ ref_, text }: { ref_: string; text: string }) {
   return (
     <div className="grid grid-cols-[140px_1fr] gap-3">
-      <dt className="font-mono text-[11px] text-teal-1 pt-0.5 font-semibold">{ref_}</dt>
+      <dt className="font-mono text-[11px] text-navy-1 pt-0.5 font-semibold">{ref_}</dt>
       <dd className="font-sans text-xs text-navy-1 leading-snug">{text}</dd>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Collapsed pass row
+// Collapsed pass row (used when failuresOnly is on)
 // ---------------------------------------------------------------------------
 
 function CollapsedPassRow({ check }: { check: CheckResult }) {
@@ -271,7 +318,7 @@ function CollapsedPassRow({ check }: { check: CheckResult }) {
     <a
       href={`#rule-${check.rule_id}`}
       id={`rule-${check.rule_id}`}
-      className="flex items-center gap-3 px-4 py-2 border-l-4 border-status-green/60 mb-1.5 bg-status-greenSoft/40 hover:bg-status-greenSoft/70 transition-colors no-underline rounded-sm"
+      className="flex items-center gap-3 px-4 py-2 border-l-4 border-status-green/60 mb-1.5 bg-paper hover:bg-slate2 transition-colors no-underline rounded-sm"
     >
       <span className="font-mono text-[11px] uppercase font-bold text-status-green shrink-0">
         ✓ Pass
@@ -288,80 +335,47 @@ function CollapsedPassRow({ check }: { check: CheckResult }) {
 
 function statusShort(s: CheckStatus): string {
   switch (s) {
-    case 'PASS':                  return 'Pass';
-    case 'DISCREPANT':            return 'Discrepant';
-    case 'UNABLE_TO_VERIFY':      return 'Unable';
-    case 'NOT_APPLICABLE':        return 'N/A';
-    case 'HUMAN_REVIEW':
-    case 'REQUIRES_HUMAN_REVIEW': return 'Review';
+    case 'PASS':         return 'Pass';
+    case 'FAIL':         return 'Fail';
+    case 'DOUBTS':       return 'Doubts';
+    case 'NOT_REQUIRED': return 'Not required';
   }
 }
 
 function statusTone(s: CheckStatus): {
-  badge:        string;
-  borderLeft:   string;
-  glyph:        string;
-  resultBg:     string;
-  resultBorder: string;   // thick status-coloured top border for the result zone
-  resultLabel:  string;
+  badge:       string;
+  borderLeft:  string;
+  glyph:       string;
+  resultLabel: string;
 } {
   switch (s) {
     case 'PASS':
       return {
-        badge:        'bg-status-greenSoft text-status-green border border-status-green/40',
-        borderLeft:   'border-l-status-green',
-        glyph:        '✓',
-        resultBg:     'bg-status-greenSoft/70',
-        resultBorder: 'border-t-2 border-status-green/40',
-        resultLabel:  'text-status-green',
+        badge:       'bg-status-greenSoft text-status-green border-status-green/40',
+        borderLeft:  'border-l-status-green',
+        glyph:       '✓',
+        resultLabel: 'text-status-green',
       };
-    case 'DISCREPANT':
+    case 'FAIL':
       return {
-        badge:        'bg-status-redSoft text-status-red border border-status-red/40',
-        borderLeft:   'border-l-status-red',
-        glyph:        '✗',
-        // Full-opacity redSoft — clearly visible, no guessing
-        resultBg:     'bg-status-redSoft',
-        resultBorder: 'border-t-2 border-status-red/50',
-        resultLabel:  'text-status-red',
+        badge:       'bg-status-redSoft text-status-red border-status-red/40',
+        borderLeft:  'border-l-status-red',
+        glyph:       '✗',
+        resultLabel: 'text-status-red',
       };
-    case 'UNABLE_TO_VERIFY':
+    case 'DOUBTS':
       return {
-        badge:        'bg-status-goldSoft text-status-gold border border-status-gold/40',
-        borderLeft:   'border-l-status-gold',
-        glyph:        '?',
-        resultBg:     'bg-status-goldSoft',
-        resultBorder: 'border-t-2 border-status-gold/40',
-        resultLabel:  'text-status-gold',
+        badge:       'bg-status-goldSoft text-status-gold border-status-gold/40',
+        borderLeft:  'border-l-status-gold',
+        glyph:       '?',
+        resultLabel: 'text-status-gold',
       };
-    case 'NOT_APPLICABLE':
+    case 'NOT_REQUIRED':
       return {
-        badge:        'bg-slate2 text-muted border border-line',
-        borderLeft:   'border-l-line',
-        glyph:        '·',
-        resultBg:     'bg-slate2',
-        resultBorder: 'border-t border-line',
-        resultLabel:  'text-muted',
+        badge:       'bg-slate2 text-muted border-line',
+        borderLeft:  'border-l-line',
+        glyph:       '·',
+        resultLabel: 'text-muted',
       };
-    case 'HUMAN_REVIEW':
-    case 'REQUIRES_HUMAN_REVIEW':
-      return {
-        badge:        'bg-status-goldSoft text-status-gold border border-status-gold/40',
-        borderLeft:   'border-l-status-gold',
-        glyph:        '⚠',
-        resultBg:     'bg-status-goldSoft',
-        resultBorder: 'border-t-2 border-status-gold/40',
-        resultLabel:  'text-status-gold',
-      };
-  }
-}
-
-function toneStatus(_tone: ReturnType<typeof statusTone>): CheckStatus {
-  switch (_tone.glyph) {
-    case '✓': return 'PASS';
-    case '✗': return 'DISCREPANT';
-    case '?': return 'UNABLE_TO_VERIFY';
-    case '⚠': return 'REQUIRES_HUMAN_REVIEW';
-    default:  return 'NOT_APPLICABLE';
   }
 }

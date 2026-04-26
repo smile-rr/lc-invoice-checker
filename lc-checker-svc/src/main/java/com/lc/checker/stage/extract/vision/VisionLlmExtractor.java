@@ -10,6 +10,9 @@ import com.lc.checker.stage.extract.InvoiceFieldMapper;
 import com.lc.checker.stage.extract.PromptBuilder;
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
+import com.lc.checker.infra.observability.LangfuseTags;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +48,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     private final InvoiceFieldMapper mapper;
     private final ObjectMapper json;
     private final PromptBuilder promptBuilder;
+    private final Tracer tracer;
     private final String name;
     private final String model;
     private final int renderDpi;
@@ -58,7 +62,8 @@ public class VisionLlmExtractor implements InvoiceExtractor {
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
-            PromptBuilder promptBuilder) {
+            PromptBuilder promptBuilder,
+            Tracer tracer) {
         this.name = config.name();
         this.model = config.model();
         this.renderDpi = config.renderDpi();
@@ -69,6 +74,7 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         this.mapper = mapper;
         this.json = json;
         this.promptBuilder = promptBuilder;
+        this.tracer = tracer;
 
         // Standalone RestClient for the OpenAI-compatible /v1/chat/completions endpoint.
         // Auth: empty api-key (e.g. local Ollama) → no header; non-empty → Bearer token.
@@ -110,11 +116,38 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         // 2. Build native Ollama API request body
         Map<String, Object> body = buildOllamaRequest(pages);
 
-        // 3. Call Ollama /api/chat (capture timing + prompt/response for LlmTrace)
+        // 3. Call Ollama /chat/completions (timing + prompt/response captured
+        //    in both LlmTrace and a Langfuse generation span so the operator
+        //    can scrub the actual prompt + model output in Langfuse). The
+        //    auto-instrumented HTTP child span nests inside this; the parent
+        //    is type=generation so Langfuse renders it as an LLM call with
+        //    model + tokens + cost.
         String promptRendered = summarisePromptForTrace(body, pages.size());
+        // Span name carries BOTH the lane and the model id so a Langfuse
+        // reviewer can spot at a glance which model produced which output:
+        //   cfg.name() = "<model>_cloud" → "extract.cloud.<model>"
+        //   cfg.name() = "<model>_local" → "extract.local.<model>"
+        //   anything else                → "extract.<name>"
+        String lane =
+                name != null && name.endsWith("_cloud") ? "cloud" :
+                name != null && name.endsWith("_local") ? "local" : null;
+        String spanName = lane != null
+                ? "extract." + lane + "." + (model == null ? name : model)
+                : "extract." + name;
+        Span llmSpan = LangfuseTags.applySession(tracer.nextSpan())
+                .name(spanName)
+                .tag("langfuse.observation.type", "generation")
+                .tag("extractor", name)
+                .tag("gen_ai.system", "openai-compatible")
+                .tag("gen_ai.request.model", model == null ? "" : model)
+                .tag("invoice.bytes", String.valueOf(pdfBytes.length))
+                .tag("invoice.pages_rendered", String.valueOf(pages.size()))
+                .tag("langfuse.observation.input", promptRendered)
+                .start();
+
         long llmStart = System.currentTimeMillis();
         String rawResponse;
-        try {
+        try (Tracer.SpanInScope ws = tracer.withSpan(llmSpan)) {
             rawResponse = restClient.post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -122,18 +155,24 @@ public class VisionLlmExtractor implements InvoiceExtractor {
                     .retrieve()
                     .body(String.class);
         } catch (HttpClientErrorException e) {
+            llmSpan.error(e);
+            llmSpan.end();
             LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
             throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
                     "Vision LLM client error " + e.getStatusCode() + ": " + e.getMessage(), e)
                     .withLlmTrace(errTrace);
         } catch (HttpServerErrorException e) {
+            llmSpan.error(e);
+            llmSpan.end();
             LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
             throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
                     "Vision LLM server error " + e.getStatusCode() + ": " + e.getMessage(), e)
                     .withLlmTrace(errTrace);
         } catch (Exception e) {
+            llmSpan.error(e);
+            llmSpan.end();
             LlmTrace errTrace = new LlmTrace(name + ".extract", model, promptRendered, null,
                     null, null, System.currentTimeMillis() - llmStart, e.getMessage());
             throw new ExtractionException(name, ExtractorErrorCode.UNREACHABLE,
@@ -142,6 +181,22 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         }
         long llmLatency = System.currentTimeMillis() - llmStart;
         log.debug("Vision LLM response: {}", truncate(rawResponse, 300));
+
+        // Capture the model output and any usage block emitted by the
+        // OpenAI-compatible response. Token counts let Langfuse compute cost.
+        try {
+            String outPreview = rawResponse == null ? "" :
+                    (rawResponse.length() > 1500
+                            ? rawResponse.substring(0, 1500) + "…(+" + (rawResponse.length() - 1500) + " chars)"
+                            : rawResponse);
+            llmSpan.tag("langfuse.observation.output", outPreview);
+            llmSpan.tag("vision.latency_ms", String.valueOf(llmLatency));
+            extractAndTagUsage(llmSpan, rawResponse);
+        } catch (RuntimeException ignored) {
+            // Tracing must never break the actual extraction.
+        } finally {
+            llmSpan.end();
+        }
 
         // 4. Parse OpenAI-compatible response: { choices: [{ message: { content: "..." } }] }
         String contentText = extractContent(rawResponse);
@@ -185,6 +240,29 @@ public class VisionLlmExtractor implements InvoiceExtractor {
 
     private static String stringOrEmpty(Object v) {
         return v == null ? "" : String.valueOf(v);
+    }
+
+    /**
+     * Pull {@code usage} from an OpenAI-compatible response and emit standard
+     * gen_ai.* token attributes. Langfuse maps these into the Generation's
+     * token counts and cost. Local Ollama may or may not emit usage; absent
+     * fields are silently skipped.
+     */
+    private void extractAndTagUsage(Span span, String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) return;
+        try {
+            Map<String, Object> resp = json.readValue(rawResponse, new TypeReference<>() {});
+            Object usageObj = resp.get("usage");
+            if (!(usageObj instanceof Map<?, ?> usage)) return;
+            Object input = usage.get("prompt_tokens");
+            Object output = usage.get("completion_tokens");
+            Object total = usage.get("total_tokens");
+            if (input != null) span.tag("gen_ai.usage.input_tokens", String.valueOf(input));
+            if (output != null) span.tag("gen_ai.usage.output_tokens", String.valueOf(output));
+            if (total != null) span.tag("gen_ai.usage.total_tokens", String.valueOf(total));
+        } catch (Exception ignored) {
+            // Body wasn't JSON, or shape didn't match. Tracing optional.
+        }
     }
 
     /**

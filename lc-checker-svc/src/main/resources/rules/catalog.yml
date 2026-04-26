@@ -1,46 +1,181 @@
+# =============================================================================
 # LC Invoice Checker — Rule Catalog
+# =============================================================================
 #
-# Two-type rule engine: every rule is either PROGRAMMATIC (deterministic SpEL
-# against structured fields) or AGENT (one LLM call per rule with full LC + full
-# invoice context inline). The agent prompt itself decides applicability AND
-# verdict, eliminating the old activation-trigger / pre-gate / check-type sprawl.
+# Purpose
+#   Single source of truth for the rules the engine evaluates against an
+#   invoice + LC pair. Loaded by RuleCatalogLoader at startup; every
+#   field_keys[i] must exist in field-pool.yaml or boot fails.
 #
-# Rule IDs use UCP 600 / ISBP 821 standard numbering. The `id` doubles as the
-# display name returned in every API response — readable by any trade finance
-# professional without consulting system docs:
+# How to read this file
+#   The body is sorted in the SAME order as the header tables:
+#       1. PROGRAMMATIC (enabled)   → SpEL / deterministic
+#       2. AGENT (enabled)          → one LLM call per rule
+#       3. DISABLED                 → registered but never executed,
+#                                     grouped by disabled_category
+#       4. NOT MODELED              → no rule row at all (header only)
+#       5. INVOICE FIELD COVERAGE   → matrix lens, derived from above
 #
-#   UCP-18b-amount   → UCP 600 Art. 18(b), amount sub-check
-#   ISBP-C3          → ISBP 821 Para. C3
-#   BANK-001         → Bank-specific policy rule (not UCP/ISBP)
-#
-# Field reference
-# ---------------
+# Rule fields
 #   id                       Standard-based identifier (also display name).
+#                            UCP-XX / ISBP-XX / BANK-NNN.
 #   name                     Short human name (one phrase).
 #   description              One-sentence summary of the check.
 #   business_phase           PARTIES | MONEY | GOODS | LOGISTICS | PROCEDURAL | HOLISTIC
-#                            Display grouping only — does not affect execution order.
+#                            Display tag only — does not affect execution order.
 #   check_type               PROGRAMMATIC | AGENT
 #   ucp_ref / isbp_ref       Raw UCP / ISBP anchors recorded on the CheckResult.
-#   ucp_excerpt              Plain-English paraphrase of the UCP article.
-#   isbp_excerpt             Counterpart for ISBP citations.
+#   ucp_excerpt / isbp_excerpt  Plain-English paraphrases.
 #   rule_reference_label     Pre-formatted label used as Discrepancy.rule_reference.
 #   output_field             Canonical snake_case key for Discrepancy.field.
-#   lc_fields                MT700 tags this rule reads (hint to agent / gate hint).
-#   invoice_fields           Invoice keys this rule reads.
-#   missing_invoice_action   PROGRAMMATIC only: DISCREPANT | NOT_APPLICABLE | UNABLE_TO_VERIFY
-#                            applied when none of invoice_fields are present.
+#   field_keys               Canonical keys from field-pool.yaml. The same
+#                            key resolves on both LC envelope and invoice
+#                            envelope (parser + extractor populate both
+#                            sides via field-pool's invoice_aliases).
+#                            RuleCatalogLoader fails-fast on unknown keys.
+#   missing_invoice_action   PROGRAMMATIC only: FAIL | DOUBTS — applied
+#                            when none of the rule's invoice-side
+#                            field_keys are populated.
 #   severity_on_fail         MAJOR | MINOR
-#   expression               PROGRAMMATIC only: SpEL evaluated against {lc, inv}.
-#   prompt_template          AGENT only: file in src/main/resources/prompts/.
-#   enabled                  Default true. Disabled rules load but never execute.
-#   disabled_reason          Operator-facing reason when enabled=false.
+#   expression               PROGRAMMATIC only: SpEL evaluated against
+#                            {lc, inv} (legacy typed accessors) or
+#                            {#fields, #invoiceFields} (canonical
+#                            envelope; preferred for new rules).
+#   prompt_template          AGENT only: file in prompts/. Naming
+#                            convention: <rule-id-lower>-<short>.st
+#   enabled                  Default true. Disabled rules load but
+#                            never execute.
+#   disabled_category        Required when enabled=false. One of:
+#                              CONDITIONAL_ON_DOC      — needs another doc type
+#                              MULTI_INVOICE_DEFERRED  — single-invoice mode
+#                              NOT_APPLICABLE_V1       — input model gap
+#                              BANK_OPTIONAL           — per-deployment policy
+#   disabled_reason          Operator-facing prose. Starts by restating the
+#                            disabled_category, then names the unblock.
+#
+# =============================================================================
+# 1. PROGRAMMATIC (enabled)
+# =============================================================================
+# Deterministic SpEL evaluations. Fast, reproducible, no LLM cost.
+#
+# | ID                | UCP/ISBP Ref               | Check Pattern (SpEL one-liner)               | Field Keys                                       |
+# |-------------------|----------------------------|----------------------------------------------|--------------------------------------------------|
+# | UCP-18a-issuer    | UCP 18(a) / ISBP C6        | inv.sellerName non-blank                     | beneficiary_name                                 |
+# | UCP-18a-applicant | UCP 18(a) / ISBP C5        | inv.buyerName non-blank                      | applicant_name                                   |
+# | UCP-18b-currency  | UCP 18(b)                  | inv.currency.equalsIgnoreCase(lc.currency)   | credit_currency                                  |
+# | UCP-18b-amount    | UCP 18(b)                  | inv.totalAmount within LC ± :39A: tolerance  | credit_amount, credit_currency, tolerance_*      |
+# | UCP-18b-math      | UCP 18(b)                  | inv.quantity × inv.unitPrice ≈ inv.totalAmount | quantity, unit_price, credit_amount            |
+# | UCP-14h           | UCP 14(h)                  | invoice_date ≤ today                         | invoice_date                                     |
+# | UCP-14i           | UCP 14(i) / ISBP A19       | inv.invoiceDate ≤ lc.expiryDate              | invoice_date, expiry_date                        |
+# | UCP-30c           | UCP 30(c)                  | invoice credit_amount > 0 (underdrawing OK)  | credit_amount                                    |
+#
+# =============================================================================
+# 2. AGENT (enabled)
+# =============================================================================
+# One LLM call per rule. The prompt receives full LC + full invoice + ISBP
+# cross-cutting tolerances inline; the agent returns one of
+# PASS / FAIL / DOUBTS / NOT_REQUIRED with a one-line reason.
+#
+# | ID                | UCP/ISBP Ref               | Prompt File                                | Field Keys                                       |
+# |-------------------|----------------------------|--------------------------------------------|--------------------------------------------------|
+# | ISBP-C1           | ISBP C1                    | isbp-c1-lc-number-reference.st             | lc_number, documents_required                    |
+# | ISBP-C2           | UCP 18(a),(d) / ISBP C2    | isbp-c2-signature.st                       | signed, documents_required                       |
+# | ISBP-C3           | UCP 18(c) / ISBP C3        | isbp-c3-goods-description.st               | goods_description, quantity, unit                |
+# | ISBP-C4           | UCP 18(b) / ISBP C4        | isbp-c4-unit-price.st                      | unit_price, goods_description                    |
+# | ISBP-C5           | UCP 18(a) / ISBP C5        | isbp-c5-applicant-name.st                  | applicant_name, applicant_address                |
+# | ISBP-C6           | UCP 18(a) / ISBP C6        | isbp-c6-beneficiary-name.st                | beneficiary_name, beneficiary_address            |
+# | ISBP-C7           | UCP 18(c) / ISBP C7        | isbp-c7-country-of-origin.st               | country_of_origin, documents_required            |
+# | ISBP-C8           | UCP 18(b),(c) / ISBP C8    | isbp-c8-trade-terms.st                     | incoterms, port_of_loading, port_of_discharge    |
+# | ISBP-C10          | ISBP C10                   | isbp-c10-charges-deductions.st             | credit_amount, incoterms                         |
+# | UCP-14e           | UCP 14(e) / ISBP C5,C6     | ucp-14e-address-country.st                 | applicant_address, beneficiary_address           |
+# | UCP-30a           | UCP 30(a)                  | ucp-30a-quantity-tolerance-about.st        | quantity, credit_amount, goods_description       |
+# | UCP-30b           | UCP 30(b)                  | ucp-30b-quantity-tolerance-bulk.st         | quantity, goods_description                      |
+#
+# =============================================================================
+# 3. DISABLED (registered, not executed) — grouped by disabled_category
+# =============================================================================
+# Rules load so trace and coverage reports list them, but never execute.
+# Sort order: CONDITIONAL_ON_DOC (broadest unblock) → MULTI_INVOICE_DEFERRED
+# → NOT_APPLICABLE_V1 → BANK_OPTIONAL, then by ID.
+#
+# | ID         | UCP/ISBP Ref               | disabled_category        | Reason                                        |
+# |------------|----------------------------|--------------------------|------------------------------------------------|
+# | UCP-14c    | UCP 14(c)                  | CONDITIONAL_ON_DOC       | Needs B/L shipment date                        |
+# | UCP-14d    | UCP 14(d) / ISBP B1        | CONDITIONAL_ON_DOC       | Multi-document non-contradiction               |
+# | UCP-14j    | UCP 14(j)                  | CONDITIONAL_ON_DOC       | Needs transport document                       |
+# | UCP-28f    | UCP 28(f) / ISBP E1        | CONDITIONAL_ON_DOC       | Needs insurance policy                         |
+# | ISBP-D1    | ISBP D1–D10                | CONDITIONAL_ON_DOC       | Needs transport document                       |
+# | ISBP-E1    | ISBP E1–E10                | CONDITIONAL_ON_DOC       | Needs insurance document                       |
+# | ISBP-K1    | ISBP K1–K6                 | CONDITIONAL_ON_DOC       | Needs certificate of origin                    |
+# | ISBP-C9    | ISBP C9                    | MULTI_INVOICE_DEFERRED   | V1 single-invoice mode                         |
+# | ISBP-A24   | ISBP A24                   | NOT_APPLICABLE_V1        | V1 does not model original/copy distinction    |
+# | BANK-001   | Bank policy                | BANK_OPTIONAL            | Per-deployment opt-in                          |
+#
+# =============================================================================
+# 4. NOT MODELED — UCP/ISBP entries that have NO rule row, by reason
+# =============================================================================
+# Header-documented only — no rule row exists or will be added. This avoids
+# the "why isn't UCP X a rule?" question by acknowledging each item once.
+#
+# META — framework principles, not invoice-content checks. They describe
+#        how the engine itself operates rather than what it should flag.
+#   UCP Art. 2     definitions
+#   UCP Art. 3     interpretations
+#   UCP Art. 5     banks deal in documents, not goods or services
+#   UCP Art. 14(a) standard for examination (banks must check on face)
+#   UCP Art. 14(f) banks ignore documents not stipulated in the LC
+#   ISBP A1–A9     general principles of international standard banking practice
+#
+# OUT_OF_SCOPE — bank operations, not invoice content.
+#   UCP Art. 14(b) 5-banking-day examination window (bank-side SLA)
+#
+# COVERED_ELSEWHERE — same obligation enforced by another rule ID.
+#   UCP Art. 18(c) → enforced by ISBP-C3 (goods description correspondence)
+#   UCP Art. 18(d) → enforced by ISBP-C2 (signature only when LC requires)
+#
+# CROSS_CUTTING — acceptance tolerances that apply inside every AGENT
+#   prompt (injected via {crossCuttingTolerances} from
+#   prompts/_cross-cutting-tolerances.txt). Not a standalone rule because
+#   the tolerance is always relative to whichever rule is currently
+#   evaluating.
+#   ISBP A14   commonly understood abbreviations acceptable
+#   ISBP A15   spelling / typing errors that don't change meaning
+#   ISBP A19   date formats acceptable in any unambiguous order
+#   ISBP B1–B5 same entity may appear with slightly different names
+#
+# =============================================================================
+# 5. INVOICE FIELD COVERAGE — derived from rule catalog × ref-doc matrix
+# =============================================================================
+# Matrix lens onto the same content. Quick way to check "is invoice field X
+# covered, and by which rules?" Source matrix:
+# docs/refer-doc/ucp600_isbp821_invoice_rules.md (Quick Cross-Reference Matrix).
+#
+# | Invoice Field                | UCP / ISBP Anchors                       | Covering Rule IDs                                |
+# |------------------------------|------------------------------------------|--------------------------------------------------|
+# | Issuer (Beneficiary)         | UCP 18(a) / ISBP C6                      | UCP-18a-issuer, ISBP-C6                          |
+# | Buyer (Applicant)            | UCP 18(a) / ISBP C5                      | UCP-18a-applicant, ISBP-C5                       |
+# | Invoice Signature            | UCP 18(a),(d) / ISBP C2                  | ISBP-C2                                          |
+# | LC Number Reference          | ISBP C1                                  | ISBP-C1                                          |
+# | Currency                     | UCP 18(b)                                | UCP-18b-currency                                 |
+# | Invoice Amount ≤ LC          | UCP 18(b), 30(b), 30(c) / ISBP C9, C10   | UCP-18b-amount, UCP-30b, UCP-30c, ISBP-C10       |
+# | Unit Price                   | UCP 18(b) / ISBP C4                      | ISBP-C4                                          |
+# | Goods Description            | UCP 18(c) / ISBP C3                      | ISBP-C3                                          |
+# | Trade Terms (Incoterms)      | UCP 18(b),(c) / ISBP C8                  | ISBP-C8                                          |
+# | Country of Origin            | UCP 18(c) / ISBP C7                      | ISBP-C7                                          |
+# | Invoice Date ≤ Presentation  | UCP 14(h),(i) / ISBP A19                 | UCP-14h, UCP-14i                                 |
+# | Presentation 21-day          | UCP 14(c) / ISBP A1                      | UCP-14c (DISABLED)                               |
+# | Non-contradiction            | UCP 14(d) / ISBP B1, D1, K1              | UCP-14d, UCP-14j, ISBP-D1, ISBP-K1 (all DISABLED)|
+# | Address country              | UCP 14(e) / ISBP C5, C6                  | UCP-14e                                          |
+# | Abbreviations / Typos        | UCP 14(a) / ISBP A14, A15                | (CROSS_CUTTING — see section 4)                  |
+# | Quantity Tolerance           | UCP 30(a), 30(b) / ISBP C3, C4           | UCP-30a, UCP-30b                                 |
+# | Insurance (CIF)              | UCP 28(f) / ISBP E1                      | UCP-28f, ISBP-E1 (both DISABLED)                 |
+#
+# =============================================================================
 
 rules:
 
   # ============================================================================
-  # PARTIES — Art. 18(a), Art. 14(e); ISBP B1–B5, C5, C6
-  # "Is this invoice issued by the right seller for the right buyer?"
+  # 1. PROGRAMMATIC (enabled)
   # ============================================================================
 
   - id: UCP-18a-issuer
@@ -54,9 +189,8 @@ rules:
     isbp_excerpt: "The beneficiary's name on the invoice must correspond with the LC (Field 59); address need not be identical but must be in the same country."
     rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C6"
     output_field: beneficiary_on_invoice
-    lc_fields: [ "59" ]
-    invoice_fields: [ "seller_name" ]
-    missing_invoice_action: DISCREPANT
+    field_keys: [ beneficiary_name ]
+    missing_invoice_action: FAIL
     severity_on_fail: MAJOR
     expression: "inv.sellerName != null && !inv.sellerName.trim().isEmpty()"
 
@@ -71,64 +205,10 @@ rules:
     isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
     rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C5"
     output_field: applicant_on_invoice
-    lc_fields: [ "50" ]
-    invoice_fields: [ "buyer_name" ]
-    missing_invoice_action: DISCREPANT
+    field_keys: [ applicant_name ]
+    missing_invoice_action: FAIL
     severity_on_fail: MAJOR
     expression: "inv.buyerName != null && !inv.buyerName.trim().isEmpty()"
-
-  - id: ISBP-C6
-    name: Beneficiary name correspondence
-    description: "Invoice seller name must correspond to LC :59: beneficiary, allowing ISBP A14/B1-B5 abbreviation and minor formatting variations."
-    business_phase: PARTIES
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(a)"
-    isbp_ref: "ISBP 821 Para. C6"
-    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
-    isbp_excerpt: "The beneficiary's name on the invoice must correspond with the LC (Field 59); address need not be identical but must be in the same country."
-    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C6"
-    output_field: beneficiary_name
-    lc_fields: [ "59" ]
-    invoice_fields: [ "seller_name" ]
-    severity_on_fail: MAJOR
-    prompt_template: beneficiary-name-check.st
-
-  - id: ISBP-C5
-    name: Applicant name correspondence
-    description: "Invoice buyer name must correspond to LC :50: applicant, allowing ISBP A14/C5 variations."
-    business_phase: PARTIES
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(a)"
-    isbp_ref: "ISBP 821 Para. C5"
-    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
-    isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
-    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C5"
-    output_field: applicant_name
-    lc_fields: [ "50" ]
-    invoice_fields: [ "buyer_name" ]
-    severity_on_fail: MAJOR
-    prompt_template: applicant-name-check.st
-
-  - id: UCP-14e
-    name: Beneficiary and applicant address country consistency
-    description: "Beneficiary and applicant addresses on invoice must be in the same countries as in the LC per Art. 14(e)."
-    business_phase: PARTIES
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 14(e)"
-    isbp_ref: "ISBP 821 Para. C5, C6"
-    ucp_excerpt: "Addresses of the beneficiary and applicant appearing in any stipulated document need not be the same as in the credit, provided they are within the same country as in the credit."
-    isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
-    rule_reference_label: "UCP 600 Art. 14(e)"
-    output_field: address_country
-    lc_fields: [ "50", "59" ]
-    invoice_fields: [ "seller_address", "buyer_address" ]
-    severity_on_fail: MAJOR
-    prompt_template: address-country-check.st
-
-  # ============================================================================
-  # MONEY — Art. 18(b), Art. 30(a/b/c); ISBP C4, C9, C10
-  # "Does the money side match — currency, amount, unit price, math?"
-  # ============================================================================
 
   - id: UCP-18b-currency
     name: Currency match
@@ -139,9 +219,8 @@ rules:
     ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount."
     rule_reference_label: "UCP 600 Art. 18(b)"
     output_field: currency
-    lc_fields: [ "32B" ]
-    invoice_fields: [ "currency" ]
-    missing_invoice_action: DISCREPANT
+    field_keys: [ credit_currency ]
+    missing_invoice_action: FAIL
     severity_on_fail: MAJOR
     expression: "inv.currency != null && inv.currency.equalsIgnoreCase(lc.currency)"
 
@@ -154,30 +233,13 @@ rules:
     ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount. The keywords 'about' or 'approximately' allow a 10% tolerance; otherwise 5% more-or-less applies only to quantity if not unit-priced."
     rule_reference_label: "UCP 600 Art. 18(b)"
     output_field: invoice_amount
-    lc_fields: [ "32B", "39A", "39B" ]
-    invoice_fields: [ "total_amount", "currency" ]
-    missing_invoice_action: DISCREPANT
+    field_keys: [ credit_amount, credit_currency, tolerance_plus, tolerance_minus ]
+    missing_invoice_action: FAIL
     severity_on_fail: MAJOR
     expression: >-
       inv.totalAmount != null
       && inv.totalAmount.compareTo(lc.amount.multiply(T(java.math.BigDecimal).ONE.add(new java.math.BigDecimal(lc.tolerancePlus).divide(new java.math.BigDecimal('100'))))) <= 0
       && inv.totalAmount.compareTo(lc.amount.multiply(T(java.math.BigDecimal).ONE.subtract(new java.math.BigDecimal(lc.toleranceMinus).divide(new java.math.BigDecimal('100'))))) >= 0
-
-  - id: ISBP-C4
-    name: Unit price matches LC stipulation
-    description: "When LC :45A: stipulates a unit price, invoice must reflect the same unit price per ISBP C4."
-    business_phase: MONEY
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(b)"
-    isbp_ref: "ISBP 821 Para. C4"
-    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount."
-    isbp_excerpt: "If the LC stipulates a unit price, the invoice must reflect that unit price; a higher total arising from a different unit price is discrepant even if the grand total falls within tolerance."
-    rule_reference_label: "UCP 600 Art. 18(b) / ISBP 821 Para. C4"
-    output_field: unit_price
-    lc_fields: [ "45A" ]
-    invoice_fields: [ "unit_price" ]
-    severity_on_fail: MAJOR
-    prompt_template: unit-price-check.st
 
   - id: UCP-18b-math
     name: Invoice math consistency
@@ -188,103 +250,70 @@ rules:
     ucp_excerpt: "Internal invoice arithmetic must reconcile so the documentary face value is unambiguous."
     rule_reference_label: "UCP 600 Art. 18(b)"
     output_field: amount_math
-    lc_fields: [ "32B" ]
-    invoice_fields: [ "quantity", "unit_price", "total_amount" ]
-    missing_invoice_action: UNABLE_TO_VERIFY
+    field_keys: [ quantity, unit_price, credit_amount ]
+    missing_invoice_action: DOUBTS
     severity_on_fail: MAJOR
+    # Bare arithmetic — null qty/price/total throws NullPointerException, which
+    # ProgrammaticStrategy catches and maps to DOUBTS. That's the right
+    # semantics for "invoice didn't surface line-item totals at the top level".
     expression: >-
-      inv.quantity != null && inv.unitPrice != null && inv.totalAmount != null
-      && inv.quantity.multiply(inv.unitPrice).subtract(inv.totalAmount).abs().compareTo(new java.math.BigDecimal('0.01')) <= 0
+      inv.quantity.multiply(inv.unitPrice).subtract(inv.totalAmount).abs().compareTo(new java.math.BigDecimal('0.01')) <= 0
 
-  - id: UCP-30a
-    name: Quantity tolerance — 'about/approximately' (±10%)
-    description: "When LC uses 'about' or 'approximately', a ±10% tolerance applies to quantity, amount, and unit price."
+  - id: UCP-14h
+    name: Document dating no later than presentation
+    description: "Invoice date must not be later than today (the presentation date)."
+    business_phase: PROCEDURAL
+    check_type: PROGRAMMATIC
+    ucp_ref: "UCP 600 Art. 14(h)"
+    ucp_excerpt: "A document may be dated prior to the issuance date of the credit but not later than its date of presentation."
+    rule_reference_label: "UCP 600 Art. 14(h)"
+    output_field: invoice_date
+    field_keys: [ invoice_date ]
+    missing_invoice_action: DOUBTS
+    severity_on_fail: MAJOR
+    # Uses the canonical envelope accessor so this rule is independent of the
+    # legacy typed properties on InvoiceDocument.
+    expression: >-
+      #invoiceFields['invoice_date'] != null
+      && !#invoiceFields['invoice_date'].isAfter(T(java.time.LocalDate).now())
+
+  - id: UCP-14i
+    name: Invoice date within expiry
+    description: Invoice date must not be later than the LC expiry date from :31D:.
+    business_phase: PROCEDURAL
+    check_type: PROGRAMMATIC
+    ucp_ref: "UCP 600 Art. 14(i)"
+    isbp_ref: "ISBP 821 Para. A19"
+    ucp_excerpt: "Invoice must not be dated later than the date of presentation; document date must precede or equal presentation date."
+    rule_reference_label: "UCP 600 Art. 14(i)"
+    output_field: invoice_date
+    field_keys: [ invoice_date, expiry_date ]
+    missing_invoice_action: DOUBTS
+    severity_on_fail: MAJOR
+    expression: "inv.invoiceDate != null && !inv.invoiceDate.isAfter(lc.expiryDate)"
+
+  - id: UCP-30c
+    name: Underdrawing permitted
+    description: "Drawings under a LC may be for less than the LC amount even if partial shipments are not permitted; affirms invoice presence with a positive amount."
     business_phase: MONEY
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 30(a)"
-    ucp_excerpt: "The words 'about' or 'approximately' used in connection with the amount of the credit or the quantity or the unit price stated in the credit are to be construed as allowing a tolerance not to exceed 10% more or 10% less."
-    rule_reference_label: "UCP 600 Art. 30(a)"
-    output_field: quantity_tolerance_about
-    lc_fields: [ "45A", "32B" ]
-    invoice_fields: [ "quantity", "total_amount" ]
+    check_type: PROGRAMMATIC
+    ucp_ref: "UCP 600 Art. 30(c)"
+    ucp_excerpt: "A drawing under a credit may be for less than the amount of the credit, even if partial drawings or shipments are not permitted."
+    rule_reference_label: "UCP 600 Art. 30(c)"
+    output_field: invoice_amount
+    field_keys: [ credit_amount ]
+    missing_invoice_action: DOUBTS
     severity_on_fail: MINOR
-    prompt_template: quantity-tolerance-check.st
-
-  - id: UCP-30b
-    name: Quantity tolerance — ±5% bulk goods
-    description: "A tolerance of ±5% in quantity is allowed when goods are not stated in specific packing units and the drawing does not exceed the LC amount."
-    business_phase: MONEY
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 30(b)"
-    ucp_excerpt: "A tolerance not exceeding 5% more or 5% less in the quantity of the goods is allowed, provided the credit does not stipulate the quantity in terms of a stipulated number of packing units or individual items and the total amount of the drawings does not exceed the amount of the credit."
-    rule_reference_label: "UCP 600 Art. 30(b)"
-    output_field: quantity_tolerance_bulk
-    lc_fields: [ "45A" ]
-    invoice_fields: [ "quantity" ]
-    severity_on_fail: MINOR
-    prompt_template: quantity-tolerance-check.st
+    # Always passes once a positive invoice amount is present. The rule's
+    # existence affirms in the trace that underdrawing is documentary OK; a
+    # behaviour fix to UCP-18b-amount's lower bound is tracked for the next
+    # iteration.
+    expression: >-
+      #invoiceFields['credit_amount'] != null
+      && #invoiceFields['credit_amount'].compareTo(T(java.math.BigDecimal).ZERO) > 0
 
   # ============================================================================
-  # GOODS — Art. 18(c); ISBP C3, C7
-  # "Is the description / quantity / origin consistent with the LC?"
-  # ============================================================================
-
-  - id: ISBP-C3
-    name: Goods description correspondence
-    description: "Invoice goods description must correspond to LC :45A:; may be more specific, must not contradict or be more general."
-    business_phase: GOODS
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(c)"
-    isbp_ref: "ISBP 821 Para. C3"
-    ucp_excerpt: "Description of goods, services, or performance on the invoice must correspond with that appearing in the LC."
-    isbp_excerpt: "The description of goods on the invoice must correspond with the LC description; it may be more specific but must NOT be more general; the description need not be identical word-for-word but must clearly correspond."
-    rule_reference_label: "UCP 600 Art. 18(c) / ISBP 821 Para. C3"
-    output_field: goods_description
-    lc_fields: [ "45A" ]
-    invoice_fields: [ "goods_description", "quantity", "unit" ]
-    severity_on_fail: MAJOR
-    prompt_template: goods-description-check.st
-
-  - id: ISBP-C7
-    name: Country of origin (when LC requires)
-    description: "If LC :46A: requires country of origin on invoice, invoice must state it."
-    business_phase: GOODS
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(c)"
-    isbp_ref: "ISBP 821 Para. C7"
-    ucp_excerpt: "Description of goods, services, or performance on the invoice must correspond with that appearing in the LC."
-    isbp_excerpt: "If the LC requires country of origin to be stated on the invoice, absence is a discrepancy."
-    rule_reference_label: "UCP 600 Art. 18(c) / ISBP 821 Para. C7"
-    output_field: country_of_origin
-    lc_fields: [ "46A" ]
-    invoice_fields: [ "country_of_origin" ]
-    severity_on_fail: MAJOR
-    prompt_template: country-of-origin-check.st
-
-  # ============================================================================
-  # LOGISTICS — Art. 14(j); ISBP C8, D1–D10
-  # "Trade term and ports — same as LC?"
-  # ============================================================================
-
-  - id: ISBP-C8
-    name: Trade terms (Incoterms) on invoice
-    description: "Invoice must reflect the same trade term and destination as stated in LC :45A:."
-    business_phase: LOGISTICS
-    check_type: AGENT
-    ucp_ref: "UCP 600 Art. 18(b)"
-    isbp_ref: "ISBP 821 Para. C8"
-    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount."
-    isbp_excerpt: "If the LC states a trade term (CIF, FOB, CFR, etc.), the invoice must reflect the same term and destination."
-    rule_reference_label: "UCP 600 Art. 18(b) / ISBP 821 Para. C8"
-    output_field: trade_terms
-    lc_fields: [ "45A", "44E", "44F" ]
-    invoice_fields: [ "trade_terms" ]
-    severity_on_fail: MAJOR
-    prompt_template: trade-terms-check.st
-
-  # ============================================================================
-  # PROCEDURAL — Art. 14(c), 14(h), 14(i), 18(a), 18(d); ISBP A19, C1, C2
-  # "Dates, signature, LC#, presentation period — formally compliant?"
+  # 2. AGENT (enabled)
   # ============================================================================
 
   - id: ISBP-C1
@@ -298,10 +327,9 @@ rules:
     isbp_excerpt: "If the LC requires the invoice to bear the LC number, failure to state it is a discrepancy; if not required, the invoice may optionally state the LC number."
     rule_reference_label: "ISBP 821 Para. C1"
     output_field: lc_number_reference
-    lc_fields: [ "46A" ]
-    invoice_fields: [ "lc_reference" ]
+    field_keys: [ lc_number, documents_required ]
     severity_on_fail: MAJOR
-    prompt_template: lc-number-reference-check.st
+    prompt_template: isbp-c1-lc-number-reference.st
 
   - id: ISBP-C2
     name: Invoice signature (when LC requires)
@@ -314,26 +342,159 @@ rules:
     isbp_excerpt: "Invoice need not be signed unless the LC explicitly requires a signature; if required, any form of authentication (stamp, electronic signature) is acceptable."
     rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C2"
     output_field: invoice_signature
-    lc_fields: [ "46A" ]
-    invoice_fields: [ "signed" ]
+    field_keys: [ signed, documents_required ]
     severity_on_fail: MAJOR
-    prompt_template: signature-check.st
+    prompt_template: isbp-c2-signature.st
 
-  - id: UCP-14i
-    name: Invoice date within expiry
-    description: Invoice date must not be later than the LC expiry date from :31D:.
-    business_phase: PROCEDURAL
-    check_type: PROGRAMMATIC
-    ucp_ref: "UCP 600 Art. 14(i)"
-    isbp_ref: "ISBP 821 Para. A19"
-    ucp_excerpt: "Invoice must not be dated later than the date of presentation; document date must precede or equal presentation date."
-    rule_reference_label: "UCP 600 Art. 14(i)"
-    output_field: invoice_date
-    lc_fields: [ "31D" ]
-    invoice_fields: [ "invoice_date" ]
-    missing_invoice_action: UNABLE_TO_VERIFY
+  - id: ISBP-C3
+    name: Goods description correspondence
+    description: "Invoice goods description must correspond to LC :45A:; may be more specific, must not contradict or be more general."
+    business_phase: GOODS
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(c)"
+    isbp_ref: "ISBP 821 Para. C3"
+    ucp_excerpt: "Description of goods, services, or performance on the invoice must correspond with that appearing in the LC."
+    isbp_excerpt: "The description of goods on the invoice must correspond with the LC description; it may be more specific but must NOT be more general; the description need not be identical word-for-word but must clearly correspond."
+    rule_reference_label: "UCP 600 Art. 18(c) / ISBP 821 Para. C3"
+    output_field: goods_description
+    field_keys: [ goods_description, quantity, unit ]
     severity_on_fail: MAJOR
-    expression: "inv.invoiceDate != null && !inv.invoiceDate.isAfter(lc.expiryDate)"
+    prompt_template: isbp-c3-goods-description.st
+
+  - id: ISBP-C4
+    name: Unit price matches LC stipulation
+    description: "When LC :45A: stipulates a unit price, invoice must reflect the same unit price per ISBP C4."
+    business_phase: MONEY
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(b)"
+    isbp_ref: "ISBP 821 Para. C4"
+    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount."
+    isbp_excerpt: "If the LC stipulates a unit price, the invoice must reflect that unit price; a higher total arising from a different unit price is discrepant even if the grand total falls within tolerance."
+    rule_reference_label: "UCP 600 Art. 18(b) / ISBP 821 Para. C4"
+    output_field: unit_price
+    field_keys: [ unit_price, goods_description ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c4-unit-price.st
+
+  - id: ISBP-C5
+    name: Applicant name correspondence
+    description: "Invoice buyer name must correspond to LC :50: applicant, allowing ISBP A14/C5 variations."
+    business_phase: PARTIES
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(a)"
+    isbp_ref: "ISBP 821 Para. C5"
+    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
+    isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
+    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C5"
+    output_field: applicant_name
+    field_keys: [ applicant_name, applicant_address ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c5-applicant-name.st
+
+  - id: ISBP-C6
+    name: Beneficiary name correspondence
+    description: "Invoice seller name must correspond to LC :59: beneficiary, allowing ISBP A14/B1-B5 abbreviation and minor formatting variations."
+    business_phase: PARTIES
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(a)"
+    isbp_ref: "ISBP 821 Para. C6"
+    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
+    isbp_excerpt: "The beneficiary's name on the invoice must correspond with the LC (Field 59); address need not be identical but must be in the same country."
+    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C6"
+    output_field: beneficiary_name
+    field_keys: [ beneficiary_name, beneficiary_address ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c6-beneficiary-name.st
+
+  - id: ISBP-C7
+    name: Country of origin (when LC requires)
+    description: "If LC :46A: requires country of origin on invoice, invoice must state it."
+    business_phase: GOODS
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(c)"
+    isbp_ref: "ISBP 821 Para. C7"
+    ucp_excerpt: "Description of goods, services, or performance on the invoice must correspond with that appearing in the LC."
+    isbp_excerpt: "If the LC requires country of origin to be stated on the invoice, absence is a discrepancy."
+    rule_reference_label: "UCP 600 Art. 18(c) / ISBP 821 Para. C7"
+    output_field: country_of_origin
+    field_keys: [ country_of_origin, documents_required ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c7-country-of-origin.st
+
+  - id: ISBP-C8
+    name: Trade terms (Incoterms) on invoice
+    description: "Invoice must reflect the same trade term and destination as stated in LC :45A:."
+    business_phase: LOGISTICS
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 18(b)"
+    isbp_ref: "ISBP 821 Para. C8"
+    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount."
+    isbp_excerpt: "If the LC states a trade term (CIF, FOB, CFR, etc.), the invoice must reflect the same term and destination."
+    rule_reference_label: "UCP 600 Art. 18(b) / ISBP 821 Para. C8"
+    output_field: trade_terms
+    field_keys: [ incoterms, port_of_loading, port_of_discharge ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c8-trade-terms.st
+
+  - id: ISBP-C10
+    name: Charges & deductions consistent with trade term
+    description: "Freight, insurance, or other charges shown on the invoice must be consistent with the LC trade term and must not push the total above the LC amount."
+    business_phase: MONEY
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. C10"
+    isbp_excerpt: "Freight, insurance, or other charges on invoice must be consistent with the trade term; charges should not inflate total above LC amount."
+    rule_reference_label: "ISBP 821 Para. C10"
+    output_field: charges_deductions
+    field_keys: [ credit_amount, incoterms ]
+    severity_on_fail: MAJOR
+    prompt_template: isbp-c10-charges-deductions.st
+
+  - id: UCP-14e
+    name: Beneficiary and applicant address country consistency
+    description: "Beneficiary and applicant addresses on invoice must be in the same countries as in the LC per Art. 14(e)."
+    business_phase: PARTIES
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 14(e)"
+    isbp_ref: "ISBP 821 Para. C5, C6"
+    ucp_excerpt: "Addresses of the beneficiary and applicant appearing in any stipulated document need not be the same as in the credit, provided they are within the same country as in the credit."
+    isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
+    rule_reference_label: "UCP 600 Art. 14(e)"
+    output_field: address_country
+    field_keys: [ applicant_address, beneficiary_address ]
+    severity_on_fail: MAJOR
+    prompt_template: ucp-14e-address-country.st
+
+  - id: UCP-30a
+    name: Quantity tolerance — 'about/approximately' (±10%)
+    description: "When LC uses 'about' or 'approximately', a ±10% tolerance applies to quantity, amount, and unit price."
+    business_phase: MONEY
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 30(a)"
+    ucp_excerpt: "The words 'about' or 'approximately' used in connection with the amount of the credit or the quantity or the unit price stated in the credit are to be construed as allowing a tolerance not to exceed 10% more or 10% less."
+    rule_reference_label: "UCP 600 Art. 30(a)"
+    output_field: quantity_tolerance_about
+    field_keys: [ quantity, credit_amount, goods_description ]
+    severity_on_fail: MINOR
+    prompt_template: ucp-30a-quantity-tolerance-about.st
+
+  - id: UCP-30b
+    name: Quantity tolerance — ±5% bulk goods
+    description: "A tolerance of ±5% in quantity is allowed when goods are not stated in specific packing units and the drawing does not exceed the LC amount."
+    business_phase: MONEY
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 30(b)"
+    ucp_excerpt: "A tolerance not exceeding 5% more or 5% less in the quantity of the goods is allowed, provided the credit does not stipulate the quantity in terms of a stipulated number of packing units or individual items and the total amount of the drawings does not exceed the amount of the credit."
+    rule_reference_label: "UCP 600 Art. 30(b)"
+    output_field: quantity_tolerance_bulk
+    field_keys: [ quantity, goods_description ]
+    severity_on_fail: MINOR
+    prompt_template: ucp-30b-quantity-tolerance-bulk.st
+
+  # ============================================================================
+  # 3. DISABLED — registered, not executed; grouped by disabled_category
+  # ============================================================================
+
+  # ── CONDITIONAL_ON_DOC ──────────────────────────────────────────────────────
 
   - id: UCP-14c
     name: Presentation within 21-day window
@@ -344,15 +505,11 @@ rules:
     ucp_excerpt: "Documents must be presented within 21 calendar days after the date of shipment but not later than the expiry date of the credit."
     rule_reference_label: "UCP 600 Art. 14(c)"
     output_field: presentation_period
-    lc_fields: [ "31D", "48" ]
-    invoice_fields: [ "invoice_date" ]
+    field_keys: [ invoice_date, expiry_date, presentation_days ]
     severity_on_fail: MAJOR
     enabled: false
-    disabled_reason: "Requires B/L shipment date; single-invoice mode uses invoice date as proxy only."
-
-  # ============================================================================
-  # HOLISTIC — Art. 14(d); cross-document consistency (V2)
-  # ============================================================================
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires Bill of Lading shipment date. Activates when V1.5 ingests transport documents."
 
   - id: UCP-14d
     name: Cross-document non-contradiction
@@ -365,15 +522,123 @@ rules:
     isbp_excerpt: "When documents contain data that appear to conflict with each other, the examiner must determine whether such conflict constitutes a discrepancy."
     rule_reference_label: "UCP 600 Art. 14(d) / ISBP 821 Para. B1"
     output_field: cross_document_consistency
-    lc_fields: [ "45A", "44E", "44F" ]
-    invoice_fields: []
+    field_keys: [ goods_description, port_of_loading, port_of_discharge ]
     severity_on_fail: MAJOR
     enabled: false
-    disabled_reason: "Multi-document scope; single-invoice mode cannot verify cross-document contradictions."
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: needs at least one additional stipulated document beyond the invoice. Activates when V1.5 ingests B/L, packing list, etc."
 
-  # ============================================================================
-  # BANK CUSTOM — institution-specific policies beyond UCP 600 / ISBP 821
-  # ============================================================================
+  - id: UCP-14j
+    name: Transport document port consistency
+    description: "Ports of loading and discharge on transport docs must match the LC; invoice port references, when stated, must match the B/L."
+    business_phase: LOGISTICS
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 14(j)"
+    ucp_excerpt: "Addresses and contact details forming part of consignor/consignee details on transport documents must conform to the credit."
+    rule_reference_label: "UCP 600 Art. 14(j)"
+    output_field: transport_port_consistency
+    field_keys: [ port_of_loading, port_of_discharge ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires bill of lading or other transport document. Activates when V1.5 ingests transport documents."
+
+  - id: UCP-28f
+    name: Insurance amount ≥ 110% of CIF/CIP value
+    description: "Insurance coverage must be at least 110% of the CIF or CIP invoice value."
+    business_phase: MONEY
+    check_type: AGENT
+    ucp_ref: "UCP 600 Art. 28(f)"
+    isbp_ref: "ISBP 821 Para. E1"
+    ucp_excerpt: "If there is no indication in the credit of the insurance coverage required, the amount of insurance coverage must be at least 110% of the CIF or CIP value of the goods."
+    rule_reference_label: "UCP 600 Art. 28(f) / ISBP 821 Para. E1"
+    output_field: insurance_amount
+    field_keys: [ credit_amount, incoterms ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires insurance policy/certificate. Activates when V1.5 ingests insurance documents."
+
+  - id: ISBP-D1
+    name: Transport document consistency
+    description: "Ports, dates, vessel names, and goods description on transport documents must not contradict the invoice."
+    business_phase: LOGISTICS
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. D1–D10"
+    isbp_excerpt: "Ports, dates, vessel names, and goods description on transport documents must not contradict the invoice."
+    rule_reference_label: "ISBP 821 Para. D1–D10"
+    output_field: transport_doc_consistency
+    field_keys: [ goods_description, port_of_loading, port_of_discharge ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires transport document. Activates when V1.5 ingests transport documents."
+
+  - id: ISBP-E1
+    name: Insurance document consistency
+    description: "Insurance policy/certificate amount must cover at least 110% of CIF invoice value; currency must match LC."
+    business_phase: MONEY
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. E1–E10"
+    isbp_excerpt: "Insurance policy/certificate amount must cover at least 110% of CIF invoice value; currency must match LC."
+    rule_reference_label: "ISBP 821 Para. E1–E10"
+    output_field: insurance_doc
+    field_keys: [ credit_amount, incoterms ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires insurance document. Activates when V1.5 ingests insurance documents."
+
+  - id: ISBP-K1
+    name: Certificate of origin consistency
+    description: "Country of origin on certificate must not contradict invoice; issuer must be as stipulated in LC."
+    business_phase: HOLISTIC
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. K1–K6"
+    isbp_excerpt: "Country of origin on certificate must not contradict invoice; issuer must be as stipulated in LC."
+    rule_reference_label: "ISBP 821 Para. K1–K6"
+    output_field: certificate_of_origin
+    field_keys: [ country_of_origin ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: CONDITIONAL_ON_DOC
+    disabled_reason: "CONDITIONAL_ON_DOC: requires certificate of origin. Activates when V1.5 ingests CoO documents."
+
+  # ── MULTI_INVOICE_DEFERRED ──────────────────────────────────────────────────
+
+  - id: ISBP-C9
+    name: Multiple invoices combined ≤ LC amount
+    description: "Where multiple invoices are presented under one LC, their combined total must not exceed the LC amount and each invoice must individually comply."
+    business_phase: MONEY
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. C9"
+    isbp_excerpt: "If multiple invoices are presented, their combined total must not exceed the LC amount; each invoice must individually comply."
+    rule_reference_label: "ISBP 821 Para. C9"
+    output_field: combined_invoice_total
+    field_keys: [ credit_amount ]
+    severity_on_fail: MAJOR
+    enabled: false
+    disabled_category: MULTI_INVOICE_DEFERRED
+    disabled_reason: "MULTI_INVOICE_DEFERRED: V1 single-invoice mode. Activates when the API supports multi-invoice presentation."
+
+  # ── NOT_APPLICABLE_V1 ───────────────────────────────────────────────────────
+
+  - id: ISBP-A24
+    name: Originals vs copies — reprographic reproduction acceptable
+    description: "Unless the LC requires originals, a document produced by reprographic, automated, or computerised systems may be treated as original."
+    business_phase: PROCEDURAL
+    check_type: AGENT
+    isbp_ref: "ISBP 821 Para. A24"
+    isbp_excerpt: "A document produced by reprographic, automated, or computerised systems, or as a carbon copy, may be treated as original if so marked or if the way it is made is the way originals are produced."
+    rule_reference_label: "ISBP 821 Para. A24"
+    output_field: original_marker
+    field_keys: [ ]
+    severity_on_fail: MINOR
+    enabled: false
+    disabled_category: NOT_APPLICABLE_V1
+    disabled_reason: "NOT_APPLICABLE_V1: V1 input model does not surface the original/copy distinction on extracted invoices."
+
+  # ── BANK_OPTIONAL ───────────────────────────────────────────────────────────
 
   - id: BANK-001
     name: Invoice language requirement
@@ -382,9 +647,9 @@ rules:
     check_type: AGENT
     rule_reference_label: "Bank Policy BANK-001"
     output_field: invoice_language
-    lc_fields: []
-    invoice_fields: [ "goods_description" ]
+    field_keys: [ goods_description ]
     severity_on_fail: MINOR
-    prompt_template: bank-language-check.st
+    prompt_template: bank-001-language.st
     enabled: false
-    disabled_reason: "Bank deployment template; enable and configure per institution policy."
+    disabled_category: BANK_OPTIONAL
+    disabled_reason: "BANK_OPTIONAL: per-deployment bank policy. Enable in the catalog and configure prompt for each institution that requires it."

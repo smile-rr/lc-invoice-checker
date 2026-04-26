@@ -3,12 +3,76 @@
 #
 # Runs health checks, fires a POST /lc-check, then queries the pipeline_steps
 # table and the v_session_overview / v_invoice_extracts / v_rule_checks views
-# to confirm every stage persisted correctly.
+# to confirm every stage persisted correctly. Uses the SYNCHRONOUS
+# /api/v1/lc-check endpoint (one POST → one JSON response after the run
+# finishes); for live SSE updates use test/stream.sh or the recipes below.
 #
 # Usage:
 #   test/check.sh                         # defaults: sample MT700 + invoice-3-color-claude.pdf
 #   test/check.sh <lc.txt> <invoice.pdf>  # custom inputs
 #   make curl-demo                        # wraps this script
+#
+# ─── Copy-pasteable terminal recipes (live SSE) ──────────────────────────────
+# The streaming pipeline is TWO endpoints. A bare POST returns the session_id
+# and exits — the run continues server-side and you tail it on a separate
+# stream URL. To make these recipes work in your terminal, modify only the
+# two -F file paths.
+#
+# ── Step 1 ── POST kicks off the run.
+#
+#    curl -sS -X POST http://localhost:8080/api/v1/lc-check/start \
+#         -F "lc=@test/sample_mt700.txt;type=text/plain" \
+#         -F "invoice=@test/sample_invoice.pdf;type=application/pdf"
+#
+#    Response (JSON, ~immediate):
+#    {
+#      "session_id":      "0ff7b0e3-0b7e-4348-8ae1-85af4218e8f8",
+#      "invoice_filename":"sample_invoice.pdf",
+#      "invoice_bytes":   3264,
+#      "lc_length":       1591
+#    }
+#
+# ── Step 2 ── tail the SSE stream for that session_id.
+#
+#    curl -sS -N "http://localhost:8080/api/v1/lc-check/<SESSION_ID>/stream"
+#
+#    SSE format — one event per blank-line-separated block:
+#    event: status
+#    data: {"type":"status","stage":"lc_parse","state":"completed","message":"..."}
+#
+#    event: rule
+#    data: {"type":"rule","data":{"rule_id":"ISBP-C3","status":"PASS",
+#           "lc_value":"...","presented_value":"...","description":"..."}}
+#
+#    event: complete
+#    data: {"type":"complete","data":{"compliant":true,"discrepancies":[]}}
+#
+# ── Combined recipes (capture session_id + tail in one block) ────────────────
+#
+# A) Minimal — works without jq pretty-printing:
+#
+#    SID=$(curl -sS -X POST http://localhost:8080/api/v1/lc-check/start \
+#              -F "lc=@test/sample_mt700.txt;type=text/plain" \
+#              -F "invoice=@test/sample_invoice.pdf;type=application/pdf" \
+#          | jq -r '.session_id') && echo "session: $SID"
+#    curl -sS -N "http://localhost:8080/api/v1/lc-check/$SID/stream"
+#
+# B) Coloured JSON per event — strips SSE framing, pipes data: lines to jq -C:
+#
+#    SID=$(curl -sS -X POST http://localhost:8080/api/v1/lc-check/start \
+#              -F "lc=@test/sample_mt700.txt;type=text/plain" \
+#              -F "invoice=@test/sample_invoice.pdf;type=application/pdf" \
+#          | jq -r '.session_id') && \
+#    curl -sS -N "http://localhost:8080/api/v1/lc-check/$SID/stream" \
+#      | sed -n 's/^data: //p' | jq -C '.'
+#
+# C) Final report only — skip the stream, hit the trace endpoint after the run:
+#
+#    curl -sS "http://localhost:8080/api/v1/lc-check/$SID/trace" | jq -C '.'
+#
+# `make test` wraps (B) with a per-event header parser and a rule-id filter
+# (RULE=ISBP-C3 to narrow output). See test/stream.sh.
+# ─────────────────────────────────────────────────────────────────────────────
 
 set -u
 set -o pipefail

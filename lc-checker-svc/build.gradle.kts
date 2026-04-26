@@ -54,6 +54,14 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-prometheus")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
 
+    // Tracing → Langfuse via OTLP. Spring AI 1.1 emits Micrometer observations
+    // for every ChatClient.call (model, prompt, completion, prompt/completion
+    // tokens). The tracing-bridge converts them into OTel spans; the OTLP
+    // exporter ships them to Langfuse's OTel intake. Configured in
+    // application.yml under `management.tracing` + `management.otlp.tracing`.
+    implementation("io.micrometer:micrometer-tracing-bridge-otel")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp")
+
     // --- Caffeine for in-memory CheckSessionStore --------------------------
     implementation("com.github.ben-manes.caffeine:caffeine")
 

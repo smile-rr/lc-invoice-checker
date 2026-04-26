@@ -166,6 +166,15 @@ _ui-bg: _ui-install _ui-samples
 # model named in .env's LOCAL_LLM_VL_MODEL. Surfaces latency + response so
 # you can tell at a glance whether `local_llm_vl` will work end-to-end.
 
+test:  ## fire one POST + tail the SSE stream live (uses test/stream.sh)
+	@bash test/stream.sh
+
+test-rule: ## same as `make test` but filtered to a single rule (RULE=ISBP-C3)
+	@RULE=$${RULE:?set RULE=<rule-id> e.g. RULE=ISBP-C3} bash test/stream.sh
+
+test-verdict: ## same as `make test` but only print the final report
+	@VERDICT_ONLY=1 bash test/stream.sh
+
 llm-test:  ## ping local Ollama (model from LOCAL_LLM_VL_MODEL in .env)
 	@echo "=== 1. daemon listening on :11434 ==="
 	@if lsof -nP -iTCP:11434 -sTCP:LISTEN >/dev/null 2>&1; then \
@@ -335,17 +344,11 @@ _ui-install:
 
 _ui-samples:
 	@mkdir -p $(UI_DIR)/public/samples
-	@cp docs/refer-doc/sample_lc_mt700.txt $(UI_DIR)/public/samples/sample_lc_mt700.txt 2>/dev/null || true
-	@cp docs/refer-doc/mt700-large-machinery.txt $(UI_DIR)/public/samples/mt700-large-machinery.txt 2>/dev/null || true
-	@cp docs/refer-doc/mt700-tight-textile.txt $(UI_DIR)/public/samples/mt700-tight-textile.txt 2>/dev/null || true
-	@cp docs/refer-doc/mt700-fob-eur-flexible.txt $(UI_DIR)/public/samples/mt700-fob-eur-flexible.txt 2>/dev/null || true
-	@cp docs/refer-doc/mt700-expired-strict.txt $(UI_DIR)/public/samples/mt700-expired-strict.txt 2>/dev/null || true
-	@cp docs/refer-doc/invoice-1-apple.pdf $(UI_DIR)/public/samples/invoice-1-apple.pdf 2>/dev/null || true
-	@cp "docs/refer-doc/invoice-2-go rails.pdf" $(UI_DIR)/public/samples/invoice-2-go-rails.pdf 2>/dev/null || true
-	@cp docs/refer-doc/invoice-3-color-claude.pdf $(UI_DIR)/public/samples/invoice-3-color-claude.pdf 2>/dev/null || true
-	@cp docs/refer-doc/invoice-3-color-image.pdf $(UI_DIR)/public/samples/invoice-3-color-image.pdf 2>/dev/null || true
+	@cp docs/refer-doc/sample_lc_mt700.txt $(UI_DIR)/public/samples/ 2>/dev/null || true
+	@cp test/mt700/*.txt    $(UI_DIR)/public/samples/ 2>/dev/null || true
+	@cp test/invoice/*.pdf  $(UI_DIR)/public/samples/ 2>/dev/null || true
 
-.PHONY: help all all-down status health llm-test \
+.PHONY: help all all-down status health llm-test test test-rule test-verdict \
         db db-down _docker-up _db-apply-schema \
         svc svc-down \
         docling docling-down \

@@ -114,7 +114,7 @@ export function viewForStep(
       const prog = s.stages.programmatic;
       const agent = s.stages.agent;
       const total = s.checks.length;
-      const fail = s.checks.filter((c) => c.status === 'DISCREPANT').length;
+      const fail = s.checks.filter((c) => c.status === 'FAIL').length;
       const pass = s.checks.filter((c) => c.status === 'PASS').length;
 
       // Both sub-stages done → step done. Either running → step running.

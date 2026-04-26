@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.lc.checker.domain.rule.Rule;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashSet;
@@ -45,7 +46,7 @@ public class RuleCatalogLoader {
     }
 
     @Bean
-    public RuleCatalog ruleCatalog() throws IOException {
+    public RuleCatalog ruleCatalog(FieldPoolRegistry fieldPool) throws IOException {
         Resource resource = resourceLoader.getResource(catalogPath);
         if (!resource.exists()) {
             throw new IllegalStateException("Rule catalog not found at " + catalogPath);
@@ -63,7 +64,6 @@ public class RuleCatalogLoader {
             throw new IllegalStateException("Rule catalog at " + catalogPath + " is empty");
         }
 
-        // Duplicate-ID guard.
         Set<String> seen = new HashSet<>();
         for (Rule r : parsed.rules()) {
             if (r.id() == null || r.id().isBlank()) {
@@ -71,6 +71,17 @@ public class RuleCatalogLoader {
             }
             if (!seen.add(r.id())) {
                 throw new IllegalStateException("Rule catalog contains duplicate id: " + r.id());
+            }
+            for (String key : r.fieldKeys()) {
+                if (key == null || key.isBlank()) {
+                    throw new IllegalStateException(
+                            "Rule " + r.id() + " has an empty field_keys entry");
+                }
+                if (fieldPool.byKey(key).isEmpty()) {
+                    throw new IllegalStateException(
+                            "Rule " + r.id() + " references unknown field_key '" + key
+                            + "' — not present in field-pool.yaml");
+                }
             }
         }
 

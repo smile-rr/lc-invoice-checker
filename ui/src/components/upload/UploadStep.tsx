@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { startCheck } from '../../api/client';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { getLcRaw, invoiceUrl, startCheck } from '../../api/client';
 import { fetchSamplePair, SAMPLES, type SamplePair, type ScenarioKind } from '../../data/samples';
 import { useConfirm } from '../../hooks/useConfirm';
+import { SamplePreview } from './SamplePreview';
 
 interface Props {
   /** When true, the run button is the primary CTA. Used pre-session. */
@@ -12,6 +13,7 @@ interface Props {
 export function UploadStep({ primaryRunCta = true }: Props) {
   const nav = useNavigate();
   const loc = useLocation();
+  const { id: sessionIdFromRoute } = useParams<{ id: string }>();
   const insideSession = loc.pathname.startsWith('/session/');
   const [lc, setLc] = useState<File | null>(null);
   const [invoice, setInvoice] = useState<File | null>(null);
@@ -29,6 +31,36 @@ export function UploadStep({ primaryRunCta = true }: Props) {
   // newer selection.
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // When the user navigates back to Upload INSIDE an existing session, load
+  // that session's pair from the backend so they land directly on the side-
+  // by-side preview (the same shape they had pre-run). Replace / Run still
+  // work — Run starts a NEW session keyed off whatever's currently on screen.
+  useEffect(() => {
+    if (!insideSession || !sessionIdFromRoute) return;
+    if (lc || invoice) return;             // already populated this mount
+    let cancelled = false;
+    (async () => {
+      try {
+        const [lcText, invRes] = await Promise.all([
+          getLcRaw(sessionIdFromRoute),
+          fetch(invoiceUrl(sessionIdFromRoute)),
+        ]);
+        if (cancelled) return;
+        if (!invRes.ok) throw new Error(`invoice fetch failed: ${invRes.status}`);
+        const invBlob = await invRes.blob();
+        if (cancelled) return;
+        setLc(new File([new Blob([lcText])], 'lc.txt', { type: 'text/plain' }));
+        setInvoice(new File([invBlob], 'invoice.pdf', { type: 'application/pdf' }));
+      } catch (e) {
+        if (cancelled) return;
+        // Soft-fail — leave the empty slots so the user can pick anew.
+        setErr(`Could not load this session's pair: ${(e as Error).message}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdFromRoute, insideSession]);
 
   async function ensureConfirmed(): Promise<boolean> {
     if (!insideSession || confirmedNewCheck) return true;
@@ -89,6 +121,35 @@ export function UploadStep({ primaryRunCta = true }: Props) {
     }
   }
 
+  // When both files are loaded, switch to the side-by-side preview shell.
+  // The empty / single-file states keep the original slot UI so dragging one
+  // file at a time still works.
+  if (lc && invoice) {
+    return (
+      <>
+        <SamplePreview
+          lc={lc}
+          invoice={invoice}
+          busy={busy}
+          onLcChange={setLcGuarded}
+          onInvoiceChange={setInvoiceGuarded}
+          onClear={() => {
+            setLc(null);
+            setInvoice(null);
+            setErr(null);
+          }}
+          onRun={run}
+        />
+        {err && (
+          <div className="max-w-[1600px] mx-auto px-8 pb-4">
+            <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">{err}</div>
+          </div>
+        )}
+        {Dialog}
+      </>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto px-8 py-8 space-y-6">
       {/* Source slots — fixed-height, single layout regardless of empty/filled */}
@@ -115,7 +176,8 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         />
       </div>
 
-      {/* Run CTA */}
+      {/* Run CTA — disabled until both files are loaded; once both are loaded
+           the page re-renders into SamplePreview above and this branch unmounts. */}
       <div className="flex items-center gap-3">
         <button
           disabled={!lc || !invoice || busy}
@@ -144,8 +206,8 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         )}
       </div>
 
-      {/* Pre-defined samples — each card carries TWO file chips so it's
-           visually obvious that one click loads both an LC and an invoice. */}
+      {/* Pre-defined samples — clicking one loads both files and flips the page
+           into the side-by-side preview. */}
       <div className="border-t border-line pt-5">
         <div className="flex items-baseline justify-between mb-3">
           <span className="text-[10px] uppercase tracking-[0.2em] text-muted">
@@ -364,26 +426,6 @@ const SCENARIO_BADGE: Record<ScenarioKind, { label: string; cls: string; tooltip
     label: 'baseline',
     cls: 'bg-teal-1/10 text-teal-1',
     tooltip: 'Standard happy-path run — text-PDF invoice',
-  },
-  'high-value': {
-    label: 'high-value',
-    cls: 'bg-status-goldSoft text-status-gold',
-    tooltip: 'Large amount with multiple required documents',
-  },
-  'strict-tolerance': {
-    label: 'strict 0/0',
-    cls: 'bg-status-redSoft text-status-red',
-    tooltip: 'Zero-tolerance LC — any over-shipment becomes a discrepancy',
-  },
-  'fob-eur': {
-    label: 'FOB · EUR',
-    cls: 'bg-navy-1/10 text-navy-1',
-    tooltip: 'EUR currency under FOB Incoterms — partial shipments allowed',
-  },
-  expired: {
-    label: 'expired',
-    cls: 'bg-status-redSoft text-status-red',
-    tooltip: 'LC already expired — exercises date-based rule checks',
   },
   'image-pdf': {
     label: 'image · vision',

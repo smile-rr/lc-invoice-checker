@@ -101,6 +101,12 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# Initialise Langfuse + OTel auto-instrumentation. No-op when LANGFUSE_*
+# env vars are unset, so this is safe in every environment.
+from .observability import init_observability  # noqa: E402
+
+init_observability(app)
+
 
 # -- Exception handlers -------------------------------------------------------
 

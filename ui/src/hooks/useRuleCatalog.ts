@@ -38,7 +38,11 @@ export function useRuleCatalog(): CatalogState {
     }
     if (!inflight) {
       inflight = listRules()
-        .then((rules) => {
+        .then((all) => {
+          // Catalog-disabled rules are roadmap/template entries that exist in
+          // YAML but should not appear in any user-facing surface. Filter them
+          // out at the hook boundary so no consumer has to know.
+          const rules = all.filter((r) => r.enabled);
           const byId = new Map(rules.map((r) => [r.id, r]));
           cache = { rules, byId, ready: true };
           return cache;

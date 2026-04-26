@@ -33,7 +33,9 @@ public record FieldDefinition(
         Object defaultValue,           // optional default if absent
         String group,                  // optional UI grouping label (e.g. "header", "amount")
         List<ColumnDefinition> columns,// populated only when type == TABLE; row schema
-        String extractionHint          // optional per-field guidance rendered into the LLM prompt
+        String extractionHint,         // optional per-field guidance rendered into the LLM prompt
+        List<String> ucpRefs,          // UCP 600 article anchors that govern this field
+        List<String> isbpRefs          // ISBP 821 paragraph anchors that govern this field
 ) {
 
     public FieldDefinition {
@@ -42,6 +44,8 @@ public record FieldDefinition(
         invoiceAliases = invoiceAliases == null ? List.of() : List.copyOf(invoiceAliases);
         enumValues = enumValues == null ? List.of() : List.copyOf(enumValues);
         columns = columns == null ? List.of() : List.copyOf(columns);
+        ucpRefs = ucpRefs == null ? List.of() : List.copyOf(ucpRefs);
+        isbpRefs = isbpRefs == null ? List.of() : List.copyOf(isbpRefs);
     }
 
     public boolean appliesToLc() {

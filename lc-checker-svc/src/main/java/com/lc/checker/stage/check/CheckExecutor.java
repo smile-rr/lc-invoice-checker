@@ -8,6 +8,8 @@ import com.lc.checker.domain.rule.Rule;
 import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.domain.rule.enums.MissingInvoiceAction;
+import com.lc.checker.infra.fields.FieldDefinition;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import com.lc.checker.stage.check.strategy.CheckStrategy;
 import com.lc.checker.stage.check.strategy.CheckStrategy.StrategyOutcome;
@@ -34,8 +36,8 @@ import org.springframework.stereotype.Component;
  *       envelope event with the resulting {@link CheckResult}.</li>
  * </ol>
  *
- * <p>An exception inside a strategy converts to UNABLE_TO_VERIFY — a single
- * broken rule must not crash the pipeline.
+ * <p>An exception inside a strategy converts to DOUBTS — a single broken
+ * rule must not crash the pipeline.
  */
 @Component
 public class CheckExecutor {
@@ -43,12 +45,14 @@ public class CheckExecutor {
     private static final Logger log = LoggerFactory.getLogger(CheckExecutor.class);
 
     private final Map<CheckType, CheckStrategy> strategies;
+    private final FieldPoolRegistry fieldPool;
 
-    public CheckExecutor(List<CheckStrategy> strategyBeans) {
+    public CheckExecutor(List<CheckStrategy> strategyBeans, FieldPoolRegistry fieldPool) {
         this.strategies = new EnumMap<>(CheckType.class);
         for (CheckStrategy s : strategyBeans) {
             this.strategies.put(s.type(), s);
         }
+        this.fieldPool = fieldPool;
         log.info("CheckExecutor initialised: strategies={}", strategies.keySet());
     }
 
@@ -82,12 +86,12 @@ public class CheckExecutor {
                 log.error("Rule {} execution threw: {}", rule.id(), e.getMessage(), e);
                 CheckResult result = new CheckResult(
                         rule.id(), rule.name(), rule.checkType(), rule.businessPhase(),
-                        CheckStatus.UNABLE_TO_VERIFY,
-                        null, firstFieldOrNull(rule.invoiceFields()), null, null,
+                        CheckStatus.DOUBTS,
+                        null, firstFieldOrNull(rule.fieldKeys()), null, null,
                         rule.ucpRef(), rule.isbpRef(),
                         "Executor error: " + e.getMessage());
                 CheckTrace trace = new CheckTrace(
-                        rule.id(), rule.checkType(), CheckStatus.UNABLE_TO_VERIFY,
+                        rule.id(), rule.checkType(), CheckStatus.DOUBTS,
                         Map.of(), null, null, duration, e.getMessage());
                 outcome = new StrategyOutcome(result, trace);
             }
@@ -104,18 +108,17 @@ public class CheckExecutor {
         // plus the LC and invoice in front of it.
         if (rule.checkType() == CheckType.PROGRAMMATIC && !hasAnyInvoiceField(rule, inv)) {
             MissingInvoiceAction action = rule.missingInvoiceAction() == null
-                    ? MissingInvoiceAction.UNABLE_TO_VERIFY : rule.missingInvoiceAction();
+                    ? MissingInvoiceAction.DOUBTS : rule.missingInvoiceAction();
             CheckStatus status = switch (action) {
-                case DISCREPANT -> CheckStatus.DISCREPANT;
-                case NOT_APPLICABLE -> CheckStatus.NOT_APPLICABLE;
-                case UNABLE_TO_VERIFY -> CheckStatus.UNABLE_TO_VERIFY;
+                case FAIL -> CheckStatus.FAIL;
+                case DOUBTS -> CheckStatus.DOUBTS;
             };
             return preGateOutcome(rule, status, missingFieldDescription(rule));
         }
 
         CheckStrategy strategy = strategies.get(rule.checkType());
         if (strategy == null) {
-            return preGateOutcome(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return preGateOutcome(rule, CheckStatus.DOUBTS,
                     "No strategy registered for check_type=" + rule.checkType());
         }
         return strategy.execute(rule, lc, inv);
@@ -125,9 +128,12 @@ public class CheckExecutor {
      * Pattern-aware missing-field message — driven off rule shape so the operator
      * sees a concrete reason rather than "missing fields: [seller_name]".
      */
-    private static String missingFieldDescription(Rule rule) {
+    private String missingFieldDescription(Rule rule) {
         String outputField = rule.outputField() == null ? rule.id() : rule.outputField();
-        if (rule.lcFields().isEmpty()) {
+        boolean rulesAgainstLc = rule.fieldKeys().stream()
+                .map(fieldPool::byKey)
+                .anyMatch(opt -> opt.isPresent() && opt.get().appliesToLc());
+        if (!rulesAgainstLc) {
             // Pure mandatory presence — no LC comparison.
             return outputField + " is mandatory on every commercial invoice per "
                     + safeRef(rule) + " but was not extracted";
@@ -141,53 +147,43 @@ public class CheckExecutor {
         return rule.id();
     }
 
-    private static boolean hasAnyInvoiceField(Rule rule, InvoiceDocument inv) {
-        if (rule.invoiceFields().isEmpty()) return true;
-        if (inv == null) return false;
-        for (String f : rule.invoiceFields()) {
-            if (getInvoiceField(inv, f) != null) {
+    /**
+     * Returns true if the rule has at least one invoice-applicable field_key
+     * present on the invoice envelope. Rules with no invoice-applicable keys
+     * (e.g. LC-only checks) trivially pass the gate.
+     */
+    private boolean hasAnyInvoiceField(Rule rule, InvoiceDocument inv) {
+        if (rule.fieldKeys().isEmpty()) return true;
+        List<String> invoiceKeys = rule.fieldKeys().stream()
+                .map(fieldPool::byKey)
+                .filter(java.util.Optional::isPresent)
+                .map(java.util.Optional::get)
+                .filter(FieldDefinition::appliesToInvoice)
+                .map(FieldDefinition::key)
+                .toList();
+        if (invoiceKeys.isEmpty()) return true;
+        if (inv == null || inv.envelope() == null) return false;
+        Map<String, Object> fields = inv.envelope().fields();
+        for (String k : invoiceKeys) {
+            Object v = fields.get(k);
+            if (v != null && !(v instanceof String s && s.isBlank())) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Snake-case field name → value lookup. Unknown keys return null (treated as missing). */
-    private static Object getInvoiceField(InvoiceDocument inv, String key) {
-        return switch (key) {
-            case "invoice_number" -> inv.invoiceNumber();
-            case "invoice_date" -> inv.invoiceDate();
-            case "seller_name" -> inv.sellerName();
-            case "seller_address" -> inv.sellerAddress();
-            case "buyer_name" -> inv.buyerName();
-            case "buyer_address" -> inv.buyerAddress();
-            case "goods_description" -> inv.goodsDescription();
-            case "quantity" -> inv.quantity();
-            case "unit" -> inv.unit();
-            case "unit_price" -> inv.unitPrice();
-            case "total_amount" -> inv.totalAmount();
-            case "currency" -> inv.currency();
-            case "lc_reference" -> inv.lcReference();
-            case "trade_terms" -> inv.tradeTerms();
-            case "port_of_loading" -> inv.portOfLoading();
-            case "port_of_discharge" -> inv.portOfDischarge();
-            case "country_of_origin" -> inv.countryOfOrigin();
-            case "signed" -> inv.signed();
-            default -> null;
-        };
-    }
-
     private static StrategyOutcome preGateOutcome(Rule rule, CheckStatus status, String description) {
         CheckResult result = new CheckResult(
                 rule.id(), rule.name(), rule.checkType(), rule.businessPhase(), status,
-                status == CheckStatus.DISCREPANT ? rule.severityOnFail() : null,
-                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.invoiceFields()),
+                status == CheckStatus.FAIL ? rule.severityOnFail() : null,
+                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.fieldKeys()),
                 null, null,
                 rule.ucpRef(), rule.isbpRef(),
                 description);
         CheckTrace trace = new CheckTrace(
                 rule.id(), rule.checkType(), status,
-                Map.of("lcFields", rule.lcFields(), "invoiceFields", rule.invoiceFields()),
+                Map.of("fieldKeys", rule.fieldKeys()),
                 null, null, 0L, null);
         return new StrategyOutcome(result, trace);
     }

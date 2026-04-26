@@ -236,7 +236,7 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
                        (SELECT COUNT(*) FROM pipeline_steps
                           WHERE session_id = s.id AND stage = 'lc_check'
                           AND step_key NOT LIKE 'phase:%'
-                          AND status = 'DISCREPANT')                             AS discrepancies
+                          AND status = 'FAIL')                                   AS discrepancies
                 FROM   check_sessions s
                 ORDER BY s.created_at DESC
                 LIMIT ?
@@ -434,11 +434,11 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
     }
 
     private static CheckStatus parseCheckStatus(String s) {
-        if (s == null) return CheckStatus.UNABLE_TO_VERIFY;
+        if (s == null) return CheckStatus.DOUBTS;
         try {
             return CheckStatus.valueOf(s);
         } catch (IllegalArgumentException e) {
-            return CheckStatus.UNABLE_TO_VERIFY;
+            return CheckStatus.DOUBTS;
         }
     }
 }

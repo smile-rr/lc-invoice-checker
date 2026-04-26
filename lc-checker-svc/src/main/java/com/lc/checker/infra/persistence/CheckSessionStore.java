@@ -57,8 +57,8 @@ public interface CheckSessionStore {
      * @param stage        level-1 stage — {@code lc_parse | invoice_extract | lc_check | report_assembly}
      * @param stepKey      level-2 step key — source name / rule id / {@code "phase:<name>"} /
      *                     {@code "-"} when not applicable
-     * @param status       SUCCESS / FAILED / PASS / DISCREPANT / UNABLE_TO_VERIFY /
-     *                     NOT_APPLICABLE / REQUIRES_HUMAN_REVIEW / SKIPPED
+     * @param status       SUCCESS / FAILED / SKIPPED for stage-level rows; or
+     *                     PASS / FAIL / DOUBTS / NOT_REQUIRED for per-rule rows
      * @param startedAt    wall-clock start of this step
      * @param completedAt  wall-clock end; may equal {@code startedAt} for pre-gate only steps
      * @param result       stage-specific payload (will be serialized to JSONB); may be {@code null}

@@ -8,6 +8,12 @@ import com.lc.checker.domain.result.ExpressionTrace;
 import com.lc.checker.domain.rule.Rule;
 import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
+import com.lc.checker.infra.observability.LangfuseTags;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -18,10 +24,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Deterministic SpEL evaluator. Rule's {@code expression} runs against
- * {@code lc} + {@code inv}; truthy → PASS, falsy → DISCREPANT, exception →
- * UNABLE_TO_VERIFY (a broken expression must not crash the whole pipeline).
+ * {@code lc} + {@code inv}; truthy → PASS, falsy → FAIL, exception →
+ * DOUBTS (a broken expression must not crash the whole pipeline).
  *
- * <p>The DISCREPANT description is shaped from the bound-variable snapshot so a
+ * <p>The FAIL description is shaped from the bound-variable snapshot so a
  * reviewer sees concrete values, not a generic "rule X failed" message.
  */
 @Component
@@ -30,9 +36,16 @@ public class ProgrammaticStrategy implements CheckStrategy {
     private static final Logger log = LoggerFactory.getLogger(ProgrammaticStrategy.class);
 
     private final SpelBinder binder;
+    private final FieldPoolRegistry fieldPool;
+    private final Tracer tracer;
+    private final ObjectMapper json;
 
-    public ProgrammaticStrategy(SpelBinder binder) {
+    public ProgrammaticStrategy(SpelBinder binder, FieldPoolRegistry fieldPool,
+                                Tracer tracer, ObjectMapper json) {
         this.binder = binder;
+        this.fieldPool = fieldPool;
+        this.tracer = tracer;
+        this.json = json;
     }
 
     @Override
@@ -42,10 +55,50 @@ public class ProgrammaticStrategy implements CheckStrategy {
 
     @Override
     public StrategyOutcome execute(Rule rule, LcDocument lc, InvoiceDocument inv) {
+        // Per-rule child span — gives Langfuse a Span (not a Generation, since
+        // there's no LLM here) with input = bound variable snapshot and output
+        // = verdict + description + expression. Same trace as agent rules, so
+        // a session view shows all 20 rule outcomes side-by-side regardless of
+        // execution strategy.
+        Span span = LangfuseTags.applySession(tracer.nextSpan())
+                .name("rule." + rule.id())
+                // Deterministic SpEL — Langfuse type "span" (no LLM, no tokens).
+                .tag("langfuse.observation.type", "span")
+                .tag("rule.id", rule.id())
+                .tag("rule.type", "PROGRAMMATIC")
+                .tag("rule.ucp_ref", rule.ucpRef() == null ? "" : rule.ucpRef())
+                .tag("rule.isbp_ref", rule.isbpRef() == null ? "" : rule.isbpRef())
+                .tag("rule.severity_on_fail", String.valueOf(rule.severityOnFail()))
+                .start();
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
+            StrategyOutcome out = doExecute(rule, lc, inv);
+            CheckStatus verdict = out.result().status();
+            // Langfuse-recognised attributes — make input + output show up in
+            // the UI as first-class fields.
+            span.tag("rule.verdict", String.valueOf(verdict));
+            Map<String, Object> bound = out.trace() != null && out.trace().expressionTrace() != null
+                    ? out.trace().expressionTrace().boundVariables()
+                    : Map.of();
+            span.tag("langfuse.observation.input", toJson(Map.of(
+                    "expression", rule.expression() == null ? "" : rule.expression(),
+                    "bound_vars", bound)));
+            span.tag("langfuse.observation.output", toJson(Map.of(
+                    "verdict", String.valueOf(verdict),
+                    "description", out.result().description() == null ? "" : out.result().description())));
+            return out;
+        } catch (RuntimeException e) {
+            span.error(e);
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    private StrategyOutcome doExecute(Rule rule, LcDocument lc, InvoiceDocument inv) {
         long start = System.currentTimeMillis();
 
         if (rule.expression() == null || rule.expression().isBlank()) {
-            return outcome(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return outcome(rule, CheckStatus.DOUBTS,
                     new ExpressionTrace(null, bind(lc, inv), null, "Rule has no expression"),
                     "PROGRAMMATIC rule " + rule.id() + " has no expression in catalog",
                     start);
@@ -59,14 +112,14 @@ public class ProgrammaticStrategy implements CheckStrategy {
             result = expr.getValue(ctx);
         } catch (Exception e) {
             log.warn("PROGRAMMATIC rule {} evaluation failed: {}", rule.id(), e.getMessage());
-            return outcome(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return outcome(rule, CheckStatus.DOUBTS,
                     new ExpressionTrace(rule.expression(), bound, null, e.getMessage()),
                     "Expression evaluation failed: " + e.getMessage(),
                     start);
         }
 
         boolean passed = isTruthy(result);
-        CheckStatus status = passed ? CheckStatus.PASS : CheckStatus.DISCREPANT;
+        CheckStatus status = passed ? CheckStatus.PASS : CheckStatus.FAIL;
         String description = passed
                 ? rule.name() + " satisfied"
                 : buildDiscrepancyDescription(rule, bound);
@@ -74,6 +127,20 @@ public class ProgrammaticStrategy implements CheckStrategy {
         return outcome(rule, status,
                 new ExpressionTrace(rule.expression(), bound, result, null),
                 description, start);
+    }
+
+    private String toJson(Object o) {
+        try {
+            return json.writeValueAsString(o);
+        } catch (JsonProcessingException e) {
+            return String.valueOf(o);
+        }
+    }
+
+    private boolean rulesAgainstLc(Rule rule) {
+        return rule.fieldKeys().stream()
+                .map(fieldPool::byKey)
+                .anyMatch(opt -> opt.isPresent() && opt.get().appliesToLc());
     }
 
     private static boolean isTruthy(Object value) {
@@ -111,12 +178,12 @@ public class ProgrammaticStrategy implements CheckStrategy {
      * Pattern-aware DISCREPANT message inferred from the rule's expression shape.
      * The aim is a concrete sentence with values, not "rule X failed: {map}".
      */
-    private static String buildDiscrepancyDescription(Rule rule, Map<String, Object> bound) {
+    private String buildDiscrepancyDescription(Rule rule, Map<String, Object> bound) {
         String expr = rule.expression() == null ? "" : rule.expression();
         String outputField = rule.outputField() == null ? rule.id() : rule.outputField();
 
         // Mandatory presence — rule reads only inv.* and tests non-null/non-blank
-        if (rule.lcFields().isEmpty() && expr.contains("isEmpty")) {
+        if (!rulesAgainstLc(rule) && expr.contains("isEmpty")) {
             return outputField + " is mandatory on every commercial invoice per "
                     + safeRef(rule) + " but was not found";
         }
@@ -172,8 +239,8 @@ public class ProgrammaticStrategy implements CheckStrategy {
                 CheckType.PROGRAMMATIC,
                 rule.businessPhase(),
                 status,
-                status == CheckStatus.DISCREPANT ? rule.severityOnFail() : null,
-                firstFieldOrNull(rule.invoiceFields()),
+                status == CheckStatus.FAIL ? rule.severityOnFail() : null,
+                firstFieldOrNull(rule.fieldKeys()),
                 null,
                 null,
                 rule.ucpRef(),

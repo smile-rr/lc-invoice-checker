@@ -8,6 +8,8 @@ import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.stream.CheckEventPublisher;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -116,9 +118,16 @@ public class LcCheckStreamController {
                         "invoiceFilename", pdfName == null ? "" : pdfName,
                         "invoiceBytes", pdfBytes.length));
 
+        // Capture the OTel context (which contains the current HTTP request
+        // span). Restoring it inside the executor task means the session span
+        // we create in pipeline.run() becomes a child of the request span,
+        // and every subsequent rule / extractor / LLM span lives in the SAME
+        // trace tree. Without this, the pipeline runs in a thread that has
+        // no current OTel context and starts an entirely separate trace.
+        Context capturedOtelContext = Context.current();
         executor.execute(() -> {
             MDC.put(MdcKeys.SESSION_ID, sid);
-            try {
+            try (Scope scope = capturedOtelContext.makeCurrent()) {
                 pipeline.run(sid, lcText, pdfBytes, pdfName, publisher);
             } catch (RuntimeException e) {
                 // The pipeline already emits per-stage error events and persists

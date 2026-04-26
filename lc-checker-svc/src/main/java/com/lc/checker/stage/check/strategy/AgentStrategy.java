@@ -10,6 +10,11 @@ import com.lc.checker.domain.result.LlmTrace;
 import com.lc.checker.domain.rule.Rule;
 import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
+import com.lc.checker.infra.fields.FieldDefinition;
+import com.lc.checker.infra.fields.FieldPoolRegistry;
+import com.lc.checker.infra.observability.LangfuseTags;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -33,20 +38,22 @@ import org.springframework.util.StreamUtils;
  * <p>Output schema (strict):
  * <pre>{@code
  * {
- *   "applicable": true | false,
- *   "verdict":    "PASS" | "DISCREPANT" | "UNABLE_TO_VERIFY",
- *   "lc_value":   string|null,
+ *   "verdict":         "PASS" | "FAIL" | "DOUBTS" | "NOT_REQUIRED",
+ *   "lc_value":        string|null,
  *   "presented_value": string|null,
- *   "reason":     "one-line plain-English"
+ *   "reason":          "one-line plain-English"
  * }
  * }</pre>
  *
  * <ul>
- *   <li>{@code applicable=false} → {@link CheckStatus#NOT_APPLICABLE}.</li>
- *   <li>{@code applicable=true} → verdict mapped 1:1 to PASS / DISCREPANT /
- *       UNABLE_TO_VERIFY.</li>
+ *   <li>verdict {@code PASS} → {@link CheckStatus#PASS}.</li>
+ *   <li>verdict {@code FAIL} → {@link CheckStatus#FAIL}.</li>
+ *   <li>verdict {@code DOUBTS} → {@link CheckStatus#DOUBTS} — agent is not
+ *       confident; must not guess.</li>
+ *   <li>verdict {@code NOT_REQUIRED} → {@link CheckStatus#NOT_REQUIRED};
+ *       reason MUST cite the UCP article or ISBP paragraph that governs why.</li>
  *   <li>Missing prompt template, LLM failure, or unparseable JSON →
- *       {@link CheckStatus#UNABLE_TO_VERIFY} (a broken agent must not silently PASS).</li>
+ *       {@link CheckStatus#DOUBTS} (a broken agent must not silently PASS).</li>
  * </ul>
  */
 @Component
@@ -54,13 +61,22 @@ public class AgentStrategy implements CheckStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(AgentStrategy.class);
 
+    private static final String CROSS_CUTTING_FRAGMENT = "fragments/cross-cutting-tolerances.txt";
+    private static final String CHECK_PROMPT_DIR = "check/";
+
     private final ChatClient chatClient;
     private final ObjectMapper json;
+    private final FieldPoolRegistry fieldPool;
+    private final Tracer tracer;
     private final Map<String, String> templateCache = new ConcurrentHashMap<>();
+    private volatile String crossCuttingTolerances;
 
-    public AgentStrategy(ChatClient chatClient, ObjectMapper json) {
+    public AgentStrategy(ChatClient chatClient, ObjectMapper json,
+                         FieldPoolRegistry fieldPool, Tracer tracer) {
         this.chatClient = chatClient;
         this.json = json;
+        this.fieldPool = fieldPool;
+        this.tracer = tracer;
     }
 
     @Override
@@ -70,10 +86,41 @@ public class AgentStrategy implements CheckStrategy {
 
     @Override
     public StrategyOutcome execute(Rule rule, LcDocument lc, InvoiceDocument inv) {
+        // Per-rule child span — parent is the lc.check.session span set by the
+        // pipeline. The Spring AI ChatClient.call below emits its own
+        // "gen_ai.client.operation" span underneath this one (with prompt /
+        // completion / token attributes), so Langfuse renders this rule's
+        // entry as: rule.<id> [Span] → ChatClient call [Generation].
+        Span span = LangfuseTags.applySession(tracer.nextSpan())
+                .name("rule." + rule.id())
+                // type=generation tells Langfuse this is an LLM call (not a
+                // generic span), so it shows model + tokens + cost in the UI.
+                .tag("langfuse.observation.type", "generation")
+                .tag("rule.id", rule.id())
+                .tag("rule.type", "AGENT")
+                .tag("rule.ucp_ref", nullToEmpty(rule.ucpRef()))
+                .tag("rule.isbp_ref", nullToEmpty(rule.isbpRef()))
+                .tag("rule.severity_on_fail", String.valueOf(rule.severityOnFail()))
+                .tag("rule.prompt_template", nullToEmpty(rule.promptTemplate()))
+                .start();
+        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
+            StrategyOutcome outcome = doExecute(rule, lc, inv);
+            CheckStatus status = outcome.result().status();
+            span.tag("rule.verdict", String.valueOf(status));
+            return outcome;
+        } catch (RuntimeException e) {
+            span.error(e);
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    private StrategyOutcome doExecute(Rule rule, LcDocument lc, InvoiceDocument inv) {
         long start = System.currentTimeMillis();
 
         if (rule.promptTemplate() == null || rule.promptTemplate().isBlank()) {
-            return fail(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return fail(rule, CheckStatus.DOUBTS,
                     "AGENT rule " + rule.id() + " has no prompt_template", null, start);
         }
 
@@ -82,12 +129,20 @@ public class AgentStrategy implements CheckStrategy {
             template = loadTemplate(rule.promptTemplate());
         } catch (Exception e) {
             log.warn("Cannot load prompt {}: {}", rule.promptTemplate(), e.getMessage());
-            return fail(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return fail(rule, CheckStatus.DOUBTS,
                     "Prompt template missing: " + rule.promptTemplate(), null, start);
         }
 
         Map<String, Object> vars = buildVariables(rule, lc, inv);
         String rendered = render(template, vars);
+
+        // Pin the rendered prompt as input on the rule span so Langfuse shows
+        // the exact prompt the LLM saw — independent of whether Spring AI's
+        // gen_ai.* attributes flow through to Langfuse's recogniser.
+        Span ruleSpan = tracer.currentSpan();
+        if (ruleSpan != null) {
+            ruleSpan.tag("langfuse.observation.input", rendered);
+        }
 
         String rawResponse;
         long llmStart = System.currentTimeMillis();
@@ -98,12 +153,23 @@ public class AgentStrategy implements CheckStrategy {
             log.warn("Rule {} LLM call failed: {}", rule.id(), e.getMessage());
             LlmTrace trace = new LlmTrace("rule." + rule.id() + ".check", null,
                     rendered, null, null, null, llmElapsed, e.getMessage());
-            return fail(rule, CheckStatus.UNABLE_TO_VERIFY,
+            if (ruleSpan != null) {
+                ruleSpan.tag("langfuse.observation.output",
+                        "{\"error\": \"LLM call failed: " + e.getMessage().replace("\"", "'") + "\"}");
+            }
+            return fail(rule, CheckStatus.DOUBTS,
                     "LLM call failed: " + e.getMessage(), trace, start);
         }
         long llmElapsed = System.currentTimeMillis() - llmStart;
         LlmTrace llmTrace = new LlmTrace("rule." + rule.id() + ".check", null,
                 rendered, rawResponse, null, null, llmElapsed, null);
+
+        // Capture the raw model response — this is what Langfuse should show
+        // as the rule's output. The structured fields (verdict, lc_value,
+        // presented_value, reason) are also rendered into rule.* tags below.
+        if (ruleSpan != null) {
+            ruleSpan.tag("langfuse.observation.output", rawResponse);
+        }
 
         Map<String, Object> parsed;
         try {
@@ -112,23 +178,22 @@ public class AgentStrategy implements CheckStrategy {
             log.warn("Rule {} response JSON parse failed: {}", rule.id(), e.getMessage());
             LlmTrace withErr = new LlmTrace(llmTrace.purpose(), llmTrace.model(), llmTrace.promptRendered(),
                     llmTrace.rawResponse(), null, null, llmTrace.latencyMs(), "JSON parse: " + e.getMessage());
-            return fail(rule, CheckStatus.UNABLE_TO_VERIFY,
+            return fail(rule, CheckStatus.DOUBTS,
                     "Response was not valid JSON: " + e.getMessage(), withErr, start);
         }
 
-        boolean applicable = asBoolean(parsed.get("applicable"));
         String verdict = asString(parsed.get("verdict"));
         String lcValue = asString(parsed.get("lc_value"));
         String invValue = asString(parsed.get("presented_value"));
         String reason = asString(parsed.get("reason"));
 
-        CheckStatus status = mapStatus(applicable, verdict);
+        CheckStatus status = mapStatus(verdict);
 
         long duration = System.currentTimeMillis() - start;
         CheckResult result = new CheckResult(
                 rule.id(), rule.name(), CheckType.AGENT, rule.businessPhase(), status,
-                status == CheckStatus.DISCREPANT ? rule.severityOnFail() : null,
-                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.invoiceFields()),
+                status == CheckStatus.FAIL ? rule.severityOnFail() : null,
+                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.fieldKeys()),
                 lcValue,
                 invValue,
                 rule.ucpRef(),
@@ -157,9 +222,50 @@ public class AgentStrategy implements CheckStrategy {
         v.put("isbpExcerpt", nullToEmpty(rule.isbpExcerpt()));
         v.put("lcText", renderLc(lc));
         v.put("invoiceText", renderInvoice(inv));
-        v.put("lcRelevantFields", renderFieldList(rule.lcFields()));
-        v.put("invoiceRelevantFields", renderFieldList(rule.invoiceFields()));
+        v.put("lcRelevantFields", renderRelevantFields(rule, true));
+        v.put("invoiceRelevantFields", renderRelevantFields(rule, false));
+        v.put("crossCuttingTolerances", crossCuttingTolerances());
         return v;
+    }
+
+    /**
+     * Render the rule's field_keys filtered by which side they apply to. Each
+     * line is "canonical_key (English label)" so the prompt can reason about
+     * the same concept on both LC and invoice without coupling to MT700 tags
+     * or extractor-specific aliases.
+     */
+    private String renderRelevantFields(Rule rule, boolean lcSide) {
+        if (rule.fieldKeys().isEmpty()) return "(none)";
+        StringBuilder sb = new StringBuilder();
+        for (String key : rule.fieldKeys()) {
+            FieldDefinition def = fieldPool.byKey(key).orElse(null);
+            if (def == null) continue;
+            boolean applies = lcSide ? def.appliesToLc() : def.appliesToInvoice();
+            if (!applies) continue;
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(key);
+            if (def.nameEn() != null && !def.nameEn().isBlank()) {
+                sb.append(" (").append(def.nameEn()).append(")");
+            }
+        }
+        return sb.length() == 0 ? "(none)" : sb.toString();
+    }
+
+    private String crossCuttingTolerances() {
+        String cached = crossCuttingTolerances;
+        if (cached != null) return cached;
+        try {
+            String body = StreamUtils.copyToString(
+                    new ClassPathResource("prompts/" + CROSS_CUTTING_FRAGMENT).getInputStream(),
+                    StandardCharsets.UTF_8);
+            crossCuttingTolerances = body;
+            return body;
+        } catch (IOException e) {
+            log.warn("Cross-cutting tolerances fragment {} could not be loaded: {}",
+                    CROSS_CUTTING_FRAGMENT, e.getMessage());
+            crossCuttingTolerances = "";
+            return "";
+        }
     }
 
     /** Plain-text rendering of the LC — every Block-4 tag the parser preserved. */
@@ -214,11 +320,6 @@ public class AgentStrategy implements CheckStrategy {
         return sb.toString();
     }
 
-    private static String renderFieldList(List<String> fields) {
-        if (fields == null || fields.isEmpty()) return "(none)";
-        return String.join(", ", fields);
-    }
-
     private static String stripFences(String s) {
         if (s == null) return "";
         String t = s.trim();
@@ -244,12 +345,16 @@ public class AgentStrategy implements CheckStrategy {
 
     private String loadTemplate(String filename) {
         return templateCache.computeIfAbsent(filename, f -> {
+            // Catalog stores leaf filenames; rule prompts live under prompts/check/.
+            // A caller may pass a path-prefixed value (e.g. "fragments/foo.txt"),
+            // in which case we resolve it under prompts/ directly.
+            String path = f.contains("/") ? "prompts/" + f : "prompts/" + CHECK_PROMPT_DIR + f;
             try {
                 return StreamUtils.copyToString(
-                        new ClassPathResource("prompts/" + f).getInputStream(),
+                        new ClassPathResource(path).getInputStream(),
                         StandardCharsets.UTF_8);
             } catch (IOException e) {
-                throw new IllegalStateException("Cannot load prompt prompts/" + f, e);
+                throw new IllegalStateException("Cannot load prompt " + path, e);
             }
         });
     }
@@ -258,33 +363,23 @@ public class AgentStrategy implements CheckStrategy {
     // verdict mapping & coercion
     // -----------------------------------------------------------------------
 
-    private static CheckStatus mapStatus(boolean applicable, String verdict) {
-        if (!applicable) return CheckStatus.NOT_APPLICABLE;
-        if (verdict == null) return CheckStatus.UNABLE_TO_VERIFY;
+    private static CheckStatus mapStatus(String verdict) {
+        if (verdict == null) return CheckStatus.DOUBTS;
         return switch (verdict.trim().toUpperCase(Locale.ROOT)) {
             case "PASS" -> CheckStatus.PASS;
-            case "DISCREPANT" -> CheckStatus.DISCREPANT;
-            case "UNABLE_TO_VERIFY", "UNABLE", "UNKNOWN" -> CheckStatus.UNABLE_TO_VERIFY;
-            default -> CheckStatus.UNABLE_TO_VERIFY;
+            case "FAIL", "DISCREPANT" -> CheckStatus.FAIL;          // accept legacy DISCREPANT
+            case "DOUBTS", "UNABLE_TO_VERIFY", "UNABLE", "UNKNOWN" -> CheckStatus.DOUBTS;
+            case "NOT_REQUIRED", "NOT_APPLICABLE" -> CheckStatus.NOT_REQUIRED;  // accept legacy
+            default -> CheckStatus.DOUBTS;
         };
     }
 
     private static String defaultDescription(Rule rule, CheckStatus status) {
         return switch (status) {
             case PASS -> rule.name() + " satisfied";
-            case DISCREPANT -> rule.name() + " failed";
-            case NOT_APPLICABLE -> rule.name() + " not applicable to this LC";
-            case UNABLE_TO_VERIFY -> rule.name() + " could not be verified";
-            default -> rule.name();
-        };
-    }
-
-    private static boolean asBoolean(Object v) {
-        if (v instanceof Boolean b) return b;
-        if (v == null) return false;
-        return switch (v.toString().trim().toLowerCase(Locale.ROOT)) {
-            case "true", "yes", "y", "1" -> true;
-            default -> false;
+            case FAIL -> rule.name() + " failed";
+            case NOT_REQUIRED -> rule.name() + " not required by this LC";
+            case DOUBTS -> rule.name() + " could not be verified with confidence";
         };
     }
 
@@ -306,8 +401,8 @@ public class AgentStrategy implements CheckStrategy {
         long duration = System.currentTimeMillis() - start;
         CheckResult result = new CheckResult(
                 rule.id(), rule.name(), CheckType.AGENT, rule.businessPhase(), status,
-                status == CheckStatus.DISCREPANT ? rule.severityOnFail() : null,
-                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.invoiceFields()),
+                status == CheckStatus.FAIL ? rule.severityOnFail() : null,
+                rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.fieldKeys()),
                 null, null,
                 rule.ucpRef(), rule.isbpRef(),
                 description);

@@ -17,10 +17,12 @@ import { UploadStep } from '../components/upload/UploadStep';
 export function UploadPage() {
   const loc = useLocation();
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-full overflow-hidden">
       <SessionStrip state={EMPTY_SESSION_STATE} onOpenTrace={() => {}} />
       <PipelineFlow state={null} active="upload" onSelect={() => {}} />
-      <UploadStep key={loc.key} primaryRunCta={true} />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <UploadStep key={loc.key} primaryRunCta={true} />
+      </div>
     </div>
   );
 }

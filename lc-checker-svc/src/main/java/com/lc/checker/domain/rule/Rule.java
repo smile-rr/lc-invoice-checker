@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.lc.checker.domain.rule.enums.BusinessPhase;
 import com.lc.checker.domain.rule.enums.CheckType;
+import com.lc.checker.domain.rule.enums.DisabledCategory;
 import com.lc.checker.domain.rule.enums.MissingInvoiceAction;
 import com.lc.checker.domain.rule.enums.Severity;
 import java.util.List;
@@ -32,19 +33,18 @@ public record Rule(
         String isbpExcerpt,
         String ruleReferenceLabel,
         String outputField,
-        List<String> lcFields,
-        List<String> invoiceFields,
+        List<String> fieldKeys,
         MissingInvoiceAction missingInvoiceAction,
         Severity severityOnFail,
         String expression,
         String promptTemplate,
         Boolean enabled,
+        DisabledCategory disabledCategory,
         String disabledReason
 ) {
 
     public Rule {
-        lcFields = lcFields == null ? List.of() : List.copyOf(lcFields);
-        invoiceFields = invoiceFields == null ? List.of() : List.copyOf(invoiceFields);
+        fieldKeys = fieldKeys == null ? List.of() : List.copyOf(fieldKeys);
         enabled = enabled == null ? Boolean.TRUE : enabled;
         businessPhase = businessPhase == null ? BusinessPhase.PROCEDURAL : businessPhase;
     }

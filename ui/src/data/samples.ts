@@ -1,17 +1,16 @@
 /**
  * Pre-defined LC + invoice pairs for the upload page picker.
  *
- * Each pair tells one scenario story (kind = badge label + colour); the user
- * sees both files clearly before clicking. Files live under {@code ui/public/samples}
- * and are kept in sync with {@code docs/refer-doc/} via {@code make ui-samples}.
+ * Each pair tells one scenario story (kind = badge label + colour). For now
+ * every pair uses the default {@code sample_lc_mt700.txt}; LLM-generated MT700
+ * variants will land here as one-line {@code lcPath} edits when ready.
+ *
+ * Files live under {@code ui/public/samples/} and are kept in sync with
+ * {@code test/invoice/} via {@code make ui-samples}.
  */
 export type ScenarioKind =
-  | 'baseline'           // standard LC, text PDF — clean reference run
-  | 'high-value'         // large amount, multi-doc requirements
-  | 'strict-tolerance'   // 0% tolerance / NOT EXCEEDING
-  | 'fob-eur'            // FOB / EUR / partial OK — different incoterm + currency
-  | 'expired'            // LC already expired — exercises date checks
-  | 'image-pdf';         // image-based invoice — vision LLM path
+  | 'baseline'           // standard text PDF — clean reference run
+  | 'image-pdf';         // image / handwritten content — exercises vision LLM path
 
 export type SamplePair = {
   id: string;
@@ -24,76 +23,99 @@ export type SamplePair = {
   invoiceLabel: string;   // short human label for the invoice chip
 };
 
+const DEFAULT_LC = '/samples/sample_lc_mt700.txt';
+const DEFAULT_LC_LABEL = 'sample_lc_mt700.txt';
+
 export const SAMPLES: SamplePair[] = [
   {
-    id: 'baseline-apple',
-    title: 'Baseline · clean LC',
-    note: 'Standard MT700 paired with a text-PDF invoice — fastest end-to-end run.',
+    id: 'inc-0-widget-pass',
+    title: 'Inc-0 · widget · all-pass LC',
+    note: 'MT700 hand-tuned to align with the widget invoice — expected mostly PASS / NOT_REQUIRED.',
     kind: 'baseline',
-    lcPath: '/samples/sample_lc_mt700.txt',
-    lcLabel: 'sample_lc_mt700.txt',
-    invoicePath: '/samples/invoice-1-apple.pdf',
-    invoiceLabel: 'invoice-1-apple.pdf',
+    lcPath: '/samples/inc-0-pass.txt',
+    lcLabel: 'inc-0-pass.txt',
+    invoicePath: '/samples/inc-0-widget.pdf',
+    invoiceLabel: 'inc-0-widget.pdf',
   },
   {
-    id: 'baseline-go-rails',
-    title: 'Baseline · alt invoice',
-    note: 'Same MT700 against a different text-PDF invoice — exercises layout variance.',
+    id: 'inc-0-widget',
+    title: 'Inc-0 · widget invoice',
+    note: 'Default LC paired with the widget invoice — expected to surface fails.',
     kind: 'baseline',
-    lcPath: '/samples/sample_lc_mt700.txt',
-    lcLabel: 'sample_lc_mt700.txt',
-    invoicePath: '/samples/invoice-2-go-rails.pdf',
-    invoiceLabel: 'invoice-2-go-rails.pdf',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inc-0-widget.pdf',
+    invoiceLabel: 'inc-0-widget.pdf',
   },
   {
-    id: 'high-value-machinery',
-    title: 'High-value · multi-doc LC',
-    note: 'USD 500K hydraulic-press LC with multiple required documents (CCPIT, mill cert).',
-    kind: 'high-value',
-    lcPath: '/samples/mt700-large-machinery.txt',
-    lcLabel: 'mt700-large-machinery.txt',
-    invoicePath: '/samples/invoice-1-apple.pdf',
-    invoiceLabel: 'invoice-1-apple.pdf',
-  },
-  {
-    id: 'strict-tolerance-textile',
-    title: 'Strict tolerance · NOT EXCEEDING',
-    note: 'USD 25K textile LC with 0/0 tolerance — any over-shipment becomes a discrepancy.',
-    kind: 'strict-tolerance',
-    lcPath: '/samples/mt700-tight-textile.txt',
-    lcLabel: 'mt700-tight-textile.txt',
-    invoicePath: '/samples/invoice-3-color-claude.pdf',
-    invoiceLabel: 'invoice-3-color-claude.pdf',
-  },
-  {
-    id: 'fob-eur-flexible',
-    title: 'FOB · EUR · partial allowed',
-    note: 'EUR 75K Rotterdam–Hamburg LC under FOB Incoterms; partial shipments permitted.',
-    kind: 'fob-eur',
-    lcPath: '/samples/mt700-fob-eur-flexible.txt',
-    lcLabel: 'mt700-fob-eur-flexible.txt',
-    invoicePath: '/samples/invoice-3-color-claude.pdf',
-    invoiceLabel: 'invoice-3-color-claude.pdf',
-  },
-  {
-    id: 'expired-strict',
-    title: 'Expired LC · date checks',
-    note: 'LC that expired 2024-01-15 — should trip presentation-period and expiry rules.',
-    kind: 'expired',
-    lcPath: '/samples/mt700-expired-strict.txt',
-    lcLabel: 'mt700-expired-strict.txt',
-    invoicePath: '/samples/invoice-1-apple.pdf',
-    invoiceLabel: 'invoice-1-apple.pdf',
-  },
-  {
-    id: 'image-vision',
-    title: 'Image PDF · vision lane',
-    note: 'Standard LC with an image-only invoice — forces the vision-LLM extractor path.',
+    id: 'inc-4-proforma',
+    title: 'Inc-4 · proforma A',
+    note: 'Proforma invoice with image-style header — exercises vision extractor.',
     kind: 'image-pdf',
-    lcPath: '/samples/sample_lc_mt700.txt',
-    lcLabel: 'sample_lc_mt700.txt',
-    invoicePath: '/samples/invoice-3-color-image.pdf',
-    invoiceLabel: 'invoice-3-color-image.pdf',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inc-4-proforma.jpg.pdf',
+    invoiceLabel: 'inc-4-proforma.jpg.pdf',
+  },
+  {
+    id: 'inc-5-proforma-2',
+    title: 'Inc-5 · proforma B',
+    note: 'Second proforma layout variant.',
+    kind: 'baseline',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inc-5-proforma-2.pdf',
+    invoiceLabel: 'inc-5-proforma-2.pdf',
+  },
+  {
+    id: 'inc-6-logo',
+    title: 'Inc-6 · logo header',
+    note: 'Invoice with logo header and rich layout.',
+    kind: 'baseline',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inc-6-logo.pdf',
+    invoiceLabel: 'inc-6-logo.pdf',
+  },
+  {
+    id: 'inc-8-abc',
+    title: 'Inc-8 · ABC layout',
+    note: 'ABC-co invoice — three-column layout.',
+    kind: 'baseline',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inc-8-abc.pdf',
+    invoiceLabel: 'inc-8-abc.pdf',
+  },
+  {
+    id: 'inv-1-global-e',
+    title: 'Inv-1 · global-e',
+    note: 'Standard global-e commercial invoice.',
+    kind: 'baseline',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inv-1-global-e.pdf',
+    invoiceLabel: 'inv-1-global-e.pdf',
+  },
+  {
+    id: 'inv-2-art-finder',
+    title: 'Inv-2 · art finder',
+    note: 'Art-finder mid-density invoice with multiple line items.',
+    kind: 'baseline',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inv-2-art-finder.pdf',
+    invoiceLabel: 'inv-2-art-finder.pdf',
+  },
+  {
+    id: 'inv-3-half-handwritten',
+    title: 'Inv-3 · half-handwritten',
+    note: 'Mixed printed + handwritten invoice — stress test for the vision LLM lane.',
+    kind: 'image-pdf',
+    lcPath: DEFAULT_LC,
+    lcLabel: DEFAULT_LC_LABEL,
+    invoicePath: '/samples/inv-3-half-handwritten.pdf',
+    invoiceLabel: 'inv-3-half-handwritten.pdf',
   },
 ];
 

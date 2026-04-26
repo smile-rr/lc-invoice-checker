@@ -190,13 +190,14 @@ export interface InvoiceDocument {
   parsed_rows: ParsedRow[];
 }
 
-export type CheckStatus =
-  | 'PASS'
-  | 'DISCREPANT'
-  | 'UNABLE_TO_VERIFY'
-  | 'NOT_APPLICABLE'
-  | 'HUMAN_REVIEW'
-  | 'REQUIRES_HUMAN_REVIEW';
+/**
+ * Outcome of a single rule check — four buckets:
+ *   PASS         — rule applied and the invoice complies
+ *   FAIL         — rule applied and a discrepancy was found
+ *   DOUBTS       — rule applied but the agent isn't confident enough to call it
+ *   NOT_REQUIRED — rule does not apply to this presentation; reason cites UCP/ISBP
+ */
+export type CheckStatus = 'PASS' | 'FAIL' | 'DOUBTS' | 'NOT_REQUIRED';
 
 export type CheckTypeEnum = 'PROGRAMMATIC' | 'AGENT';
 
@@ -222,10 +223,9 @@ export interface CheckResult {
 export interface Summary {
   total_checks: number;
   passed: number;
-  discrepant: number;
-  unable_to_verify: number;
-  not_applicable: number;
-  requires_human_review: number;
+  failed: number;
+  doubts: number;
+  not_required: number;
 }
 
 export interface Discrepancy {
@@ -239,16 +239,13 @@ export interface Discrepancy {
 export interface DiscrepancyReport {
   session_id: string;
   compliant: boolean;
-  /** Summary objects (no rule_id) — DISCREPANT items only, in the spec shape. */
+  /** Spec-shape Discrepancy summaries (no rule_id) — sourced from `failed`. */
   discrepancies: Discrepancy[];
-  /** Items the Layer-3 holistic agent flagged for officer review.
-   *  Same shape as `discrepancies` but never flips `compliant`. */
-  requires_human_review: Discrepancy[];
-  /** Typed CheckResults for DISCREPANT rules — UI source of truth. */
-  discrepant: CheckResult[];
-  unable_to_verify: CheckResult[];
+  /** Typed CheckResults grouped by the 4-bucket taxonomy. */
   passed: CheckResult[];
-  not_applicable: CheckResult[];
+  failed: CheckResult[];
+  doubts: CheckResult[];
+  not_required: CheckResult[];
   summary: Summary;
 }
 

@@ -138,7 +138,17 @@ springdoc:
   default-produces-media-type: application/json
   packagesToScan: com.lc.checker.api
 
-# --- Actuator + Prometheus -----------------------------------------------------
+# --- Actuator + Prometheus + Tracing → Langfuse --------------------------------
+# Tracing pipeline:
+#   Spring AI ChatClient.call → Micrometer observation → OTel span →
+#   OTLP exporter → Langfuse `/api/public/otel/v1/traces`.
+#
+# Per-LLM-call attributes captured natively (Spring AI 1.1):
+#   gen_ai.system / gen_ai.request.model / gen_ai.usage.input_tokens /
+#   gen_ai.usage.output_tokens / gen_ai.prompt / gen_ai.completion.
+# Langfuse maps these onto Generation observations and computes cost.
+#
+# Sampling 1.0 in dev so every session shows up; lower in prod.
 management:
   endpoints:
     web:
@@ -150,6 +160,24 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACING_SAMPLING:1.0}
+  otlp:
+    tracing:
+      # Langfuse OTel intake. Override LANGFUSE_HOST in .env to point elsewhere.
+      endpoint: ${LANGFUSE_OTEL_ENDPOINT:${LANGFUSE_HOST:http://192.168.31.214:3300}/api/public/otel/v1/traces}
+      headers:
+        Authorization: Basic ${LANGFUSE_AUTH_BASIC:}
+      compression: gzip
+      timeout: 10s
+
+# Spring AI observation switches — must be true to capture prompt + completion
+# bodies on Generation observations. Tokens are captured regardless.
+spring.ai.chat.observations:
+  include-prompt: ${AI_OBS_INCLUDE_PROMPT:true}
+  include-completion: ${AI_OBS_INCLUDE_COMPLETION:true}
 
 # --- Logging -------------------------------------------------------------------
 logging:

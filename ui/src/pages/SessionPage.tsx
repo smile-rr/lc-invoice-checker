@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useCheckSession } from '../hooks/useCheckSession';
 import { usePipelineConfig } from '../hooks/usePipelineConfig';
@@ -33,6 +33,21 @@ export function SessionPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step]);
 
+  // Auto-advance from the Invoice step to Compliance Check once invoice
+  // extraction completes. The user is most often on `invoice` while
+  // extraction is in flight; the moment it finishes, the natural next view
+  // is the rule run that's about to start. We only fire once per transition
+  // (the ref guards against re-firing if the user manually navigates back).
+  const advancedRef = useRef(false);
+  useEffect(() => {
+    const invoiceDone = state.stages.invoice_extract.status === 'done';
+    if (invoiceDone && step === 'invoice' && !advancedRef.current) {
+      advancedRef.current = true;
+      setStep('check');
+    }
+    if (!invoiceDone) advancedRef.current = false;
+  }, [state.stages.invoice_extract.status, step, setStep]);
+
   if (!sessionId) {
     return <div className="p-6 text-status-red">Missing session id</div>;
   }
@@ -43,7 +58,7 @@ export function SessionPage() {
   // list scrolls inside the panel — not the document. Other steps wrap their
   // body in an internal scroller so behaviour is uniform.
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
       <SessionStrip state={state} onOpenTrace={() => setShowTrace(true)} />
       <PipelineFlow
         state={state}

@@ -1,25 +1,24 @@
 package com.lc.checker.domain.rule.enums;
 
-import com.lc.checker.domain.result.DiscrepancyReport;
-
 /**
- * Outcome taxonomy for a single rule check (logic-flow.md Stage 3/5).
+ * Outcome taxonomy for a single rule check. Four buckets, one per
+ * possible verdict:
  *
- * <p>Mapping into the final {@code DiscrepancyReport}:
  * <ul>
- *   <li>{@link #DISCREPANT} → {@code discrepancies[]}</li>
- *   <li>{@link #UNABLE_TO_VERIFY} → human-review queue</li>
- *   <li>{@link #PASS} → {@code passed[]}</li>
- *   <li>{@link #NOT_APPLICABLE} → {@code not_applicable[]}</li>
- *   <li>{@link #HUMAN_REVIEW} → human-review queue (legacy alias)</li>
- *   <li>{@link #REQUIRES_HUMAN_REVIEW} → human-review queue (Stage 4 Holistic Sweep output, per logic-flow.md)</li>
+ *   <li>{@link #PASS} — rule applied and the invoice complies.</li>
+ *   <li>{@link #FAIL} — rule applied and a discrepancy was found.</li>
+ *   <li>{@link #DOUBTS} — rule applied but the agent isn't confident
+ *       enough to call it (ambiguous LC text, partial extraction, etc.).
+ *       The agent must NOT guess — it returns DOUBTS rather than
+ *       fabricate.</li>
+ *   <li>{@link #NOT_REQUIRED} — rule does not apply to this presentation
+ *       (the LC doesn't stipulate the rule's condition). Reason MUST cite
+ *       UCP/ISBP.</li>
  * </ul>
  */
 public enum CheckStatus {
     PASS,
-    DISCREPANT,
-    UNABLE_TO_VERIFY,
-    NOT_APPLICABLE,
-    HUMAN_REVIEW,
-    REQUIRES_HUMAN_REVIEW
+    FAIL,
+    DOUBTS,
+    NOT_REQUIRED
 }

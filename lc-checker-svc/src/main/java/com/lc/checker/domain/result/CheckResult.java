@@ -9,16 +9,12 @@ import com.lc.checker.domain.rule.enums.Severity;
 import com.lc.checker.stage.assemble.ReportAssembler;
 
 /**
- * Outcome of a single rule check. Merged with its {@link CheckTrace} counterpart in the
- * session store — {@code CheckResult} is the <em>decision</em> surface consumed by
- * {@code ReportAssembler}, {@code CheckTrace} is the forensic surface consumed by
- * {@code /trace}.
+ * Outcome of a single rule check. {@code CheckResult} is the <em>decision</em>
+ * surface consumed by {@code ReportAssembler}; {@code CheckTrace} is the
+ * forensic surface consumed by {@code /trace}.
  *
- * <p>{@link #severity} is null for non-DISCREPANT outcomes.
- *
- * <p>{@link #businessPhase} is populated from the rule definition so the UI can
- * group rule outcomes by business phase without an extra round trip to the catalog.
- * Defaults to {@link BusinessPhase#PROCEDURAL} for legacy results that don't carry it.
+ * <p>{@link #severity} is non-null only when {@link #status} is
+ * {@link CheckStatus#FAIL}.
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record CheckResult(

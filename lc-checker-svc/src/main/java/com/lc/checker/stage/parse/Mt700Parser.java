@@ -58,9 +58,11 @@ import org.springframework.stereotype.Component;
  *       field so SRU drift or unusual LC shapes surface in ops logs.</li>
  * </ol>
  *
- * <p>Throws {@link LcParseException} when the SWIFT envelope is structurally unreadable,
- * or when a mandatory tag ({@value #MANDATORY_TAGS}) is absent, or when :32B:/:31D:
- * cannot be decoded.
+ * <p>Throws {@link LcParseException} only when the SWIFT envelope itself is
+ * structurally unreadable — missing mandatory tags are NOT a parser concern;
+ * {@code InputValidator} runs that check upstream and rejects with a clean
+ * 400 before any session is created. Missing optional fields parse as
+ * {@code null}; rules that need them produce {@link CheckStatus#DOUBTS}.
  */
 @Component
 public class Mt700Parser {
@@ -68,8 +70,9 @@ public class Mt700Parser {
     private static final Logger log = LoggerFactory.getLogger(Mt700Parser.class);
 
     /**
-     * Business-mandatory tags for our compliance pipeline. {@code "50"} and {@code "59"}
-     * are satisfied by ANY of their option letters (see {@link #hasMandatory}).
+     * Business-mandatory tags consumed by {@code InputValidator} as the
+     * pre-pipeline gate. Kept here so the validator and parser share a
+     * single source of truth for which tags must exist on the wire.
      */
     public static final List<String> MANDATORY_TAGS = List.of("20", "31D", "32B", "45A", "50", "59");
 
@@ -125,43 +128,32 @@ public class Mt700Parser {
             }
         }
 
-        // Mandatory-tag check — fail fast with field-specific diagnostics.
-        for (String tag : MANDATORY_TAGS) {
-            if (!hasMandatory(raw, tag)) {
-                throw new LcParseException(":" + tag + ":",
-                        "Mandatory MT700 field :" + tag + ": missing or empty");
-            }
-        }
+        // No mandatory-tag check here — InputValidator handles that pre-pipeline.
+        // The parser's job is to extract whatever's present; missing fields
+        // become null and surface downstream as DOUBTS verdicts on rules that
+        // need them.
 
         // --- Typed scalar extraction via Prowide Field* --------------------
 
         Field20 f20 = mt.getField20();
-        if (f20 == null || f20.getValue() == null || f20.getValue().isBlank()) {
-            throw new LcParseException(":20:", "Tag :20: (LC reference) missing or empty");
-        }
-        String lcNumber = f20.getValue().trim();
+        String lcNumber = (f20 == null || f20.getValue() == null) ? null : f20.getValue().trim();
+        if (lcNumber != null && lcNumber.isBlank()) lcNumber = null;
 
         LocalDate issueDate = toLocalDate(mt.getField31C());
         Field31D f31d = mt.getField31D();
-        if (f31d == null) {
-            throw new LcParseException(":31D:", "Tag :31D: (expiry) missing");
+        LocalDate expiryDate = f31d == null ? null : toLocalDate(f31d);
+        if (f31d != null && expiryDate == null) {
+            log.warn("Cannot parse :31D: date from '{}' — leaving expiryDate=null", f31d.getValue());
         }
-        LocalDate expiryDate = toLocalDate(f31d);
-        if (expiryDate == null) {
-            throw new LcParseException(":31D:",
-                    "Cannot parse :31D: date from '" + f31d.getValue() + "'");
-        }
-        String expiryPlace = safe(f31d.getPlace());
+        String expiryPlace = f31d == null ? null : safe(f31d.getPlace());
 
         Field32B f32b = mt.getField32B();
-        if (f32b == null) {
-            throw new LcParseException(":32B:", "Tag :32B: (currency/amount) missing");
-        }
-        String currency = safe(f32b.getCurrency());
-        BigDecimal amount = f32b.getAmountAsBigDecimal();
-        if (currency == null || currency.isBlank() || amount == null) {
-            throw new LcParseException(":32B:",
-                    "Cannot parse :32B: currency/amount from '" + f32b.getValue() + "'");
+        String currency = f32b == null ? null : safe(f32b.getCurrency());
+        if (currency != null && currency.isBlank()) currency = null;
+        BigDecimal amount = f32b == null ? null : f32b.getAmountAsBigDecimal();
+        if (f32b != null && (currency == null || amount == null)) {
+            log.warn("Partial :32B: parse — currency={}, amount={}, raw='{}'",
+                    currency, amount, f32b.getValue());
         }
 
         int tolerancePlus = 0;

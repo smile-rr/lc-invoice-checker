@@ -26,6 +26,8 @@ from typing import Any
 
 import httpx
 
+from .observability import track_llm_generation
+
 # `InvoiceFields` is now a plain `dict[str, Any]` alias — see contract.py.
 # We don't import it; we just deal with dicts directly.
 
@@ -86,13 +88,37 @@ def llm_extract_fields(markdown: str, prompt: str) -> tuple[dict[str, Any], floa
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
-        raw_content: str = resp.json()["choices"][0]["message"]["content"]
-    except Exception as exc:
-        raise LlmCallFailed(f"LLM call to {base_url}: {exc}") from exc
+    # Wrap the LLM call in a Langfuse Generation. When the inbound /extract
+    # request carries a `traceparent` header from the Java pipeline, the
+    # FastAPI auto-instrumentor has already pinned the OTel context to that
+    # parent trace, so this generation lands under the same Langfuse trace
+    # as the Java rule checks.
+    with track_llm_generation(
+        name="docling.field-extract",
+        model=model,
+        input_payload=payload["messages"],
+        metadata={"extractor": "docling", "base_url": base_url},
+    ) as gen:
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                resp.raise_for_status()
+            response_body = resp.json()
+            raw_content: str = response_body["choices"][0]["message"]["content"]
+        except Exception as exc:
+            raise LlmCallFailed(f"LLM call to {base_url}: {exc}") from exc
+
+        # Token usage from the OpenAI-compatible response — Langfuse computes
+        # cost from model + token counts when pricing is configured.
+        usage = response_body.get("usage") or {}
+        gen.update(
+            output=raw_content,
+            usage_details={
+                "input": usage.get("prompt_tokens"),
+                "output": usage.get("completion_tokens"),
+                "total": usage.get("total_tokens"),
+            },
+        )
 
     try:
         data: dict[str, Any] = _parse_json(raw_content)

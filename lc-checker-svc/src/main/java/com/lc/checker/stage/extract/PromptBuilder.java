@@ -35,8 +35,8 @@ public class PromptBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(PromptBuilder.class);
 
-    private static final String VISION_TEMPLATE_PATH = "prompts/invoice-extract-vision.st";
-    private static final String TEXT_TEMPLATE_PATH   = "prompts/invoice-extract-text.st";
+    private static final String VISION_TEMPLATE_PATH = "prompts/extract/invoice-extract-vision.st";
+    private static final String TEXT_TEMPLATE_PATH   = "prompts/extract/invoice-extract-text.st";
 
     private final FieldPoolRegistry fieldPool;
 

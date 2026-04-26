@@ -27,14 +27,9 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
     );
   }
 
-  const discs = checks.filter((c) => c.status === 'DISCREPANT');
+  const discs = checks.filter((c) => c.status === 'FAIL');
   const passes = checks.filter((c) => c.status === 'PASS');
-  const unverified = checks.filter(
-    (c) =>
-      c.status === 'UNABLE_TO_VERIFY' ||
-      c.status === 'HUMAN_REVIEW' ||
-      c.status === 'REQUIRES_HUMAN_REVIEW',
-  );
+  const unverified = checks.filter((c) => c.status === 'DOUBTS');
 
   return (
     <div className="px-6 py-6">
@@ -85,7 +80,7 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
               {' · '}
               {unverified.length} unable to verify
               {' · '}
-              {report.summary.not_applicable} N/A
+              {report.summary.not_required} N/A
             </span>
           </div>
         </div>

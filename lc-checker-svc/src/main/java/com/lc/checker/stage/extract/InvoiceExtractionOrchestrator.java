@@ -2,8 +2,11 @@ package com.lc.checker.stage.extract;
 
 import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.domain.result.LlmTrace;
+import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.stream.CheckEventPublisher;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -139,11 +142,28 @@ public class InvoiceExtractionOrchestrator {
                         + String.join(", ", sourceNames),
                 Map.of("sources", sourceNames, "done", 0, "total", totalSources));
 
+        // Capture OTel context (the active stage span) and the MDC sessionId
+        // BEFORE handing off to the executor, then restore both inside each
+        // worker. Without this, supplyAsync runs on a thread with empty
+        // context — extractor spans become trace roots and lose
+        // langfuse.trace.id (read from MDC), and the trace tree fragments.
+        Context capturedOtelCtx = Context.current();
+        String mdcSessionId = org.slf4j.MDC.get(MdcKeys.SESSION_ID);
+
         List<CompletableFuture<Attempt>> futures = allSources.stream()
                 .map(e -> {
                     boolean isSelection = selectionChain.contains(e);
                     return CompletableFuture.supplyAsync(
-                            () -> runAndPersistOne(e, isSelection, sessionId, pdfBytes, filename, publisher),
+                            () -> {
+                                String prev = org.slf4j.MDC.get(MdcKeys.SESSION_ID);
+                                if (mdcSessionId != null) org.slf4j.MDC.put(MdcKeys.SESSION_ID, mdcSessionId);
+                                try (Scope scope = capturedOtelCtx.makeCurrent()) {
+                                    return runAndPersistOne(e, isSelection, sessionId, pdfBytes, filename, publisher);
+                                } finally {
+                                    if (prev == null) org.slf4j.MDC.remove(MdcKeys.SESSION_ID);
+                                    else org.slf4j.MDC.put(MdcKeys.SESSION_ID, prev);
+                                }
+                            },
                             executor)
                         .whenComplete((attempt, ex) -> {
                             int done = doneCount.incrementAndGet();

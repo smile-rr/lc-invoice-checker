@@ -5,8 +5,14 @@ import { invoiceUrl } from '../../api/client';
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface Props {
-  sessionId: string;
-  highlight: string | null;
+  /** Either a sessionId (resolves to backend /invoice URL),
+   *  a direct URL, or a {@code File}/{@code Blob} for a locally-loaded PDF. */
+  sessionId?: string;
+  src?: string;
+  file?: File | Blob;
+  /** Optional text-content highlight (used by the InvoiceAuditTab hover sync). */
+  highlight?: string | null;
+  maxHeightClass?: string;
 }
 
 const BASE_WIDTH = 560;
@@ -21,10 +27,16 @@ const ZOOM_STEP = 0.25;
  * {@code sticky top-0} inside the scroll container so it follows the user
  * down a tall document.
  */
-export function InvoiceViewer({ sessionId, highlight }: Props) {
+export function InvoiceViewer({ sessionId, src, file, highlight, maxHeightClass = 'max-h-[78vh]' }: Props) {
   const [numPages, setNumPages] = useState(0);
   const [zoom, setZoom] = useState(1.0);
   const [err, setErr] = useState<string | null>(null);
+
+  // pdfjs handles File/Blob via { data: ArrayBuffer } — fetching a blob URL
+  // string fails ("Unexpected server response (0)"). For local previews pass
+  // the File directly; backend URLs and arbitrary src strings stay as URLs.
+  const docFile: File | Blob | string | null =
+    file ?? src ?? (sessionId ? invoiceUrl(sessionId) : null);
 
   useEffect(() => {
     if (!highlight) {
@@ -44,9 +56,12 @@ export function InvoiceViewer({ sessionId, highlight }: Props) {
   if (err) {
     return <div className="p-4 text-sm text-status-red">PDF load failed: {err}</div>;
   }
+  if (!docFile) {
+    return <div className="p-4 text-sm text-muted italic">No PDF source provided.</div>;
+  }
 
   return (
-    <div className="bg-paper rounded-card border border-line overflow-auto max-h-[78vh]">
+    <div className={`bg-paper rounded-card border border-line overflow-auto ${maxHeightClass}`}>
       {/* Toolbar — sticky inside the scroll container */}
       <div className="sticky top-0 z-10 bg-slate2/95 backdrop-blur border-b border-line px-3 py-1.5 flex items-center gap-1 text-xs">
         <ToolBtn onClick={dec} disabled={zoom <= ZOOM_MIN} label="Zoom out">−</ToolBtn>
@@ -64,7 +79,7 @@ export function InvoiceViewer({ sessionId, highlight }: Props) {
       </div>
 
       <Document
-        file={invoiceUrl(sessionId)}
+        file={docFile}
         onLoadSuccess={(d) => setNumPages(d.numPages)}
         onLoadError={(e) => setErr(e.message)}
         loading={<div className="p-6 text-sm text-muted">Loading PDF…</div>}

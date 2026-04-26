@@ -57,20 +57,15 @@ export function SessionStrip({ state, onOpenTrace }: Props) {
   const counts = report?.summary
     ? {
         pass: report.summary.passed,
-        fail: report.summary.discrepant,
-        unable: report.summary.unable_to_verify,
-        na: report.summary.not_applicable,
+        fail: report.summary.failed,
+        unable: report.summary.doubts,
+        na: report.summary.not_required,
       }
     : {
         pass: state.checks.filter((c) => c.status === 'PASS').length,
-        fail: state.checks.filter((c) => c.status === 'DISCREPANT').length,
-        unable: state.checks.filter(
-          (c) =>
-            c.status === 'UNABLE_TO_VERIFY' ||
-            c.status === 'HUMAN_REVIEW' ||
-            c.status === 'REQUIRES_HUMAN_REVIEW',
-        ).length,
-        na: state.checks.filter((c) => c.status === 'NOT_APPLICABLE').length,
+        fail: state.checks.filter((c) => c.status === 'FAIL').length,
+        unable: state.checks.filter((c) => c.status === 'DOUBTS').length,
+        na: state.checks.filter((c) => c.status === 'NOT_REQUIRED').length,
       };
 
   return (

@@ -48,7 +48,7 @@ function tallyByPhase(checks: CheckResult[]): Record<BusinessPhase, PhaseTally> 
     const slot = out[p] ?? out.PROCEDURAL;
     slot.ran += 1;
     if (c.status === 'PASS') slot.passed += 1;
-    if (c.status === 'DISCREPANT') slot.discrepant += 1;
+    if (c.status === 'FAIL') slot.discrepant += 1;
   }
   return out;
 }

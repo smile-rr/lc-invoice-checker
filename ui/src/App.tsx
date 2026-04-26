@@ -16,9 +16,9 @@ function KeyedSessionPage() {
 
 export function App() {
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-dvh flex flex-col overflow-hidden">
       <TopNav />
-      <main className="flex-1">
+      <main className="flex-1 min-h-0 overflow-hidden">
         <Routes>
           <Route path="/" element={<UploadPage />} />
           <Route path="/session/:id" element={<KeyedSessionPage />} />

@@ -3,6 +3,7 @@ package com.lc.checker.stage.extract.vision;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lc.checker.stage.extract.InvoiceFieldMapper;
 import com.lc.checker.stage.extract.PromptBuilder;
+import io.micrometer.tracing.Tracer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -50,6 +51,7 @@ public class VisionExtractorBeans {
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
+            Tracer tracer,
             @Value("${cloud-llm-vl.base-url}") String baseUrl,
             @Value("${cloud-llm-vl.api-key:}") String apiKey,
             @Value("${cloud-llm-vl.model}") String model,
@@ -60,7 +62,7 @@ public class VisionExtractorBeans {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
                 model + "_cloud", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
-        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder);
+        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }
 
     @Bean(name = "localLlmVlExtractor")
@@ -71,6 +73,7 @@ public class VisionExtractorBeans {
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
+            Tracer tracer,
             @Value("${local-llm-vl.base-url:http://localhost:11434/v1}") String baseUrl,
             @Value("${local-llm-vl.api-key:}") String apiKey,
             @Value("${local-llm-vl.model:qwen2.5vl}") String model,
@@ -81,6 +84,6 @@ public class VisionExtractorBeans {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
                 model + "_local", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
-        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder);
+        return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }
 }

@@ -1,0 +1,27 @@
+When evaluating any apparent discrepancy, apply these ISBP 821 tolerances
+before flagging FAIL. They are not stand-alone rules — they are common-sense
+allowances that apply inside every check:
+
+• ISBP A14 — Commonly understood abbreviations are acceptable.
+  "Co." ≡ "Company"; "Ltd" ≡ "Limited"; "St" ≡ "Street"; "Pte" ≡ "Private";
+  "Corp" ≡ "Corporation". Do not flag a discrepancy purely on abbreviation
+  substitution.
+
+• ISBP A15 — A misspelling or typing error that does not change the meaning
+  of a word or document is not a discrepancy. ("Indusrial" ≡ "Industrial";
+  "Singapor" ≡ "Singapore" if context is clear.) Distinct words with
+  different meanings ARE still discrepancies.
+
+• ISBP A19 — Date formats are acceptable in any unambiguous order
+  (DD MMM YYYY, MM/DD/YYYY, YYYY-MM-DD, "23 April 2026" all OK as long as
+  the date is unambiguous). Convert mentally before comparing.
+
+• ISBP B1–B5 — Documents must be consistent with each other; the same
+  entity may appear with slightly different names if context confirms it
+  ("ABC Trading Pte Ltd" vs "ABC Trading" — same entity = OK).
+  Significantly different names referring to different parties ARE a
+  discrepancy.
+
+Apply these tolerances ONLY where the underlying meaning is preserved.
+They never override an explicit LC stipulation. If the LC field 47A
+explicitly demands an exact-match form, follow the LC.

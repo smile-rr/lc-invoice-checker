@@ -15,20 +15,27 @@ INVOICE (full):
 {invoiceText}
 ---
 
-Applicability test: ALWAYS applicable when this rule is enabled in the catalog.
+When NOT_REQUIRED: ALWAYS applicable when this rule is enabled in the catalog.
 
 Verdict criteria (bank policy):
 - The invoice goods description text reads as English (Latin script, English vocabulary) → PASS.
-- The invoice goods description is in another language (Chinese, Arabic, etc.) → DISCREPANT.
-- Description missing or ambiguous → UNABLE_TO_VERIFY.
+- The invoice goods description is in another language (Chinese, Arabic, etc.) → FAIL.
+- Description missing or ambiguous → DOUBTS.
+
+{crossCuttingTolerances}
 
 Return ONLY a JSON object:
 {
-  "applicable": true,
-  "verdict": "PASS" | "DISCREPANT" | "UNABLE_TO_VERIFY",
-  "lc_value": null,
-  "presented_value": "the invoice goods description (truncated if long), or null",
-  "reason": "one-line plain-English"
+  "verdict":         "PASS" | "FAIL" | "DOUBTS" | "NOT_REQUIRED",
+  "lc_value":        "the LC value being compared, or null",
+  "presented_value": "the invoice value being compared, or null",
+  "reason":          "one-line plain-English"
 }
+
+Verdict guidance — pick exactly one:
+- PASS: the rule applies and the invoice complies.
+- FAIL: the rule applies and the invoice does not comply (clear discrepancy).
+- DOUBTS: the rule applies but you cannot be confident enough to call it PASS or FAIL — e.g. the LC text is ambiguous, the invoice extraction is partial, or the data is unreadable. Do NOT guess. Use DOUBTS rather than fabricate a verdict.
+- NOT_REQUIRED: this LC does not stipulate the rule's condition, so the rule does not apply. The "reason" MUST start with a UCP article or ISBP paragraph citation that governs why (e.g. "Per ISBP 821 Para. C2, invoice signature is only required when :46A: explicitly demands it.").
 
 No markdown fences. No prose outside the JSON.
