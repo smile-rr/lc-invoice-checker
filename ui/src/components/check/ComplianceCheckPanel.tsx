@@ -7,6 +7,7 @@ import { ComplianceSidebar } from './ComplianceSidebar';
 import { PhaseSection } from './PhaseSection';
 import { RuleCard } from './RuleCard';
 import { RuleCatalogStrip } from './RuleCatalogStrip';
+import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { StatusFilterBar, type StatusFilter, type TypeFilter } from './StatusFilterBar';
 
 interface Props {
@@ -50,6 +51,7 @@ export function ComplianceCheckPanel({ state }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>(null);
   const [ruleId, setRuleId] = useState<string | null>(null);
+  const [drawerTarget, setDrawerTarget] = useState<DrawerTarget>(null);
   const isWide = useMediaQueryWide();
 
   // Map rule_id → completed result. Used for both per-rule rendering and
@@ -199,6 +201,7 @@ export function ComplianceCheckPanel({ state }: Props) {
                           rule={rule}
                           check={resultByRuleId.get(rule.id) ?? null}
                           failuresOnly={false}
+                          onViewSource={setDrawerTarget}
                         />
                       ))}
                     </PhaseSection>
@@ -209,6 +212,17 @@ export function ComplianceCheckPanel({ state }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Source-viewer drawer — opens over the compliance screen when a
+          reviewer clicks "View source" on a rule card. Closing returns the
+          reviewer to their exact scroll position; no state loss. */}
+      <SourceDrawer
+        target={drawerTarget}
+        sessionId={state.sessionId}
+        lc={state.lc}
+        invoice={state.invoice}
+        onClose={() => setDrawerTarget(null)}
+      />
     </div>
   );
 }

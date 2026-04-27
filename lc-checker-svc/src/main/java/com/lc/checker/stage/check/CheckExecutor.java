@@ -89,7 +89,8 @@ public class CheckExecutor {
                         CheckStatus.DOUBTS,
                         null, firstFieldOrNull(rule.fieldKeys()), null, null,
                         rule.ucpRef(), rule.isbpRef(),
-                        "Executor error: " + e.getMessage());
+                        "Executor error: " + e.getMessage(),
+                        null);
                 CheckTrace trace = new CheckTrace(
                         rule.id(), rule.checkType(), CheckStatus.DOUBTS,
                         Map.of(), null, null, duration, e.getMessage());
@@ -180,7 +181,8 @@ public class CheckExecutor {
                 rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.fieldKeys()),
                 null, null,
                 rule.ucpRef(), rule.isbpRef(),
-                description);
+                description,
+                null);
         CheckTrace trace = new CheckTrace(
                 rule.id(), rule.checkType(), status,
                 Map.of("fieldKeys", rule.fieldKeys()),

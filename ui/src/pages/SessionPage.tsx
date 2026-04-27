@@ -103,6 +103,7 @@ export function SessionPage() {
         {step === 'review' && (
           <Scrollable>
             <ReviewTab
+              sessionId={sessionId}
               lc={state.lc}
               invoice={state.invoice}
               checks={state.checks}

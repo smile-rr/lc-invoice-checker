@@ -29,6 +29,13 @@ public record CheckResult(
         String presentedValue,
         String ucpRef,
         String isbpRef,
-        String description
+        String description,
+        /**
+         * Deterministic computation the agent committed to, in plain English
+         * (e.g. {@code "max_allowed = 50000 × 1.05 = 52500; invoice 55000 > 52500 → ABOVE"}).
+         * Mandatory for Tier-3 (AGENT + tool) rules whose toolset includes any
+         * Numeric or Date tool. Null for Tier-1 / Tier-2.
+         */
+        String equationUsed
 ) {
 }

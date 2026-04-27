@@ -9,12 +9,24 @@
 #
 # How to read this file
 #   The body is sorted in the SAME order as the header tables:
-#       1. PROGRAMMATIC (enabled)   → SpEL / deterministic
-#       2. AGENT (enabled)          → one LLM call per rule
+#       1. PROGRAMMATIC (enabled)   → SpEL / deterministic. Tier 1.
+#       2a. AGENT (enabled)         → one LLM call per rule, no tools.
+#                                     Pure semantic correspondence. Tier 2.
+#       2b. AGENT + TOOL (enabled)  → LLM agent + Spring AI tool callbacks.
+#                                     Agent decides applicability + input
+#                                     selection (semantic); tool does the
+#                                     deterministic core (math, date diff,
+#                                     etc.). Tier 3.
 #       3. DISABLED                 → registered but never executed,
 #                                     grouped by disabled_category
 #       4. NOT MODELED              → no rule row at all (header only)
 #       5. INVOICE FIELD COVERAGE   → matrix lens, derived from above
+#
+# Type model note
+#   The check_type enum has only two values: PROGRAMMATIC and AGENT. The
+#   "AGENT + TOOL" tier is AGENT with a non-empty `tools` list — AgentStrategy
+#   binds those tool callbacks to the LLM call. Conceptually three tiers,
+#   physically two strategies. See memory/project_tool_philosophy.md.
 #
 # Rule fields
 #   id                       Standard-based identifier (also display name).
@@ -24,6 +36,7 @@
 #   business_phase           PARTIES | MONEY | GOODS | LOGISTICS | PROCEDURAL | HOLISTIC
 #                            Display tag only — does not affect execution order.
 #   check_type               PROGRAMMATIC | AGENT
+#                            (AGENT becomes effective Tier 3 when tools is non-empty)
 #   ucp_ref / isbp_ref       Raw UCP / ISBP anchors recorded on the CheckResult.
 #   ucp_excerpt / isbp_excerpt  Plain-English paraphrases.
 #   rule_reference_label     Pre-formatted label used as Discrepancy.rule_reference.
@@ -41,8 +54,17 @@
 #                            {lc, inv} (legacy typed accessors) or
 #                            {#fields, #invoiceFields} (canonical
 #                            envelope; preferred for new rules).
-#   prompt_template          AGENT only: file in prompts/. Naming
+#   prompt_template          AGENT only: file in prompts/check/. Naming
 #                            convention: <rule-id-lower>-<short>.st
+#   tools                    AGENT only, optional. List of tool names
+#                            registered in com.lc.checker.tools (resolved
+#                            by ToolRegistry). Empty/absent → Tier 2 pure
+#                            semantic. Non-empty → Tier 3 agent + tool.
+#                            Tools are task-shaped, ~1 call per rule —
+#                            never a generic toolbox.
+#   max_tool_calls           AGENT + TOOL only, optional. Caps the agent
+#                            loop. Default 5 (enforced in AgentStrategy).
+#   agent_timeout_seconds    AGENT only, optional. Default 30.
 #   enabled                  Default true. Disabled rules load but
 #                            never execute.
 #   disabled_category        Required when enabled=false. One of:
@@ -54,27 +76,34 @@
 #                            disabled_category, then names the unblock.
 #
 # =============================================================================
-# 1. PROGRAMMATIC (enabled)
+# 1. PROGRAMMATIC (enabled)                                              Tier 1
 # =============================================================================
 # Deterministic SpEL evaluations. Fast, reproducible, no LLM cost.
 #
 # | ID                | UCP/ISBP Ref               | Check Pattern (SpEL one-liner)               | Field Keys                                       |
 # |-------------------|----------------------------|----------------------------------------------|--------------------------------------------------|
-# | UCP-18a-issuer    | UCP 18(a) / ISBP C6        | inv.sellerName non-blank                     | beneficiary_name                                 |
-# | UCP-18a-applicant | UCP 18(a) / ISBP C5        | inv.buyerName non-blank                      | applicant_name                                   |
 # | UCP-18b-currency  | UCP 18(b)                  | inv.currency.equalsIgnoreCase(lc.currency)   | credit_currency                                  |
-# | UCP-18b-amount    | UCP 18(b)                  | inv.totalAmount within LC ± :39A: tolerance  | credit_amount, credit_currency, tolerance_*      |
-# | UCP-18b-math      | UCP 18(b)                  | inv.quantity × inv.unitPrice ≈ inv.totalAmount | quantity, unit_price, credit_amount            |
 # | UCP-14h           | UCP 14(h)                  | invoice_date ≤ today                         | invoice_date                                     |
 # | UCP-14i           | UCP 14(i) / ISBP A19       | inv.invoiceDate ≤ lc.expiryDate              | invoice_date, expiry_date                        |
 # | UCP-30c           | UCP 30(c)                  | invoice credit_amount > 0 (underdrawing OK)  | credit_amount                                    |
 #
+# NOTE: UCP-18a presence checks (issuer/applicant) were removed; they
+# advertised as identity checks but were really non-blank tests, so they
+# would PASS when the invoice named entirely different parties from the LC.
+# Identity is owned by ISBP-C6 / ISBP-C5 (Tier 2 agent), which carry ISBP
+# A14 / B1–B5 abbreviation and minor-formatting tolerances. The system
+# prompt's "both blank → DOUBTS" and "clear mismatch → FAIL" standing
+# rules give those agents the needed escape valves when extraction is
+# partial or names clearly differ.
+#
 # =============================================================================
-# 2. AGENT (enabled)
+# 2a. AGENT (enabled)                                                    Tier 2
 # =============================================================================
-# One LLM call per rule. The prompt receives full LC + full invoice + ISBP
-# cross-cutting tolerances inline; the agent returns one of
-# PASS / FAIL / DOUBTS / NOT_REQUIRED with a one-line reason.
+# One LLM call per rule, NO tools. The prompt receives full LC + full invoice
+# + ISBP cross-cutting tolerances inline; the agent returns one of
+# PASS / FAIL / DOUBTS / NOT_REQUIRED with a one-line reason. Used when the
+# check is purely semantic correspondence (name / description / country
+# equivalence) — no math, no deterministic compare needed.
 #
 # | ID                | UCP/ISBP Ref               | Prompt File                                | Field Keys                                       |
 # |-------------------|----------------------------|--------------------------------------------|--------------------------------------------------|
@@ -90,6 +119,23 @@
 # | UCP-14e           | UCP 14(e) / ISBP C5,C6     | ucp-14e-address-country.st                 | applicant_address, beneficiary_address           |
 # | UCP-30a           | UCP 30(a)                  | ucp-30a-quantity-tolerance-about.st        | quantity, credit_amount, goods_description       |
 # | UCP-30b           | UCP 30(b)                  | ucp-30b-quantity-tolerance-bulk.st         | quantity, goods_description                      |
+#
+# =============================================================================
+# 2b. AGENT + TOOL (enabled)                                             Tier 3
+# =============================================================================
+# LLM agent + Spring AI tool callbacks. Agent reasons about applicability
+# and input selection; tool performs the deterministic core (math, date
+# diff, …) so the LLM never has to multiply or compare numbers itself.
+# Tool implementations live in com.lc.checker.tools and are bound per-rule
+# via the `tools` list (resolved by ToolRegistry). Tools are task-shaped:
+# typically ONE tool call per rule. Output JSON adds an `equation_used`
+# field that records the deterministic computation the agent committed to —
+# this is what a human reviewer reads first when auditing a Tier-3 verdict.
+#
+# | ID                | UCP/ISBP Ref               | Prompt File                                | Tools                                            | Field Keys                                       |
+# |-------------------|----------------------------|--------------------------------------------|--------------------------------------------------|--------------------------------------------------|
+# | UCP-18b-amount    | UCP 18(b) / 30(a),(b)      | ucp-18b-amount.st                          | check_within_tolerance                           | credit_amount, credit_currency, tolerance_*      |
+# | UCP-18b-math      | UCP 18(b)                  | ucp-18b-math.st                            | verify_arithmetic                                | quantity, unit_price, credit_amount              |
 #
 # =============================================================================
 # 3. DISABLED (registered, not executed) — grouped by disabled_category
@@ -134,10 +180,10 @@
 #   UCP Art. 18(d) → enforced by ISBP-C2 (signature only when LC requires)
 #
 # CROSS_CUTTING — acceptance tolerances that apply inside every AGENT
-#   prompt (injected via {crossCuttingTolerances} from
-#   prompts/_cross-cutting-tolerances.txt). Not a standalone rule because
-#   the tolerance is always relative to whichever rule is currently
-#   evaluating.
+#   prompt. Now embedded in the shared system prompt
+#   (prompts/system/check-system.st), bound as the chat .system() message
+#   for every AGENT call. Not a standalone rule because the tolerance is
+#   always relative to whichever rule is currently evaluating.
 #   ISBP A14   commonly understood abbreviations acceptable
 #   ISBP A15   spelling / typing errors that don't change meaning
 #   ISBP A19   date formats acceptable in any unambiguous order
@@ -152,12 +198,13 @@
 #
 # | Invoice Field                | UCP / ISBP Anchors                       | Covering Rule IDs                                |
 # |------------------------------|------------------------------------------|--------------------------------------------------|
-# | Issuer (Beneficiary)         | UCP 18(a) / ISBP C6                      | UCP-18a-issuer, ISBP-C6                          |
-# | Buyer (Applicant)            | UCP 18(a) / ISBP C5                      | UCP-18a-applicant, ISBP-C5                       |
+# | Issuer (Beneficiary)         | UCP 18(a) / ISBP C6                      | ISBP-C6                                          |
+# | Buyer (Applicant)            | UCP 18(a) / ISBP C5                      | ISBP-C5                                          |
 # | Invoice Signature            | UCP 18(a),(d) / ISBP C2                  | ISBP-C2                                          |
 # | LC Number Reference          | ISBP C1                                  | ISBP-C1                                          |
 # | Currency                     | UCP 18(b)                                | UCP-18b-currency                                 |
-# | Invoice Amount ≤ LC          | UCP 18(b), 30(b), 30(c) / ISBP C9, C10   | UCP-18b-amount, UCP-30b, UCP-30c, ISBP-C10       |
+# | Invoice Amount ≤ LC          | UCP 18(b), 30(b), 30(c) / ISBP C9, C10   | UCP-18b-amount [TOOL], UCP-30b, UCP-30c, ISBP-C10|
+# | Invoice Math (qty×price=tot) | UCP 18(b)                                | UCP-18b-math   [TOOL]                            |
 # | Unit Price                   | UCP 18(b) / ISBP C4                      | ISBP-C4                                          |
 # | Goods Description            | UCP 18(c) / ISBP C3                      | ISBP-C3                                          |
 # | Trade Terms (Incoterms)      | UCP 18(b),(c) / ISBP C8                  | ISBP-C8                                          |
@@ -178,37 +225,15 @@ rules:
   # 1. PROGRAMMATIC (enabled)
   # ============================================================================
 
-  - id: UCP-18a-issuer
-    name: Invoice issuer — beneficiary identity
-    description: Invoice must appear to be issued by the beneficiary; seller name must be present and non-blank.
-    business_phase: PARTIES
-    check_type: PROGRAMMATIC
-    ucp_ref: "UCP 600 Art. 18(a)"
-    isbp_ref: "ISBP 821 Para. C6"
-    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
-    isbp_excerpt: "The beneficiary's name on the invoice must correspond with the LC (Field 59); address need not be identical but must be in the same country."
-    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C6"
-    output_field: beneficiary_on_invoice
-    field_keys: [ beneficiary_name ]
-    missing_invoice_action: FAIL
-    severity_on_fail: MAJOR
-    expression: "inv.sellerName != null && !inv.sellerName.trim().isEmpty()"
-
-  - id: UCP-18a-applicant
-    name: Invoice buyer — applicant identity
-    description: Invoice must be made out in the name of the applicant; buyer name must be present and non-blank.
-    business_phase: PARTIES
-    check_type: PROGRAMMATIC
-    ucp_ref: "UCP 600 Art. 18(a)"
-    isbp_ref: "ISBP 821 Para. C5"
-    ucp_excerpt: "Invoice must appear to be issued by the beneficiary; must be made out in the name of the applicant; need not be signed."
-    isbp_excerpt: "The applicant's name and address on the invoice must correspond with those in the LC (Field 50); minor formatting differences in address are acceptable if they do not create ambiguity."
-    rule_reference_label: "UCP 600 Art. 18(a) / ISBP 821 Para. C5"
-    output_field: applicant_on_invoice
-    field_keys: [ applicant_name ]
-    missing_invoice_action: FAIL
-    severity_on_fail: MAJOR
-    expression: "inv.buyerName != null && !inv.buyerName.trim().isEmpty()"
+  # NOTE: UCP-18a-issuer and UCP-18a-applicant were removed. They were
+  # advertised as identity checks ("Invoice issuer — beneficiary identity",
+  # "Invoice buyer — applicant identity") but their SpEL was a non-blank
+  # presence test, so they would PASS when the invoice named entirely
+  # different parties from the LC. Identity is owned by ISBP-C6 (issuer)
+  # and ISBP-C5 (buyer) — Tier-2 agent calls that carry ISBP A14 / B1–B5
+  # abbreviation and minor-formatting tolerances. With the system prompt's
+  # standing rules ("both blank → DOUBTS"; "clear mismatch → FAIL, never
+  # NOT_REQUIRED"), ISBP-C5/C6 cover both presence and identity correctly.
 
   - id: UCP-18b-currency
     name: Currency match
@@ -223,41 +248,6 @@ rules:
     missing_invoice_action: FAIL
     severity_on_fail: MAJOR
     expression: "inv.currency != null && inv.currency.equalsIgnoreCase(lc.currency)"
-
-  - id: UCP-18b-amount
-    name: Amount within LC limit
-    description: Invoice total must not exceed LC amount plus the declared tolerance band from :39A:.
-    business_phase: MONEY
-    check_type: PROGRAMMATIC
-    ucp_ref: "UCP 600 Art. 18(b)"
-    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount. The keywords 'about' or 'approximately' allow a 10% tolerance; otherwise 5% more-or-less applies only to quantity if not unit-priced."
-    rule_reference_label: "UCP 600 Art. 18(b)"
-    output_field: invoice_amount
-    field_keys: [ credit_amount, credit_currency, tolerance_plus, tolerance_minus ]
-    missing_invoice_action: FAIL
-    severity_on_fail: MAJOR
-    expression: >-
-      inv.totalAmount != null
-      && inv.totalAmount.compareTo(lc.amount.multiply(T(java.math.BigDecimal).ONE.add(new java.math.BigDecimal(lc.tolerancePlus).divide(new java.math.BigDecimal('100'))))) <= 0
-      && inv.totalAmount.compareTo(lc.amount.multiply(T(java.math.BigDecimal).ONE.subtract(new java.math.BigDecimal(lc.toleranceMinus).divide(new java.math.BigDecimal('100'))))) >= 0
-
-  - id: UCP-18b-math
-    name: Invoice math consistency
-    description: Quantity × unit price must equal total amount within a 0.01 rounding tolerance.
-    business_phase: MONEY
-    check_type: PROGRAMMATIC
-    ucp_ref: "UCP 600 Art. 18(b)"
-    ucp_excerpt: "Internal invoice arithmetic must reconcile so the documentary face value is unambiguous."
-    rule_reference_label: "UCP 600 Art. 18(b)"
-    output_field: amount_math
-    field_keys: [ quantity, unit_price, credit_amount ]
-    missing_invoice_action: DOUBTS
-    severity_on_fail: MAJOR
-    # Bare arithmetic — null qty/price/total throws NullPointerException, which
-    # ProgrammaticStrategy catches and maps to DOUBTS. That's the right
-    # semantics for "invoice didn't surface line-item totals at the top level".
-    expression: >-
-      inv.quantity.multiply(inv.unitPrice).subtract(inv.totalAmount).abs().compareTo(new java.math.BigDecimal('0.01')) <= 0
 
   - id: UCP-14h
     name: Document dating no later than presentation
@@ -313,7 +303,7 @@ rules:
       && #invoiceFields['credit_amount'].compareTo(T(java.math.BigDecimal).ZERO) > 0
 
   # ============================================================================
-  # 2. AGENT (enabled)
+  # 2a. AGENT (enabled) — Tier 2: pure semantic LLM call, no tools
   # ============================================================================
 
   - id: ISBP-C1
@@ -489,6 +479,49 @@ rules:
     field_keys: [ quantity, goods_description ]
     severity_on_fail: MINOR
     prompt_template: ucp-30b-quantity-tolerance-bulk.st
+
+  # ============================================================================
+  # 2b. AGENT + TOOL (enabled) — Tier 3: LLM agent + Spring AI tool callbacks
+  # ============================================================================
+  # Agent decides applicability + which inputs to feed; the bound tool does
+  # the deterministic math/compare. Output JSON populates `equation_used`.
+
+  - id: UCP-18b-amount
+    name: Amount within LC limit
+    description: Invoice total must not exceed LC amount plus the declared tolerance band from :39A:.
+    business_phase: MONEY
+    check_type: AGENT
+    # Tier 3 — agent reasons about which tolerance source applies
+    # (39A explicit / 39B "NOT EXCEEDING" / 30(b) default), then the
+    # tool computes the band and verdict deterministically.
+    ucp_ref: "UCP 600 Art. 18(b)"
+    ucp_excerpt: "Invoice must be made out in the same currency as the LC; invoice amount must not exceed the LC amount. The keywords 'about' or 'approximately' allow a 10% tolerance; otherwise 5% more-or-less applies only to quantity if not unit-priced."
+    rule_reference_label: "UCP 600 Art. 18(b)"
+    output_field: invoice_amount
+    field_keys: [ credit_amount, credit_currency, tolerance_plus, tolerance_minus ]
+    missing_invoice_action: FAIL
+    severity_on_fail: MAJOR
+    prompt_template: ucp-18b-amount.st
+    tools: [ check_within_tolerance ]
+
+  - id: UCP-18b-math
+    name: Invoice math consistency
+    description: Quantity × unit price must equal total amount within a 0.01 rounding tolerance.
+    business_phase: MONEY
+    check_type: AGENT
+    # Tier 3 — agent decides whether header arithmetic is meaningful
+    # (single-line vs multi-line vs CIF freight breakdown), then the tool
+    # does the multiply/compare. Pure SpEL was wrong for any non-trivial
+    # invoice structure.
+    ucp_ref: "UCP 600 Art. 18(b)"
+    ucp_excerpt: "Internal invoice arithmetic must reconcile so the documentary face value is unambiguous."
+    rule_reference_label: "UCP 600 Art. 18(b)"
+    output_field: amount_math
+    field_keys: [ quantity, unit_price, credit_amount ]
+    missing_invoice_action: DOUBTS
+    severity_on_fail: MAJOR
+    prompt_template: ucp-18b-math.st
+    tools: [ verify_arithmetic ]
 
   # ============================================================================
   # 3. DISABLED — registered, not executed; grouped by disabled_category

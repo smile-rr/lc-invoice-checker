@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { CheckResult, DiscrepancyReport, InvoiceDocument, LcDocument } from '../../types';
+import { SourceDrawer, type DrawerTarget } from '../check/SourceDrawer';
 
 interface Props {
+  sessionId: string | null;
   lc: LcDocument | undefined;
   invoice: InvoiceDocument | undefined;
   checks: CheckResult[];
@@ -10,9 +12,19 @@ interface Props {
 
 type Decision = 'pending' | 'approve' | 'amend' | 'reject';
 
-export function ReviewTab({ lc, invoice, checks, report }: Props) {
+export function ReviewTab({ sessionId, lc, invoice, checks, report }: Props) {
   const [note, setNote] = useState('');
   const [decision, setDecision] = useState<Decision>('pending');
+  // Same source viewer as the Compliance Check panel — opens on-demand from
+  // any rule row below. Reuses one component, so updates land everywhere.
+  const [drawerTarget, setDrawerTarget] = useState<DrawerTarget>(null);
+  const openSource = (c: CheckResult) =>
+    setDrawerTarget({
+      ruleId: c.rule_id,
+      ruleName: c.rule_name ?? c.rule_id,
+      lcEvidence: c.lc_value,
+      invoiceEvidence: c.presented_value,
+    });
 
   if (!report) {
     return (
@@ -30,6 +42,7 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
   const discs = checks.filter((c) => c.status === 'FAIL');
   const passes = checks.filter((c) => c.status === 'PASS');
   const unverified = checks.filter((c) => c.status === 'DOUBTS');
+  const notReq = checks.filter((c) => c.status === 'NOT_REQUIRED');
 
   return (
     <div className="px-6 py-6">
@@ -111,6 +124,7 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
                           {c.severity}
                         </span>
                       )}
+                      <ViewSourceLink onClick={() => openSource(c)} />
                     </div>
                     {/* Description — the most important text, give it room */}
                     {c.description && c.rule_name && (
@@ -131,18 +145,33 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
           </Section>
         )}
 
-        {/* Unable to verify */}
+        {/* Unable to verify — expanded by default; same severity tier as
+             FAIL in the sense that a human still has to act, just less
+             critical, so the rows surface the description inline. */}
         {unverified.length > 0 && (
           <Section title="Unable to verify">
-            <ul className="space-y-2">
-              {unverified.map((c) => (
-                <li key={c.rule_id} className="flex items-baseline gap-3 text-sm">
-                  <span className="font-mono text-xs text-muted shrink-0 w-24">
-                    {c.rule_id}
-                  </span>
-                  <span className="font-sans text-sm text-navy-1">{c.rule_name ?? c.description}</span>
-                </li>
-              ))}
+            <ul className="space-y-3">
+              {unverified.map((c) => {
+                const hasReason = c.description && c.description !== c.rule_name;
+                return (
+                  <li key={c.rule_id} className="flex flex-col gap-1">
+                    <div className="flex items-baseline gap-3 text-sm">
+                      <span className="font-mono text-xs text-muted shrink-0 w-24">
+                        {c.rule_id}
+                      </span>
+                      <span className="font-sans text-sm font-medium text-navy-1 flex-1">
+                        {c.rule_name ?? c.rule_id}
+                      </span>
+                      <ViewSourceLink onClick={() => openSource(c)} />
+                    </div>
+                    {hasReason && (
+                      <div className="ml-[6.5rem] font-sans text-sm text-muted leading-relaxed">
+                        {c.description}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </Section>
         )}
@@ -165,9 +194,49 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
                   >
                     <span className="text-status-green font-semibold">✓</span>
                     <span className="font-mono text-muted">{c.rule_id}</span>
-                    <span className="font-sans text-navy-1 truncate">{c.rule_name}</span>
+                    <span className="font-sans text-navy-1 truncate flex-1">{c.rule_name}</span>
+                    <ViewSourceLink onClick={() => openSource(c)} />
                   </li>
                 ))}
+              </ul>
+            </div>
+          </details>
+        )}
+
+        {/* Not required (collapsed) — audit-trail completeness; reviewer
+             expands only if curious why a rule was skipped. Single column
+             so the description (if any) can sit under each row without
+             cramping. */}
+        {notReq.length > 0 && (
+          <details className="border-t border-line">
+            <summary className="px-6 py-3 cursor-pointer text-sm hover:bg-slate2 select-none flex items-center gap-3">
+              <span className="font-sans text-[11px] uppercase tracking-[0.10em] font-semibold text-muted">
+                Not required
+              </span>
+              <span className="font-mono font-semibold text-muted">{notReq.length}</span>
+            </summary>
+            <div className="px-6 pb-4">
+              <ul className="space-y-2">
+                {notReq.map((c) => {
+                  const hasReason = c.description && c.description !== c.rule_name;
+                  return (
+                    <li key={c.rule_id} className="flex flex-col gap-0.5">
+                      <div className="flex items-baseline gap-2 text-xs">
+                        <span className="text-muted">·</span>
+                        <span className="font-mono text-muted shrink-0 w-24">{c.rule_id}</span>
+                        <span className="font-sans text-navy-1 flex-1 truncate">
+                          {c.rule_name ?? c.rule_id}
+                        </span>
+                        <ViewSourceLink onClick={() => openSource(c)} />
+                      </div>
+                      {hasReason && (
+                        <div className="ml-[6.5rem] font-sans text-[11px] text-muted leading-relaxed">
+                          {c.description}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           </details>
@@ -197,11 +266,31 @@ export function ReviewTab({ lc, invoice, checks, report }: Props) {
           </div>
         </Section>
       </div>
+
+      <SourceDrawer
+        target={drawerTarget}
+        sessionId={sessionId}
+        lc={lc}
+        invoice={invoice}
+        onClose={() => setDrawerTarget(null)}
+      />
     </div>
   );
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+function ViewSourceLink({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-sm border border-line text-muted hover:border-teal-1/60 hover:text-teal-1 transition-colors"
+      title="Open original LC + invoice with this rule's evidence highlighted"
+    >
+      View source
+    </button>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

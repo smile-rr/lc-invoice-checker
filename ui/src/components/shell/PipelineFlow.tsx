@@ -85,8 +85,12 @@ function StepNode({
       disabled={!enabled}
       title={skipped ? 'Stage is disabled in this build (commented in pipeline/LcCheckPipeline.java)' : undefined}
       className={[
-        'flex-1 grid grid-rows-[auto_1fr_auto] items-center justify-items-center',
-        'text-center px-1.5 py-1 min-h-[60px] rounded min-w-0',
+        // Two-row layout: row 1 has [dot · NN · LABEL] inline so the dot sits
+        // at vertical centre of the tab (where the connector now meets it);
+        // row 2 holds the metric below. This replaces the previous dot-on-top
+        // / metric-on-bottom column which made the tab feel top-heavy.
+        'flex-1 flex flex-col items-center justify-center',
+        'text-center px-1.5 py-1.5 min-h-[60px] rounded min-w-0 gap-1',
         skipped
           ? 'cursor-not-allowed opacity-50 line-through decoration-muted/40 decoration-1'
           : enabled
@@ -96,23 +100,25 @@ function StepNode({
             : 'cursor-not-allowed opacity-60',
       ].join(' ')}
     >
-      <Dot status={view.status} active={active} />
-      <div className="leading-none min-w-0 max-w-full">
-        <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted">{n}</span>
-        <span
-          className={[
-            'font-mono text-[10px] uppercase tracking-[0.12em] ml-1.5',
-            skipped
-              ? 'text-muted'
-              : active
-                ? 'text-teal-1 font-semibold'
-                : enabled
-                  ? 'text-navy-1 font-medium'
-                  : 'text-muted',
-          ].join(' ')}
-        >
-          {label}
-        </span>
+      <div className="flex items-center gap-2 leading-none min-w-0 max-w-full">
+        <Dot status={view.status} active={active} />
+        <div className="min-w-0">
+          <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted">{n}</span>
+          <span
+            className={[
+              'font-mono text-[10px] uppercase tracking-[0.12em] ml-1.5',
+              skipped
+                ? 'text-muted'
+                : active
+                  ? 'text-teal-1 font-semibold'
+                  : enabled
+                    ? 'text-navy-1 font-medium'
+                    : 'text-muted',
+            ].join(' ')}
+          >
+            {label}
+          </span>
+        </div>
       </div>
       <div
         className={[
@@ -135,8 +141,9 @@ function Connector({
   rightDone: boolean;
   skippedAdj: boolean;
 }) {
-  // Position the line at the same vertical offset as the dots inside StepNode
-  // (py-1 + 2px to centre on the dot which is ~10px tall).
+  // The dot now sits on the first content row of StepNode (vertical centre
+  // of the tab block, given the metric-row beneath has the same height as
+  // the dot row). Centring the connector on the cross-axis hits the dot.
   let cls: string;
   if (skippedAdj) {
     cls = 'border-t border-dashed border-muted/40 bg-transparent';
@@ -148,7 +155,7 @@ function Connector({
     cls = 'bg-line';
   }
   return (
-    <div className="flex items-start pt-[10px] w-6 shrink-0">
+    <div className="flex items-center w-6 shrink-0 -mt-3">
       <span className={`block w-full h-px ${cls}`} />
     </div>
   );

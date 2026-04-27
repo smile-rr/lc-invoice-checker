@@ -1,8 +1,5 @@
 package com.lc.checker.infra.storage;
 
-import com.lc.checker.infra.observability.LangfuseTags;
-import io.micrometer.tracing.Span;
-import io.micrometer.tracing.Tracer;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,10 +19,13 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * first put. Filename is preserved as object metadata for round-tripping
  * {@code Content-Disposition} on download.
  *
- * <p>OTel spans are emitted per put/get under names {@code minio.put} and
- * {@code minio.get} with {@code storage.dedup_hit} flagged when a put short-
- * circuited because the object already existed. The existing OTLP exporter
- * ships these to Langfuse, so they appear in the same trace as the LC pipeline.
+ * <p>No explicit OTel spans are emitted here. Earlier we wrapped each
+ * put/get in a {@code minio.put} / {@code minio.get} span, but the put runs
+ * inside the upload HTTP request scope while the get runs inside the
+ * dispatcher's virtual-thread scope — those two contexts can't share a
+ * single trace tree without intrusive refactoring. To keep Langfuse traces
+ * clean and pipeline-rooted, MinIO ops are now logged at INFO/WARN only and
+ * left out of the trace tree.
  */
 final class MinioFileStore implements InvoiceFileStore {
 
@@ -36,12 +36,10 @@ final class MinioFileStore implements InvoiceFileStore {
 
     private final S3Client s3;
     private final StorageProperties.Minio cfg;
-    private final Tracer tracer;
 
-    MinioFileStore(S3Client s3, StorageProperties.Minio cfg, Tracer tracer) {
+    MinioFileStore(S3Client s3, StorageProperties.Minio cfg) {
         this.s3 = s3;
         this.cfg = cfg;
-        this.tracer = tracer;
         log.info("MinioFileStore wired: endpoint={} bucket={}", cfg.endpoint(), cfg.bucket());
     }
 
@@ -71,28 +69,18 @@ final class MinioFileStore implements InvoiceFileStore {
 
     private boolean putIfAbsent(String key, String contentType, String filename, byte[] bytes) {
         long t0 = System.currentTimeMillis();
-        Span span = LangfuseTags.applySession(tracer.nextSpan())
-                .name("minio.put")
-                .tag("langfuse.observation.type", "span")
-                .tag("storage.system", "minio")
-                .tag("storage.bucket", cfg.bucket())
-                .tag("storage.key", key)
-                .tag("storage.bytes", String.valueOf(bytes == null ? 0 : bytes.length))
-                .start();
-        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
+        try {
             // headObject is the cheapest dedup probe — same bytes hash to the
             // same key, so HEAD success means we already have it.
             try {
                 s3.headObject(HeadObjectRequest.builder().bucket(cfg.bucket()).key(key).build());
-                span.tag("storage.dedup_hit", "true");
-                span.tag("storage.duration_ms", String.valueOf(System.currentTimeMillis() - t0));
-                log.debug("MinIO put dedup-hit: bucket={} key={}", cfg.bucket(), key);
+                log.debug("MinIO put dedup-hit: bucket={} key={} ({}ms)",
+                        cfg.bucket(), key, System.currentTimeMillis() - t0);
                 return true;
             } catch (NoSuchKeyException ignored) {
                 // fall through to PUT
             } catch (S3Exception e) {
                 if (e.statusCode() != 404) {
-                    span.error(e);
                     log.warn("MinIO HEAD {} failed (status={}): {}", key, e.statusCode(), e.getMessage());
                     return false;
                 }
@@ -105,46 +93,32 @@ final class MinioFileStore implements InvoiceFileStore {
                                     : java.util.Map.of("original-filename", safeFilename(filename)))
                             .build(),
                     RequestBody.fromBytes(bytes));
-            span.tag("storage.dedup_hit", "false");
-            span.tag("storage.duration_ms", String.valueOf(System.currentTimeMillis() - t0));
-            log.info("MinIO PUT ok: bucket={} key={} bytes={}",
-                    cfg.bucket(), key, bytes == null ? 0 : bytes.length);
+            log.info("MinIO PUT ok: bucket={} key={} bytes={} ({}ms)",
+                    cfg.bucket(), key, bytes == null ? 0 : bytes.length,
+                    System.currentTimeMillis() - t0);
             return true;
         } catch (RuntimeException e) {
-            span.error(e);
             log.warn("MinIO PUT {} failed: {} ({})",
                     key, e.getMessage(), e.getClass().getSimpleName());
             return false;
-        } finally {
-            span.end();
         }
     }
 
     private Optional<byte[]> get(String key) {
         long t0 = System.currentTimeMillis();
-        Span span = LangfuseTags.applySession(tracer.nextSpan())
-                .name("minio.get")
-                .tag("langfuse.observation.type", "span")
-                .tag("storage.system", "minio")
-                .tag("storage.bucket", cfg.bucket())
-                .tag("storage.key", key)
-                .start();
-        try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
+        try {
             ResponseBytes<GetObjectResponse> rb = s3.getObjectAsBytes(
                     GetObjectRequest.builder().bucket(cfg.bucket()).key(key).build());
             byte[] bytes = rb.asByteArray();
-            span.tag("storage.bytes", String.valueOf(bytes.length));
-            span.tag("storage.duration_ms", String.valueOf(System.currentTimeMillis() - t0));
+            log.debug("MinIO GET ok: bucket={} key={} bytes={} ({}ms)",
+                    cfg.bucket(), key, bytes.length, System.currentTimeMillis() - t0);
             return Optional.of(bytes);
         } catch (NoSuchKeyException e) {
-            span.tag("storage.miss", "true");
+            log.debug("MinIO GET miss: bucket={} key={}", cfg.bucket(), key);
             return Optional.empty();
         } catch (RuntimeException e) {
-            span.error(e);
             log.warn("MinIO GET {} failed: {} ({})", key, e.getMessage(), e.getClass().getSimpleName());
             return Optional.empty();
-        } finally {
-            span.end();
         }
     }
 

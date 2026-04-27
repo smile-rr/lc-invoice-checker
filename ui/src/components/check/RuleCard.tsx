@@ -1,5 +1,6 @@
 import type { CheckResult, CheckStatus, RuleSummary } from '../../types';
 import { CitationPopover } from './CitationPopover';
+import type { DrawerTarget } from './SourceDrawer';
 
 interface Props {
   /** The completed check result. {@code null} means the rule hasn't run yet
@@ -8,6 +9,9 @@ interface Props {
   /** Catalog metadata for this rule. */
   rule: RuleSummary;
   failuresOnly: boolean;
+  /** Open the source-viewer drawer for this row. The card builds the target
+   *  from its own evidence; the parent decides whether the drawer is shown. */
+  onViewSource?: (target: DrawerTarget) => void;
 }
 
 const METHOD_LABEL: Record<string, string> = {
@@ -56,7 +60,7 @@ function CategoryBadge({ kind }: { kind: string | null | undefined }) {
 // neutral. This keeps the eye on the verdict, not on a competing wash of
 // reds and greens.
 
-export function RuleCard({ check, rule, failuresOnly }: Props) {
+export function RuleCard({ check, rule, failuresOnly, onViewSource }: Props) {
   if (check === null) {
     return <PendingRuleCard rule={rule} />;
   }
@@ -130,7 +134,55 @@ export function RuleCard({ check, rule, failuresOnly }: Props) {
       {/* Data + result. The reference chips above carry the rule basis via
           their own popover, so no separate authority footnote here. */}
       <DataGrid check={check} tone={tone} />
+
+      {/* Footer — equation_used (Tier-3 only) + View source button.
+          Hidden entirely when neither has anything to show. */}
+      {(check.equation_used || onViewSource) && (
+        <CardFooter check={check} onViewSource={onViewSource} />
+      )}
     </article>
+  );
+}
+
+function CardFooter({
+  check,
+  onViewSource,
+}: {
+  check: CheckResult;
+  onViewSource?: (target: DrawerTarget) => void;
+}) {
+  const hasEquation = !!check.equation_used;
+  return (
+    <div className="px-4 py-2.5 bg-slate2/40 border-t border-line flex items-start gap-3">
+      {hasEquation ? (
+        <div className="flex-1 min-w-0">
+          <div className="font-mono text-[10px] uppercase tracking-[0.10em] text-muted font-semibold mb-1">
+            Equation used
+          </div>
+          <div className="font-mono text-[12px] text-navy-1 whitespace-pre-wrap break-words leading-relaxed">
+            {check.equation_used}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1" />
+      )}
+      {onViewSource && (
+        <button
+          onClick={() =>
+            onViewSource({
+              ruleId: check.rule_id,
+              ruleName: check.rule_name ?? check.rule_id,
+              lcEvidence: check.lc_value,
+              invoiceEvidence: check.presented_value,
+            })
+          }
+          className="shrink-0 font-mono text-[11px] uppercase tracking-[0.08em] px-2.5 py-1 rounded-sm border border-line bg-paper text-navy-1 hover:border-teal-1/60 hover:text-teal-1 transition-colors"
+          title="Open original LC + invoice with this rule's evidence highlighted"
+        >
+          View source
+        </button>
+      )}
+    </div>
   );
 }
 

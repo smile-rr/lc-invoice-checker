@@ -48,6 +48,18 @@ _session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "session_id", default=None
 )
 
+# W3C TraceContext carrier captured from inbound request headers. Java's
+# observation-aware RestClient.Builder injects `traceparent` (and optionally
+# `tracestate`) on every outbound call to /extract; we extract it here and
+# pass it as the parent context when starting our field-extract span. The
+# resulting span becomes a true child of Java's HTTP-client span (which is
+# itself a child of the pipeline's invoice_extract stage span), so the
+# Langfuse trace tree shows the proper nested hierarchy instead of two
+# orphan top-level observations.
+_otel_carrier: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "otel_carrier", default=None
+)
+
 
 def current_session_id() -> str | None:
     return _session_id.get()
@@ -112,17 +124,29 @@ def init_observability(app: Any) -> None:
         #      `track_llm_generation` below, which self-joins via the
         #      session id captured from the X-Session-Id header.
 
-        # Capture X-Session-Id on every inbound request — read by
-        # track_llm_generation to set langfuse.trace.id on the Generation.
+        # Capture X-Session-Id + W3C TraceContext on every inbound request.
+        # Both flow into track_llm_generation so the LLM Generation gets
+        # langfuse.trace.id from session id AND nests under Java's pipeline
+        # span via traceparent.
         @app.middleware("http")
-        async def _capture_session_id(request, call_next):
+        async def _capture_request_context(request, call_next):
             sid = request.headers.get("x-session-id")
-            token = _session_id.set(sid) if sid else None
+            sid_token = _session_id.set(sid) if sid else None
+            carrier: dict[str, str] = {}
+            tp = request.headers.get("traceparent")
+            ts = request.headers.get("tracestate")
+            if tp:
+                carrier["traceparent"] = tp
+            if ts:
+                carrier["tracestate"] = ts
+            carrier_token = _otel_carrier.set(carrier) if carrier else None
             try:
                 return await call_next(request)
             finally:
-                if token is not None:
-                    _session_id.reset(token)
+                if sid_token is not None:
+                    _session_id.reset(sid_token)
+                if carrier_token is not None:
+                    _otel_carrier.reset(carrier_token)
 
         logger.info(
             "Langfuse tracing enabled",
@@ -137,6 +161,102 @@ def init_observability(app: Any) -> None:
             "Langfuse init failed: %s", exc,
             extra={"event": "langfuse_init_failed"},
         )
+
+
+def _resolve_parent_context() -> Any | None:
+    """Pick the right parent for a new span.
+
+    1. If a local span is already active and recording, return None so OTel
+       defaults to current-context inheritance — keeps in-service nesting
+       correct (pdf-parse + llm-extract become children of the outer extract
+       span, not siblings of it).
+    2. Otherwise, if Java sent a W3C carrier (`traceparent`), extract it so
+       the outermost local span attaches to Java's pipeline trace.
+    3. Otherwise, None — span starts as a root.
+    """
+    try:
+        from opentelemetry import trace as otel_trace
+
+        current = otel_trace.get_current_span()
+        ctx = current.get_span_context() if current is not None else None
+        if ctx is not None and getattr(ctx, "is_valid", False) and ctx.trace_id != 0:
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+    carrier = _otel_carrier.get()
+    if not carrier:
+        return None
+    try:
+        from opentelemetry import propagate as _otel_propagate
+
+        return _otel_propagate.extract(carrier)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@contextmanager
+def track_span(
+    name: str,
+    attributes: dict[str, Any] | None = None,
+) -> Iterator[Any]:
+    """Wrap a non-LLM operation as a regular OTel span (Langfuse renders it
+    as an observation of type=span, NOT generation).
+
+    Used for the outer `<extractor>.extract` envelope and the inner
+    `<extractor>.pdf-parse` step so reviewers see PDF-parse vs LLM time
+    side-by-side under one Java pipeline trace.
+
+    Yields a tiny shim with `.set_attribute(key, value)` so callers can
+    layer in metadata that's only known after the wrapped work finishes
+    (page count, duration, library version, …).
+    """
+    if not _TRACING_ENABLED or _TRACER is None:
+        yield _NoOpSpan()
+        return
+
+    span_cm = None
+    span = None
+    sid = _session_id.get()
+    parent_ctx = _resolve_parent_context()
+    try:
+        span_cm = _TRACER.start_as_current_span(name, context=parent_ctx) \
+            if parent_ctx is not None else _TRACER.start_as_current_span(name)
+        span = span_cm.__enter__()
+        if sid:
+            span.set_attribute("langfuse.trace.id", sid)
+            span.set_attribute("langfuse.session.id", sid)
+            span.set_attribute("langfuse.trace.name", f"LC Check {sid}")
+        for k, v in (attributes or {}).items():
+            try:
+                span.set_attribute(k, _coerce_attr(v))
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "track_span start failed: %s", exc,
+            extra={"event": "track_span_start_failed"},
+        )
+        span_cm = None
+        span = None
+
+    shim = _SpanShim(span)
+    try:
+        yield shim
+    finally:
+        if span_cm is not None:
+            try:
+                span_cm.__exit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "track_span end failed: %s", exc,
+                    extra={"event": "track_span_end_failed"},
+                )
+
+
+def _coerce_attr(v: Any) -> Any:
+    if isinstance(v, (str, int, float, bool)):
+        return v
+    return str(v)
 
 
 @contextmanager
@@ -169,8 +289,13 @@ def track_llm_generation(
     span_cm = None
     span = None
     sid = _session_id.get()
+    # When called inside an outer `track_span`, this returns None so OTel's
+    # current-context inheritance puts the Generation under the extract
+    # span (not under Java's HTTP span as a sibling).
+    parent_ctx = _resolve_parent_context()
     try:
-        span_cm = _TRACER.start_as_current_span(name)
+        span_cm = _TRACER.start_as_current_span(name, context=parent_ctx) \
+            if parent_ctx is not None else _TRACER.start_as_current_span(name)
         span = span_cm.__enter__()
         # Langfuse-recognised attributes — explicit so the type is right
         # regardless of any SDK helper.
@@ -266,4 +391,31 @@ class _NoOpGeneration:
     __slots__ = ()
 
     def update(self, **_kwargs: Any) -> None:
+        return None
+
+
+class _SpanShim:
+    """Yielded by `track_span`; lets callers attach attributes after the
+    fact (e.g. duration_ms once the wrapped work has completed)."""
+
+    __slots__ = ("_span",)
+
+    def __init__(self, span: Any | None) -> None:
+        self._span = span
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        if self._span is None:
+            return
+        try:
+            self._span.set_attribute(key, _coerce_attr(value))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class _NoOpSpan:
+    """Stand-in when tracing is disabled; matches `_SpanShim` surface."""
+
+    __slots__ = ()
+
+    def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
         return None

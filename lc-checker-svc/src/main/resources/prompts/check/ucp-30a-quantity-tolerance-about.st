@@ -1,5 +1,3 @@
-You are a UCP 600 / ISBP 821 compliance checker. Evaluate one specific rule against the presented LC + invoice. Return one of four verdicts: PASS, FAIL, DOUBTS, NOT_REQUIRED.
-
 RULE: {ruleId} — {ruleName}
 {ruleDescription}
 
@@ -16,38 +14,23 @@ INVOICE (full):
 {invoiceText}
 ---
 
-LC-side relevant fields: {lcRelevantFields}
-Invoice-side relevant fields: {invoiceRelevantFields}
+LC FIELDS THIS RULE READS: {lcRelevantFields}
+INVOICE FIELDS THIS RULE READS: {invoiceRelevantFields}
 
 Applicability — UCP 600 Art. 30(a):
-- This rule is APPLICABLE only when LC :45A: (or another LC field that
-  describes the goods, amount, or unit price) uses the words "ABOUT" or
-  "APPROXIMATELY" in connection with the amount of the credit, the
-  quantity of the goods, or the unit price.
-- If neither word appears in that connection → return NOT_REQUIRED with
-  reason citing UCP 600 Art. 30(a).
+- APPLICABLE only when the LC uses "ABOUT" or "APPROXIMATELY" (or an
+  equivalent qualifier) in connection with the AMOUNT of the credit, the
+  QUANTITY of the goods, or the UNIT PRICE in :45A: (or another LC field
+  that describes those values).
+- Neither word appears in that connection → NOT_REQUIRED. The reason must
+  cite UCP 600 Art. 30(a) AND quote the exact LC value showing no
+  qualifier was used (e.g. "LC :45A: states '1000 UNITS' with no
+  'about/approximately' qualifier, so UCP 30(a) ±10% does not apply.").
 
 Verdict criteria when applicable:
-- Allowed tolerance is ±10% on whichever value the keyword qualifies
-  (amount / quantity / unit price). Other values are NOT relaxed by 30(a).
+- ±10% tolerance on whichever value the keyword qualifies (amount /
+  quantity / unit price). Other values are NOT relaxed by 30(a).
 - Invoice value within the ±10% band → PASS.
 - Invoice value outside the ±10% band → FAIL.
-- LC keyword present but the comparable value cannot be extracted → DOUBTS.
-
-{crossCuttingTolerances}
-
-Return ONLY a JSON object:
-{
-  "verdict":         "PASS" | "FAIL" | "DOUBTS" | "NOT_REQUIRED",
-  "lc_value":        "newline-separated `field_key: value` evidence pairs you actually read from the LC (e.g. \"beneficiary_name: WIDGET EXPORTS PTE LTD\ngoods_description: 1000 UNITS WIDGETS\"); use null only when the rule does not apply to this LC",
-  "presented_value": "newline-separated `field_key: value` evidence pairs you actually read from the invoice in the same format as lc_value; use null only when the invoice does not contain anything relevant to this rule",
-  "reason":          "one-line plain-English"
-}
-
-Verdict guidance — pick exactly one:
-- PASS: the rule applies and the invoice complies.
-- FAIL: the rule applies and the invoice does not comply (clear discrepancy).
-- DOUBTS: the rule applies but you cannot be confident enough to call it PASS or FAIL — e.g. the LC text is ambiguous, the invoice extraction is partial, or the data is unreadable. Do NOT guess.
-- NOT_REQUIRED: this LC does not stipulate the rule's condition, so the rule does not apply. The "reason" MUST start with a UCP article citation (e.g. "Per UCP 600 Art. 30(a), the ±10% tolerance only applies when 'about' or 'approximately' is used in the LC.").
-
-No markdown fences. No prose outside the JSON.
+- Keyword present but the comparable invoice value cannot be extracted →
+  DOUBTS.

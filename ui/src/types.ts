@@ -218,6 +218,10 @@ export interface CheckResult {
   description: string | null;
   ucp_ref: string | null;
   isbp_ref: string | null;
+  /** Tier-3 only — the deterministic computation the agent committed to.
+   *  Null for Tier-1 (programmatic) and Tier-2 (semantic LLM, no tools).
+   *  Example: "max_allowed = 50000 × 1.05 = 52500; invoice 55000 > 52500 → ABOVE". */
+  equation_used?: string | null;
 }
 
 export interface Summary {

@@ -13,6 +13,7 @@ import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.infra.fields.FieldDefinition;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
 import com.lc.checker.infra.observability.LangfuseTags;
+import com.lc.checker.tools.ToolRegistry;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.io.IOException;
@@ -25,15 +26,27 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 
 /**
- * One LLM call per AGENT rule. The prompt receives the full LC + full invoice
- * inline along with the rule's identity and excerpts. The agent decides BOTH
- * applicability and verdict in a single round-trip — there is no separate
- * activation gate.
+ * One LLM call per AGENT rule. Each call combines two prompts:
+ * <ul>
+ *   <li><b>System</b> — {@code prompts/system/check-system.st}: verdict
+ *       semantics, standing rules (always populate evidence; both-sides-blank
+ *       → DOUBTS; clear mismatch → FAIL not NOT_REQUIRED; whole-document
+ *       mismatch → FAIL via UCP 14(d)), ISBP cross-cutting tolerances, and
+ *       the strict JSON output schema. Identical for every rule, bound via
+ *       {@code ChatClient.prompt().system(...)}.</li>
+ *   <li><b>User</b> — {@code prompts/check/<rule>.st}: rule identity,
+ *       authority excerpts, full LC and invoice payload, rule-specific
+ *       applicability, and verdict criteria. Bound via
+ *       {@code .user(...)}.</li>
+ * </ul>
+ * The agent decides BOTH applicability and verdict in a single round-trip —
+ * there is no separate activation gate.
  *
  * <p>Output schema (strict):
  * <pre>{@code
@@ -61,22 +74,32 @@ public class AgentStrategy implements CheckStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(AgentStrategy.class);
 
-    private static final String CROSS_CUTTING_FRAGMENT = "fragments/cross-cutting-tolerances.txt";
+    /**
+     * Standing instructions applied to every AGENT rule via {@code .system(...)}:
+     * verdict semantics, evidence-always rule, both-empty→DOUBTS rule,
+     * mismatch→FAIL rule, output schema, and ISBP cross-cutting tolerances.
+     * Loaded once and bound as the chat system message, so each rule's
+     * user prompt only carries rule-specific content.
+     */
+    private static final String SYSTEM_PROMPT_PATH = "system/check-system.st";
     private static final String CHECK_PROMPT_DIR = "check/";
 
     private final ChatClient chatClient;
     private final ObjectMapper json;
     private final FieldPoolRegistry fieldPool;
     private final Tracer tracer;
+    private final ToolRegistry toolRegistry;
     private final Map<String, String> templateCache = new ConcurrentHashMap<>();
-    private volatile String crossCuttingTolerances;
+    private volatile String systemPrompt;
 
     public AgentStrategy(ChatClient chatClient, ObjectMapper json,
-                         FieldPoolRegistry fieldPool, Tracer tracer) {
+                         FieldPoolRegistry fieldPool, Tracer tracer,
+                         ToolRegistry toolRegistry) {
         this.chatClient = chatClient;
         this.json = json;
         this.fieldPool = fieldPool;
         this.tracer = tracer;
+        this.toolRegistry = toolRegistry;
     }
 
     @Override
@@ -134,25 +157,41 @@ public class AgentStrategy implements CheckStrategy {
         }
 
         Map<String, Object> vars = buildVariables(rule, lc, inv);
-        String rendered = render(template, vars);
+        String userRendered = render(template, vars);
+        String systemRendered = systemPrompt();
 
-        // Pin the rendered prompt as input on the rule span so Langfuse shows
-        // the exact prompt the LLM saw — independent of whether Spring AI's
-        // gen_ai.* attributes flow through to Langfuse's recogniser.
+        // Pin both system and user content on the rule span so Langfuse shows
+        // the exact prompt the LLM saw. The system message is identical for
+        // every rule, but recording it per-call keeps the trace self-contained.
         Span ruleSpan = tracer.currentSpan();
         if (ruleSpan != null) {
-            ruleSpan.tag("langfuse.observation.input", rendered);
+            ruleSpan.tag("langfuse.observation.input",
+                    "[SYSTEM]\n" + systemRendered + "\n\n[USER]\n" + userRendered);
         }
+
+        // Tier 3 — bind the rule's declared tools so the LLM can call them.
+        // Tier 2 rules (no tools declared) get the raw prompt path. Per-rule
+        // narrow toolset is intentional — never the union of all tools.
+        List<ToolCallback> resolvedTools = toolRegistry.resolve(rule.tools());
 
         String rawResponse;
         long llmStart = System.currentTimeMillis();
         try {
-            rawResponse = chatClient.prompt().user(rendered).call().content();
+            // Per-call .system(...) overrides ChatClientConfig's defaultSystem,
+            // so the standing rules document is the single source of truth for
+            // every AGENT verdict.
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                    .system(systemRendered)
+                    .user(userRendered);
+            if (!resolvedTools.isEmpty()) {
+                spec = spec.toolCallbacks(resolvedTools);
+            }
+            rawResponse = spec.call().content();
         } catch (Exception e) {
             long llmElapsed = System.currentTimeMillis() - llmStart;
             log.warn("Rule {} LLM call failed: {}", rule.id(), e.getMessage());
             LlmTrace trace = new LlmTrace("rule." + rule.id() + ".check", null,
-                    rendered, null, null, null, llmElapsed, e.getMessage());
+                    userRendered, null, null, null, llmElapsed, e.getMessage());
             if (ruleSpan != null) {
                 ruleSpan.tag("langfuse.observation.output",
                         "{\"error\": \"LLM call failed: " + e.getMessage().replace("\"", "'") + "\"}");
@@ -162,7 +201,7 @@ public class AgentStrategy implements CheckStrategy {
         }
         long llmElapsed = System.currentTimeMillis() - llmStart;
         LlmTrace llmTrace = new LlmTrace("rule." + rule.id() + ".check", null,
-                rendered, rawResponse, null, null, llmElapsed, null);
+                userRendered, rawResponse, null, null, llmElapsed, null);
 
         // Capture the raw model response — this is what Langfuse should show
         // as the rule's output. The structured fields (verdict, lc_value,
@@ -186,6 +225,8 @@ public class AgentStrategy implements CheckStrategy {
         String lcValue = asString(parsed.get("lc_value"));
         String invValue = asString(parsed.get("presented_value"));
         String reason = asString(parsed.get("reason"));
+        // Tier-3 only — Tier-2 rules omit this key; null is the right default.
+        String equationUsed = asString(parsed.get("equation_used"));
 
         CheckStatus status = mapStatus(verdict);
 
@@ -198,7 +239,8 @@ public class AgentStrategy implements CheckStrategy {
                 invValue,
                 rule.ucpRef(),
                 rule.isbpRef(),
-                reason != null ? reason : defaultDescription(rule, status));
+                reason != null ? reason : defaultDescription(rule, status),
+                equationUsed);
 
         CheckTrace trace = new CheckTrace(
                 rule.id(), CheckType.AGENT, status,
@@ -224,7 +266,6 @@ public class AgentStrategy implements CheckStrategy {
         v.put("invoiceText", renderInvoice(inv));
         v.put("lcRelevantFields", renderRelevantFields(rule, true));
         v.put("invoiceRelevantFields", renderRelevantFields(rule, false));
-        v.put("crossCuttingTolerances", crossCuttingTolerances());
         return v;
     }
 
@@ -251,20 +292,22 @@ public class AgentStrategy implements CheckStrategy {
         return sb.length() == 0 ? "(none)" : sb.toString();
     }
 
-    private String crossCuttingTolerances() {
-        String cached = crossCuttingTolerances;
+    private String systemPrompt() {
+        String cached = systemPrompt;
         if (cached != null) return cached;
         try {
             String body = StreamUtils.copyToString(
-                    new ClassPathResource("prompts/" + CROSS_CUTTING_FRAGMENT).getInputStream(),
+                    new ClassPathResource("prompts/" + SYSTEM_PROMPT_PATH).getInputStream(),
                     StandardCharsets.UTF_8);
-            crossCuttingTolerances = body;
+            systemPrompt = body;
             return body;
         } catch (IOException e) {
-            log.warn("Cross-cutting tolerances fragment {} could not be loaded: {}",
-                    CROSS_CUTTING_FRAGMENT, e.getMessage());
-            crossCuttingTolerances = "";
-            return "";
+            // A missing system prompt would silently degrade every AGENT
+            // verdict's quality and remove the standing-rule guarantees the
+            // catalog is designed around. Fail loud so the deployment is
+            // visibly misconfigured rather than quietly weaker.
+            throw new IllegalStateException(
+                    "Required system prompt missing at prompts/" + SYSTEM_PROMPT_PATH, e);
         }
     }
 
@@ -405,7 +448,8 @@ public class AgentStrategy implements CheckStrategy {
                 rule.outputField() != null ? rule.outputField() : firstFieldOrNull(rule.fieldKeys()),
                 null, null,
                 rule.ucpRef(), rule.isbpRef(),
-                description);
+                description,
+                null);
         CheckTrace trace = new CheckTrace(
                 rule.id(), CheckType.AGENT, status,
                 Map.of(),

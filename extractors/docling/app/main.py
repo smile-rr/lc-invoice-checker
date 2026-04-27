@@ -48,6 +48,7 @@ from .llm_field_extractor import (
     LlmResponseInvalid,
     llm_extract_fields,
 )
+from .observability import track_span
 
 # -- Logging ------------------------------------------------------------------
 # One JSON line per event, per contract §Logging (recommended).
@@ -249,33 +250,59 @@ async def extract(
     mode, ctx = _resolve_input_mode(file, json_body)
     pdf_bytes, source_path = await _load_bytes(mode, ctx)
 
-    # Run docling library with the 25 s service budget.
-    try:
-        result: DoclingResult = await asyncio.wait_for(
-            asyncio.to_thread(_convert_with_budget, pdf_bytes, source_path),
-            timeout=EXTRACTION_BUDGET_SECONDS,
-        )
-    except asyncio.TimeoutError as exc:
-        raise ExtractionTimeout() from exc
-    except Exception as exc:  # docling raised something
-        raise ExtractionFailed(f"{type(exc).__name__}: {exc}") from exc
+    # Outer span: wraps both the PDF parse and the LLM field-extract so
+    # Langfuse shows two siblings under one Python-side parent. The span
+    # attaches to Java's pipeline trace via the inbound traceparent.
+    with track_span(
+        "docling.extract",
+        attributes={
+            "extract.input_mode": mode,
+            "extract.size_bytes": len(pdf_bytes),
+        },
+    ) as outer_span:
+        # PDF parse phase — Docling's library work (layout, OCR, markdown
+        # export). 25 s service budget enforced cooperatively via wait_for.
+        with track_span(
+            "docling.pdf-parse",
+            attributes={
+                "pdf.input_mode": mode,
+                "pdf.size_bytes": len(pdf_bytes),
+            },
+        ) as parse_span:
+            parse_start_ns = time.perf_counter_ns()
+            try:
+                result: DoclingResult = await asyncio.wait_for(
+                    asyncio.to_thread(_convert_with_budget, pdf_bytes, source_path),
+                    timeout=EXTRACTION_BUDGET_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ExtractionTimeout() from exc
+            except Exception as exc:  # docling raised something
+                raise ExtractionFailed(f"{type(exc).__name__}: {exc}") from exc
+            parse_ms = (time.perf_counter_ns() - parse_start_ns) // 1_000_000
+            parse_span.set_attribute("pdf.duration_ms", int(parse_ms))
+            parse_span.set_attribute("pdf.pages", int(result.pages or 0))
+            parse_span.set_attribute("pdf.is_image_based", bool(result.is_image_based))
+            parse_span.set_attribute("pdf.mean_grade", float(result.confidence or 0.0))
+            parse_span.set_attribute("pdf.library_version", result.library_version)
 
-    # Field extraction: LLM is mandatory, no fallback.
-    # Confidence comes from the LLM's own self-rating in the response
-    # envelope — the docling library's `mean_grade` (input quality / OCR
-    # confidence) is no longer reported as the headline confidence; the
-    # number on the card now represents extraction quality, comparable
-    # across all 4 extractor lanes.
-    try:
-        fields, llm_confidence = await asyncio.to_thread(
-            llm_extract_fields, result.raw_markdown, prompt
-        )
-    except LlmNotConfigured as exc:
-        raise ExtractionFailed(f"LLM not configured: {exc}") from exc
-    except (LlmCallFailed, LlmResponseInvalid) as exc:
-        raise ExtractionFailed(f"LLM extraction failed: {exc}") from exc
+        # Field extraction: LLM is mandatory, no fallback. Its own
+        # `track_llm_generation` produces the Generation span, which now
+        # nests under `docling.extract` thanks to current-context parent
+        # inheritance.
+        try:
+            fields, llm_confidence = await asyncio.to_thread(
+                llm_extract_fields, result.raw_markdown, prompt
+            )
+        except LlmNotConfigured as exc:
+            raise ExtractionFailed(f"LLM not configured: {exc}") from exc
+        except (LlmCallFailed, LlmResponseInvalid) as exc:
+            raise ExtractionFailed(f"LLM extraction failed: {exc}") from exc
 
-    elapsed_ms = (time.perf_counter_ns() - start_ns) // 1_000_000
+        elapsed_ms = (time.perf_counter_ns() - start_ns) // 1_000_000
+        outer_span.set_attribute("extract.duration_ms", int(elapsed_ms))
+        outer_span.set_attribute("extract.confidence", float(llm_confidence))
+        outer_span.set_attribute("extract.pages", int(result.pages or 0))
 
     response = ExtractResponse(
         extractor=EXTRACTOR_NAME,

@@ -145,12 +145,14 @@ _svc-bg:
 	  && echo "✓ svc bg → http://127.0.0.1:8080"
 
 _docling-bg: _docling-install
+	@pid=$$(lsof -ti tcp:8081 2>/dev/null); if [ -n "$$pid" ]; then kill $$pid && sleep 1; fi
 	@(set -a && source $(ENV_FILE) && set +a && \
 	    cd $(DOCLING_DIR) && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081 \
 	    > $(LOG_DIR)/docling.log 2>&1 &) \
 	  && echo "✓ docling bg → http://127.0.0.1:8081"
 
 _mineru-bg: _mineru-install
+	@pid=$$(lsof -ti tcp:8082 2>/dev/null); if [ -n "$$pid" ]; then kill $$pid && sleep 1; fi
 	@(set -a && source $(ENV_FILE) && set +a && \
 	    cd $(MINERU_DIR) && nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8082 \
 	    > $(LOG_DIR)/mineru.log 2>&1 &) \
@@ -288,6 +290,7 @@ svc-down:  ## stop Java service (kills :8080)
 # --- docling (FastAPI) -------------------------------------------------------
 
 docling: _docling-install  ## start Docling extractor (foreground) — http://127.0.0.1:8081
+	@pid=$$(lsof -ti tcp:8081 2>/dev/null); if [ -n "$$pid" ]; then echo "→ stopping existing docling (pid=$$pid)"; kill $$pid && sleep 1; fi
 	@echo "→ docling on :8081 → http://127.0.0.1:8081   (Ctrl-C to stop)"
 	@set -a && source $(ENV_FILE) && set +a && \
 	  cd $(DOCLING_DIR) && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8081
@@ -297,17 +300,12 @@ docling-down: ## stop Docling extractor (kills :8081)
 	  if [ -n "$$pid" ]; then kill $$pid && echo "✓ docling stopped"; else echo "(docling not running)"; fi
 
 _docling-install:
-	@if [ ! -d $(DOCLING_DIR)/.venv ]; then \
-	   echo "→ first-time install in $(DOCLING_DIR)"; \
-	   cd $(DOCLING_DIR) && $(PYTHON) -m venv .venv && \
-	     .venv/bin/pip install --upgrade --quiet pip && \
-	     .venv/bin/pip install --quiet -e . ; \
-	   echo "✓ $(DOCLING_DIR) installed"; \
-	 fi
+	@cd $(DOCLING_DIR) && uv sync --quiet
 
 # --- mineru (FastAPI) --------------------------------------------------------
 
 mineru: _mineru-install  ## start MinerU extractor (foreground) — http://127.0.0.1:8082
+	@pid=$$(lsof -ti tcp:8082 2>/dev/null); if [ -n "$$pid" ]; then echo "→ stopping existing mineru (pid=$$pid)"; kill $$pid && sleep 1; fi
 	@echo "→ mineru on :8082 → http://127.0.0.1:8082   (Ctrl-C to stop)"
 	@set -a && source $(ENV_FILE) && set +a && \
 	  cd $(MINERU_DIR) && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8082
@@ -317,13 +315,7 @@ mineru-down: ## stop MinerU extractor (kills :8082)
 	  if [ -n "$$pid" ]; then kill $$pid && echo "✓ mineru stopped"; else echo "(mineru not running)"; fi
 
 _mineru-install:
-	@if [ ! -d $(MINERU_DIR)/.venv ]; then \
-	   echo "→ first-time install in $(MINERU_DIR)"; \
-	   cd $(MINERU_DIR) && $(PYTHON) -m venv .venv && \
-	     .venv/bin/pip install --upgrade --quiet pip && \
-	     .venv/bin/pip install --quiet -e . ; \
-	   echo "✓ $(MINERU_DIR) installed"; \
-	 fi
+	@cd $(MINERU_DIR) && uv sync --quiet
 
 # --- ui (Vite) ---------------------------------------------------------------
 

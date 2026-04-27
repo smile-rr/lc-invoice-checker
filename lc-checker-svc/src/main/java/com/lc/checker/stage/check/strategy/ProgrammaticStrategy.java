@@ -116,21 +116,31 @@ public class ProgrammaticStrategy implements CheckStrategy {
                     start);
         }
 
-        // Domain-aware short-circuit: if every LC field this rule depends on
-        // is blank AND none of those fields' source tags is mandatory in
-        // lc-tag-mapping.yaml, the LC simply doesn't say anything to check
-        // against — NOT_REQUIRED is the right answer (not DOUBTS, which
-        // implies "we tried but couldn't decide").
-        //
-        // When the LC field IS mandatory but blank here, it means
-        // InputValidator was somehow bypassed; we still want to fail loudly,
-        // but that path is rare so we let the regular evaluation proceed.
+        // Domain-aware short-circuit:
+        //   - LC blank+optional AND invoice blank → DOUBTS. A configured rule
+        //     with no observable inputs cannot be ruled out; NOT_REQUIRED
+        //     would require a positive observation in the LC, which we
+        //     don't have here. Defer to a human reviewer.
+        //   - LC blank+optional AND invoice has data → NOT_REQUIRED. The LC
+        //     is silent on the precondition, so the rule does not apply
+        //     even though the invoice happens to mention the field.
+        //   - LC mandatory tag missing → fall through to regular evaluation
+        //     so the failure surfaces loudly (InputValidator should have
+        //     caught it, but we don't NOT_REQUIRED away a mandatory miss).
         if (rule.fieldKeys() != null && !rule.fieldKeys().isEmpty()
                 && allLcFieldsBlankAndOptional(rule, lc)) {
-            return outcome(rule, CheckStatus.NOT_REQUIRED, vp,
+            boolean invoiceBlank = allInvoiceFieldsBlank(rule, inv);
+            CheckStatus shortCircuit = invoiceBlank
+                    ? CheckStatus.DOUBTS
+                    : CheckStatus.NOT_REQUIRED;
+            String desc = invoiceBlank
+                    ? "Neither LC nor invoice carries " + describeFields(rule)
+                            + " — cannot verify, deferring to reviewer"
+                    : "LC does not specify " + describeFields(rule)
+                            + " — rule does not apply";
+            return outcome(rule, shortCircuit, vp,
                     new ExpressionTrace(rule.expression(), bind(lc, inv), null, null),
-                    "LC does not specify " + describeFields(rule) + " — rule does not apply",
-                    start);
+                    desc, start);
         }
 
         Map<String, Object> bound = bind(lc, inv);
@@ -142,16 +152,30 @@ public class ProgrammaticStrategy implements CheckStrategy {
         } catch (Exception e) {
             log.warn("PROGRAMMATIC rule {} evaluation failed: {}", rule.id(), e.getMessage());
             // Bare-arithmetic rules (e.g. UCP-18b-math) throw NPE when an
-            // input is null. If ALL invoice values the rule depends on are
-            // null, the rule simply has nothing to compute against — that's
-            // NOT_REQUIRED, not DOUBTS. Per-rule `missing_invoice_action`
-            // applies when only some are null.
-            CheckStatus fallbackStatus = allInvoiceFieldsBlank(rule, inv)
-                    ? CheckStatus.NOT_REQUIRED
-                    : mapMissingAction(rule);
-            String fallbackDesc = fallbackStatus == CheckStatus.NOT_REQUIRED
-                    ? "Invoice does not provide " + describeFields(rule) + " — rule does not apply"
-                    : "Expression evaluation failed: " + e.getMessage();
+            // input is null. Map the failure by what's actually observable:
+            //   - both LC-side and invoice-side blank → DOUBTS (cannot
+            //     verify; NOT_REQUIRED needs a positive LC observation)
+            //   - only invoice blank, LC has data → NOT_REQUIRED (LC says
+            //     something but invoice doesn't reflect it; rule
+            //     intentionally non-applicable on this drawing)
+            //   - some inputs present but expression still threw → fall
+            //     back to per-rule missing_invoice_action.
+            boolean invoiceBlank = allInvoiceFieldsBlank(rule, inv);
+            boolean lcBlank = allLcFieldsBlankAndOptional(rule, lc);
+            CheckStatus fallbackStatus;
+            String fallbackDesc;
+            if (invoiceBlank && lcBlank) {
+                fallbackStatus = CheckStatus.DOUBTS;
+                fallbackDesc = "Neither LC nor invoice carries " + describeFields(rule)
+                        + " — cannot verify, deferring to reviewer";
+            } else if (invoiceBlank) {
+                fallbackStatus = CheckStatus.NOT_REQUIRED;
+                fallbackDesc = "Invoice does not provide " + describeFields(rule)
+                        + " — rule does not apply";
+            } else {
+                fallbackStatus = mapMissingAction(rule);
+                fallbackDesc = "Expression evaluation failed: " + e.getMessage();
+            }
             return outcome(rule, fallbackStatus, vp,
                     new ExpressionTrace(rule.expression(), bound, null, e.getMessage()),
                     fallbackDesc, start);
@@ -392,7 +416,8 @@ public class ProgrammaticStrategy implements CheckStrategy {
                 vp == null ? null : vp.invoiceValue(),
                 rule.ucpRef(),
                 rule.isbpRef(),
-                description
+                description,
+                null
         );
         CheckTrace checkTrace = new CheckTrace(
                 rule.id(), CheckType.PROGRAMMATIC, status,

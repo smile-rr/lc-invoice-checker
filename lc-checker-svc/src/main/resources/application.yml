@@ -204,6 +204,9 @@ management:
       # Langfuse OTel intake. Override LANGFUSE_HOST in .env to point elsewhere.
       endpoint: ${LANGFUSE_OTEL_ENDPOINT:${LANGFUSE_HOST:http://192.168.31.214:3300}/api/public/otel/v1/traces}
       headers:
+        # LANGFUSE_AUTH_BASIC is auto-derived from PUBLIC_KEY + SECRET_KEY at
+        # startup by LangfuseAuthEnvironmentPostProcessor; rotate keys without
+        # touching this file.
         Authorization: Basic ${LANGFUSE_AUTH_BASIC:}
       compression: gzip
       timeout: 10s

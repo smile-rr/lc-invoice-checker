@@ -54,13 +54,12 @@ public class StorageConfig {
     }
 
     @Bean
-    public InvoiceFileStore invoiceFileStore(S3Client s3, StorageProperties props,
-                                              io.micrometer.tracing.Tracer tracer) {
+    public InvoiceFileStore invoiceFileStore(S3Client s3, StorageProperties props) {
         StorageProperties.Minio cfg = props.minio();
         if (cfg == null || !cfg.enabled()) {
             log.warn("MinIO disabled — InvoiceFileStore is a no-op; sessions will not survive restart");
             return new NoopInvoiceFileStore();
         }
-        return new MinioFileStore(s3, cfg, tracer);
+        return new MinioFileStore(s3, cfg);
     }
 }

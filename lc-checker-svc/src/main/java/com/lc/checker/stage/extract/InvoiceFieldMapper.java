@@ -110,6 +110,25 @@ public class InvoiceFieldMapper {
             }
         }
 
+        // Single-line invoice fallback: vision LLMs sometimes leave the
+        // top-level scalar quantity/unit_price/unit as null while still
+        // populating line_items with one row. Without this projection the
+        // typed InvoiceDocument loses those values and downstream rules
+        // (notably UCP-18b-math) see nulls and degrade to DOUBTS even though
+        // the math IS computable. PromptBuilder's instruction is "scalar
+        // when single-line, line_items when multi-line" — this enforces it
+        // post-hoc when the LLM doesn't follow.
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> singleRow = (fields.get("line_items") instanceof List<?> li && li.size() == 1)
+                ? (List<Map<String, Object>>) li
+                : null;
+        if (singleRow != null) {
+            Map<String, Object> row = singleRow.get(0);
+            fields.computeIfAbsent("quantity",   k -> row.get("quantity"));
+            fields.computeIfAbsent("unit_price", k -> row.get("unit_price"));
+            fields.computeIfAbsent("unit",       k -> row.get("unit"));
+        }
+
         FieldEnvelope envelope = new FieldEnvelope("INVOICE", fields, extras, rawSource, warnings);
 
         // Build the legacy typed-scalar facade from the same canonical map.

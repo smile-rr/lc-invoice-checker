@@ -131,9 +131,10 @@ export function StatusFilterBar({
           <span className="font-sans normal-case font-medium tracking-normal">All</span>
         </button>
 
-        <span className="w-px h-5 bg-line mx-1.5 shrink-0" aria-hidden />
+        <GroupDivider />
+        <GroupLabel>Status</GroupLabel>
 
-        {/* Status chips */}
+        {/* Status chips — rounded-sm rectangles (verdict shape). */}
         {STATUS_ORDER.map((s) => {
           const isActive = status === s;
           const tone = STATUS_TONE[s];
@@ -156,10 +157,12 @@ export function StatusFilterBar({
           );
         })}
 
-        <span className="w-px h-5 bg-line mx-1.5 shrink-0" aria-hidden />
+        <GroupDivider wide />
+        <GroupLabel>Rule type</GroupLabel>
 
-        {/* Type chips — debug aid, also reflects the inline category badge on
-            each rule card so the same colour means the same thing. */}
+        {/* Type chips — rounded-full PILLS with leading category glyph so the
+            shape clearly separates them from STATUS chips above. Same colour
+            as the inline rule-card category badge. */}
         {TYPE_ORDER.map((t) => {
           const isActive = type === t;
           const tone = TYPE_TONE[t];
@@ -171,12 +174,14 @@ export function StatusFilterBar({
               aria-pressed={isActive}
               title={`Show only ${TYPE_LABEL[t]} rules`}
               className={[
-                'inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-sm border whitespace-nowrap transition-colors',
+                'inline-flex items-baseline gap-1.5 px-3 py-1 rounded-full border whitespace-nowrap transition-colors',
                 'font-mono text-[11px] uppercase tracking-[0.07em] font-bold',
                 isActive ? tone.active : tone.inactive,
               ].join(' ')}
             >
-              {isActive && <span aria-hidden>✓</span>}
+              <span aria-hidden className="font-mono text-[10px] opacity-80">
+                {t === 'PROGRAMMATIC' ? '⟨/⟩' : '✦'}
+              </span>
               <span>{typeCounts[t]}</span>
               <span className="font-sans normal-case font-medium tracking-normal">{TYPE_LABEL[t]}</span>
             </button>
@@ -227,5 +232,31 @@ export function StatusFilterBar({
         </div>
       )}
     </div>
+  );
+}
+
+// Inline tag prefixed to each chip cluster so the row reads as
+// "STATUS · [chips]   RULE TYPE · [chips]" without relying on the eye to
+// register a 1px hairline as a group boundary.
+function GroupLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      aria-hidden
+      className="font-sans text-[10px] uppercase tracking-[0.18em] font-semibold text-muted/80 shrink-0 select-none"
+    >
+      {children}
+    </span>
+  );
+}
+
+// Stronger group divider than the previous 1px hairline. `wide` adds extra
+// horizontal breathing room before the second cluster (RULE TYPE) so the
+// shape change (rectangle → pill) lands with more breathing space.
+function GroupDivider({ wide = false }: { wide?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={['w-px h-5 bg-line shrink-0', wide ? 'mx-3' : 'mx-2'].join(' ')}
+    />
   );
 }

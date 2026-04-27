@@ -14,10 +14,12 @@ import java.util.List;
  * keys exactly; loader deserialization uses
  * {@link com.fasterxml.jackson.databind.PropertyNamingStrategies.SnakeCaseStrategy}.
  *
- * <p>Two-type model:
+ * <p>Two-type model with three effective tiers:
  * <ul>
- *   <li>{@link CheckType#PROGRAMMATIC} — {@link #expression} is required (SpEL).</li>
- *   <li>{@link CheckType#AGENT} — {@link #promptTemplate} is required (file under {@code prompts/}).</li>
+ *   <li>{@link CheckType#PROGRAMMATIC} — {@link #expression} is required (SpEL). Tier 1.</li>
+ *   <li>{@link CheckType#AGENT} with empty {@link #tools} — pure semantic LLM call. Tier 2.</li>
+ *   <li>{@link CheckType#AGENT} with non-empty {@link #tools} — LLM agent with Spring AI
+ *       tool callbacks. Tier 3. Tool names resolve via {@code ToolRegistry}.</li>
  * </ul>
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -38,6 +40,9 @@ public record Rule(
         Severity severityOnFail,
         String expression,
         String promptTemplate,
+        List<String> tools,
+        Integer maxToolCalls,
+        Integer agentTimeoutSeconds,
         Boolean enabled,
         DisabledCategory disabledCategory,
         String disabledReason
@@ -45,11 +50,17 @@ public record Rule(
 
     public Rule {
         fieldKeys = fieldKeys == null ? List.of() : List.copyOf(fieldKeys);
+        tools = tools == null ? List.of() : List.copyOf(tools);
         enabled = enabled == null ? Boolean.TRUE : enabled;
         businessPhase = businessPhase == null ? BusinessPhase.PROCEDURAL : businessPhase;
     }
 
     public boolean isEnabled() {
         return Boolean.TRUE.equals(enabled);
+    }
+
+    /** Tier 3 = AGENT with at least one declared tool. */
+    public boolean usesTools() {
+        return checkType == CheckType.AGENT && !tools.isEmpty();
     }
 }

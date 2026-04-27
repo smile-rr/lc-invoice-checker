@@ -27,25 +27,28 @@ const DEFAULT_LC = '/samples/sample_lc_mt700.txt';
 const DEFAULT_LC_LABEL = 'sample_lc_mt700.txt';
 
 export const SAMPLES: SamplePair[] = [
+  // ── Golden test pairs (test/golden/, mirrored to ui/public/samples/) ──
+  // Curated demo cases with known verdict patterns. See test/golden/README.md
+  // for the full expected outcome of each pair.
   {
-    id: 'inc-0-widget-pass',
-    title: 'Inc-0 · widget · all-pass LC',
-    note: 'MT700 hand-tuned to align with the widget invoice — expected mostly PASS / NOT_REQUIRED.',
+    id: 'golden-01-widgets-pass',
+    title: '01 · widgets · all-pass LC',
+    note: 'MT700 hand-tuned to fully comply with the widget invoice — every applicable rule PASSes.',
     kind: 'baseline',
-    lcPath: '/samples/inc-0-pass.txt',
-    lcLabel: 'inc-0-pass.txt',
-    invoicePath: '/samples/inc-0-widget.pdf',
-    invoiceLabel: 'inc-0-widget.pdf',
+    lcPath: '/samples/invoice-01-widgets-singapore__pass.txt',
+    lcLabel: 'invoice-01__pass.txt',
+    invoicePath: '/samples/invoice-01-widgets-singapore.pdf',
+    invoiceLabel: 'invoice-01-widgets.pdf',
   },
   {
-    id: 'inc-0-widget',
-    title: 'Inc-0 · widget invoice',
-    note: 'Default LC paired with the widget invoice — expected to surface fails.',
+    id: 'golden-01-widgets-fail',
+    title: '01 · widgets · 3 deliberate FAILs',
+    note: 'MT700 with currency / amount / beneficiary mismatched against the widget invoice.',
     kind: 'baseline',
-    lcPath: DEFAULT_LC,
-    lcLabel: DEFAULT_LC_LABEL,
-    invoicePath: '/samples/inc-0-widget.pdf',
-    invoiceLabel: 'inc-0-widget.pdf',
+    lcPath: '/samples/invoice-01-widgets-singapore__fail.txt',
+    lcLabel: 'invoice-01__fail.txt',
+    invoicePath: '/samples/invoice-01-widgets-singapore.pdf',
+    invoiceLabel: 'invoice-01-widgets.pdf',
   },
   {
     id: 'inc-4-proforma',
