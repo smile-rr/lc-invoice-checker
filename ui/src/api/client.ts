@@ -54,6 +54,36 @@ export async function startCheck(lc: File, invoice: File): Promise<StartResponse
   return apiJson<StartResponse>(`${API_BASE}/start`, { method: 'POST', body });
 }
 
+/**
+ * Start a compliance check using a pre-defined sample LC paired with an invoice.
+ *
+ * The invoice is either provided as a File (multipart upload) or omitted, in
+ * which case the sample's own invoice is used. The LC bytes are resolved
+ * server-side via SampleRefStore — no client-side fetch + re-upload.
+ *
+ * Throws ApiError on validation failures (HTTP 400/503).
+ */
+export async function startCheckBySample(
+  sampleId: string,
+  variant: string,
+  invoice?: File,
+): Promise<StartResponse> {
+  const body = new FormData();
+  body.append(
+    'body',
+    new Blob([JSON.stringify({ sample_id: sampleId, variant })], {
+      type: 'application/json',
+    }),
+  );
+  if (invoice) {
+    body.append('invoice', invoice);
+  }
+  return apiJson<StartResponse>(`${API_BASE}/start-by-sample`, {
+    method: 'POST',
+    body,
+  });
+}
+
 /** Cancel a QUEUED session (no-op once running). */
 export async function cancelSession(sessionId: string): Promise<void> {
   await apiFetch(`${API_BASE}/${sessionId}`, { method: 'DELETE' });

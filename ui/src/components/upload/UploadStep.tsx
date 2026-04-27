@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ApiError, getLcRaw, invoiceUrl, startCheck } from '../../api/client';
+import { ApiError, getLcRaw, invoiceUrl, startCheck, startCheckBySample } from '../../api/client';
 import { fetchSamplePair, loadSamples, type SamplePair, type ScenarioKind } from '../../data/samples';
 import { useConfirm } from '../../hooks/useConfirm';
 import { useMandatoryTags } from '../../hooks/useMandatoryTags';
@@ -25,6 +25,10 @@ export function UploadStep({ primaryRunCta = true }: Props) {
   // Samples are pulled from the API at mount-time. Empty array shows nothing
   // until the first response lands; on failure the error band surfaces it.
   const [samples, setSamples] = useState<SamplePair[]>([]);
+  // Tracks which predefined sample is currently loaded, so run() can bypass
+  // the LC upload step. Cleared whenever the user replaces either file with
+  // a custom upload.
+  const [selectedSample, setSelectedSample] = useState<SamplePair | null>(null);
   const { mandatory } = useMandatoryTags();
   // One-shot guard: only ask for confirmation the first time the operator
   // mutates inputs while viewing an existing session. Once they OK the
@@ -68,6 +72,7 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         if (!invRes.ok) throw new Error(`invoice fetch failed: ${invRes.status}`);
         const invBlob = await invRes.blob();
         if (cancelled) return;
+        setSelectedSample(null);   // files come from MinIO, not a predefined sample
         setLc(new File([new Blob([lcText])], 'lc.txt', { type: 'text/plain' }));
         setInvoice(new File([invBlob], 'invoice.pdf', { type: 'application/pdf' }));
       } catch (e) {
@@ -114,11 +119,13 @@ export function UploadStep({ primaryRunCta = true }: Props) {
 
   async function setLcGuarded(f: File) {
     if (!(await ensureConfirmed())) return;
+    setSelectedSample(null);   // custom LC → bypass sample shortcut
     setLc(f);
   }
 
   async function setInvoiceGuarded(f: File) {
     if (!(await ensureConfirmed())) return;
+    setSelectedSample(null);   // custom invoice → bypass sample shortcut
     setInvoice(f);
   }
 
@@ -131,6 +138,7 @@ export function UploadStep({ primaryRunCta = true }: Props) {
     try {
       const { lc: lcFile, invoice: invFile } = await fetchSamplePair(s, ctrl.signal);
       if (ctrl.signal.aborted) return;
+      setSelectedSample(s);   // record the sample so run() uses /start-by-sample
       setLc(lcFile);
       setInvoice(invFile);
     } catch (e) {
@@ -148,7 +156,16 @@ export function UploadStep({ primaryRunCta = true }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await startCheck(lc, invoice);
+      let r;
+      if (selectedSample) {
+        // Pre-defined sample: LC is served from MinIO via SampleRefStore — no
+        // client-side fetch + re-upload. Invoice may be the sample default or
+        // a custom replacement (already in `invoice` state).
+        r = await startCheckBySample(selectedSample.sampleId, selectedSample.variant, invoice);
+      } else {
+        // Custom files: full multipart upload — both LC and invoice.
+        r = await startCheck(lc, invoice);
+      }
       // Don't pin a `?step=` here — that would block downstream auto-advance
       // (e.g. lc → invoice once invoice_extract starts streaming). The empty-
       // upload-flash race is handled in `derivedStep` (see steps.ts), which
@@ -190,6 +207,7 @@ export function UploadStep({ primaryRunCta = true }: Props) {
               nav('/');
               return;
             }
+            setSelectedSample(null);
             setLc(null);
             setInvoice(null);
             setErr(null);
@@ -264,6 +282,7 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         {(lc || invoice) && (
           <button
             onClick={() => {
+              setSelectedSample(null);
               setLc(null);
               setInvoice(null);
               setErr(null);

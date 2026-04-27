@@ -7,6 +7,7 @@ import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
 import com.lc.checker.infra.persistence.CheckSessionStore.SessionFileRefs;
 import com.lc.checker.infra.queue.JobDispatcher;
+import com.lc.checker.infra.samples.SampleRefStore;
 import com.lc.checker.infra.storage.InvoiceFileStore;
 import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEventBus;
@@ -59,6 +60,7 @@ public class LcCheckStreamController {
     private final CheckEventBus bus;
     private final CheckSessionStore store;
     private final InvoiceFileStore fileStore;
+    private final SampleRefStore sampleRef;
     private final InputValidator validator;
     private final JobDispatcher dispatcher;
 
@@ -75,11 +77,13 @@ public class LcCheckStreamController {
     public LcCheckStreamController(CheckEventBus bus,
                                     CheckSessionStore store,
                                     InvoiceFileStore fileStore,
+                                    SampleRefStore sampleRef,
                                     InputValidator validator,
                                     JobDispatcher dispatcher) {
         this.bus = bus;
         this.store = store;
         this.fileStore = fileStore;
+        this.sampleRef = sampleRef;
         this.validator = validator;
         this.dispatcher = dispatcher;
     }
@@ -125,8 +129,16 @@ public class LcCheckStreamController {
         // re-read them), then INSERT the session row directly in QUEUED state,
         // then attach file metadata. Enqueue-first avoids a momentary RUNNING
         // phantom row that would briefly show up in queueSnapshot().
-        fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
-        fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
+        boolean lcStored      = fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
+        boolean invoiceStored = fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
+        if (!lcStored || !invoiceStored) {
+            log.error("MinIO upload failed: lcStored={} invoiceStored={} sessionId={}",
+                    lcStored, invoiceStored, sessionId);
+            return ResponseEntity.status(503)
+                    .header("X-Error-Code", "STORAGE_UNAVAILABLE")
+                    .body(new StartResponse(
+                            sessionId, "STORAGE_ERROR", 0, pdfName, pdfBytes.length, lcText.length()));
+        }
         store.enqueueSession(sessionId);
         store.recordSessionFiles(sessionId, lcName, lcSha, pdfName, invoiceSha);
         dispatcher.onEnqueued(sessionId);
@@ -206,5 +218,96 @@ public class LcCheckStreamController {
         String name = filename == null ? "invoice.pdf" : filename;
         headers.set(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + name + "\"");
         return ResponseEntity.ok().headers(headers).body(bytes);
+    }
+
+    // ── Predefined sample flow ────────────────────────────────────────────────
+
+    /**
+     * Start a check using a pre-defined sample LC paired with a custom invoice.
+     *
+     * <p>Skips the MinIO upload step for the LC — the sample bytes are resolved
+     * via {@link SampleRefStore} which lazily uploads them to MinIO (content-
+     * addressed, deduplicated). The invoice is either provided as a multipart
+     * upload or taken from the sample pair.
+     *
+     * <p>This endpoint is the preferred path when the operator selects a sample
+     * from the picker — no round-trip to fetch + re-upload the LC bytes.
+     *
+     * <pre>
+     * POST /api/v1/lc-check/start-by-sample
+     * Content-Type: multipart/form-data
+     *
+     * Part "body" (JSON):
+     *   { "sampleId": "painting-01", "variant": "pass" }
+     *
+     * Part "invoice" (optional, multipart file):
+     *   The invoice PDF. If absent, the sample's own invoice is used.
+     * </pre>
+     */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record StartBySampleRequest(String sampleId, String variant) {}
+
+    @PostMapping(path = "/start-by-sample", consumes = "multipart/form-data")
+    public ResponseEntity<StartResponse> startBySample(
+            @RequestPart("body") StartBySampleRequest body,
+            @RequestPart(value = "invoice", required = false) MultipartFile invoice) throws IOException {
+
+        String sessionId = MDC.get(MdcKeys.SESSION_ID);
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = UUID.randomUUID().toString();
+        }
+
+        String sampleId = body.sampleId();
+        String variant  = (body.variant() == null || body.variant().isBlank()) ? "pass" : body.variant();
+
+        // Resolve sample LC SHA-256 — this lazily uploads to MinIO if not already present.
+        String lcSha = sampleRef.getLcSha256(sampleId, variant)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
+        String lcFilename = sampleRef.getLcFilename(sampleId, variant)
+                .orElse("lc.txt");
+
+        // Invoice: custom upload or sample default.
+        String invoiceSha;
+        String invoiceFilename;
+        long   invoiceBytes;
+        if (invoice != null && !invoice.isEmpty()) {
+            // Custom invoice — validate, upload, and record like /start.
+            byte[] pdfBytes = invoice.getBytes();
+            validator.validatePdf(pdfBytes);
+            invoiceSha      = Sha256.hex(pdfBytes);
+            invoiceFilename = invoice.getOriginalFilename();
+            invoiceBytes    = pdfBytes.length;
+            filesBySession.put(sessionId, new SessionFiles(null, invoiceFilename, pdfBytes));
+            if (!fileStore.putInvoiceIfAbsent(invoiceSha, invoiceFilename, pdfBytes)) {
+                log.error("MinIO upload failed for custom invoice sessionId={}", sessionId);
+                return ResponseEntity.status(503)
+                        .header("X-Error-Code", "STORAGE_UNAVAILABLE")
+                        .body(new StartResponse(sessionId, "STORAGE_ERROR", 0, invoiceFilename, invoiceBytes, 0));
+            }
+        } else {
+            // Use sample invoice — resolve via SampleRefStore.
+            invoiceSha = sampleRef.getInvoiceSha256(sampleId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Sample invoice not available: sampleId=" + sampleId));
+            invoiceFilename = sampleRef.getInvoiceFilename(sampleId).orElse("invoice.pdf");
+            invoiceBytes = fileStore.getInvoice(invoiceSha)
+                    .map(bytes -> (long) bytes.length)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Sample invoice bytes missing in storage: sampleId=" + sampleId));
+        }
+
+        store.enqueueSession(sessionId);
+        store.recordSessionFiles(sessionId, lcFilename, lcSha, invoiceFilename, invoiceSha);
+        dispatcher.onEnqueued(sessionId);
+
+        var snap = store.queueSnapshot();
+        int position = snap.queued().indexOf(sessionId) + 1;
+
+        log.info("lc-check/start-by-sample: session={} sampleId={} variant={} invoice={} queuePos={}",
+                sessionId, sampleId, variant, invoiceFilename, position);
+
+        return ResponseEntity.ok(new StartResponse(
+                sessionId, "QUEUED", position, invoiceFilename, invoiceBytes, 0));
     }
 }
