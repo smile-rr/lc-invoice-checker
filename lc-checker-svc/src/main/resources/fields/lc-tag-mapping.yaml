@@ -2,22 +2,32 @@
 # lc-tag-mapping.yaml — MT700 tag → canonical field key dispatch.
 # =============================================================================
 #
-# Each row: tag → { field_keys, parser, mandatory, defaults? }.
+# Tag format (strict SWIFT MT contract): {2 digits, optional UPPERCASE letter}.
+# Examples: 20, 27, 31D, 32B, 50F, 71B. Lowercase letters and 4+ chars are
+# REJECTED by InputValidator before the pipeline runs — see e.g. ":40Ad:"
+# which would otherwise be silently glued into the previous tag's value by
+# Prowide. If you need a new option letter (e.g. :50G:), add a row here; you
+# don't need to touch the validator or parser.
+#
+# Each row: tag → { field_keys, parser, mandatory, defaults?, validation? }.
 #   field_keys      — must exist in field-pool.yaml (validated at startup)
 #   parser          — ParserType enum (com.lc.checker.domain.common.ParserType)
 #   mandatory       — fail-fast at parse if absent
 #   defaults        — per-key default applied when the tag is absent
+#   validation      — optional { pattern, max_length, min_length } applied to
+#                     the raw tag value at parse time; failures throw
+#                     LcParseException(field=":<tag>:")
 #
 # Adding a tag = one new line here (and a new row in field-pool.yaml only if
 # the canonical key doesn't yet exist). No Java change.
 
 mt700:
   official_tags:
-    "20":  { field_keys: [lc_number],                       parser: SIMPLE_STRING,        mandatory: true }
+    "20":  { field_keys: [lc_number],                       parser: SIMPLE_STRING,        mandatory: true,  validation: { max_length: 16 } }
     "27":  { field_keys: [sequence_of_total],               parser: SIMPLE_STRING,        mandatory: false }
-    "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: false }
-    "31D": { field_keys: [expiry_date, expiry_place],       parser: DATE_PLUS_TEXT,       mandatory: true }
-    "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true }
+    "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: false, validation: { pattern: "^[0-9]{6}$" } }
+    "31D": { field_keys: [expiry_date, expiry_place],       parser: DATE_PLUS_TEXT,       mandatory: true,  validation: { pattern: "^[0-9]{6}.+", max_length: 35 } }
+    "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true,  validation: { pattern: "^[A-Z]{3}[0-9.,]+$", max_length: 24 } }
     "39A": { field_keys: [tolerance_plus, tolerance_minus], parser: SLASH_SEPARATED_INT,  mandatory: false, defaults: { tolerance_plus: 0, tolerance_minus: 0 } }
     "39B": { field_keys: [max_amount_flag],                 parser: SIMPLE_STRING,        mandatory: false }
     "40A": { field_keys: [credit_type],                     parser: SIMPLE_STRING,        mandatory: false }
@@ -35,16 +45,16 @@ mt700:
     "44D": { field_keys: [shipment_period],                 parser: MULTILINE_FULL,       mandatory: false }
     "44E": { field_keys: [port_of_loading],                 parser: SIMPLE_STRING,        mandatory: false }
     "44F": { field_keys: [port_of_discharge],               parser: SIMPLE_STRING,        mandatory: false }
-    "45A": { field_keys: [goods_description, incoterms],    parser: MULTILINE_FULL,       mandatory: true }
+    "45A": { field_keys: [goods_description, incoterms],    parser: MULTILINE_FULL,       mandatory: true,  validation: { min_length: 1 } }
     "46A": { field_keys: [documents_required],              parser: DOCUMENT_LIST,        mandatory: false }
     "47A": { field_keys: [additional_conditions],           parser: MULTILINE_FULL,       mandatory: false }
     "48":  { field_keys: [presentation_days],               parser: INT_BEFORE_SLASH,     mandatory: false, defaults: { presentation_days: 21 } }
     "49":  { field_keys: [confirmation_instructions],       parser: ENUM_NORMALIZED,      mandatory: false }
-    "50":  { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: true }
+    "50":  { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: true,  validation: { min_length: 1 } }
     "50B": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }
     "50F": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }
     "51A": { field_keys: [applicant_bank_bic],                  parser: BIC,                  mandatory: false }
-    "59":  { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: true }
+    "59":  { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: true,  validation: { min_length: 1 } }
     "59A": { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: false }
     "59F": { field_keys: [beneficiary_name, beneficiary_address], parser: MULTILINE_FIRST_LINE, mandatory: false }
     "71B": { field_keys: [charges],                             parser: MULTILINE_FULL,       mandatory: false }

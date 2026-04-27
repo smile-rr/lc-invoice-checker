@@ -1,4 +1,14 @@
-import type { ExtractAttempt, FieldDefinition, RuleSummary, SessionSummary, StartResponse, TraceResponse } from '../types';
+import { apiFetch, apiJson, apiText, ApiError } from '../lib/apiClient';
+import type {
+  ExtractAttempt,
+  FieldDefinition,
+  QueueStatus,
+  RuleSummary,
+  SessionSummary,
+  StartResponse,
+  TagMeta,
+  TraceResponse,
+} from '../types';
 
 const API_BASE = '/api/v1/lc-check';
 
@@ -7,16 +17,12 @@ export async function getPipelineConfig(): Promise<{
   configured_stages: string[];
   extractor_sources: string[];
 }> {
-  const res = await fetch('/api/v1/pipeline');
-  if (!res.ok) throw new Error(`pipeline failed: ${res.status}`);
-  return res.json();
+  return apiJson('/api/v1/pipeline');
 }
 
 /** Rule catalog — read-only metadata used by the Compliance Check panel. */
 export async function listRules(): Promise<RuleSummary[]> {
-  const res = await fetch('/api/v1/rules');
-  if (!res.ok) throw new Error(`rules failed: ${res.status}`);
-  const body = (await res.json()) as { rules: RuleSummary[] };
+  const body = await apiJson<{ rules: RuleSummary[] }>('/api/v1/rules');
   return body.rules;
 }
 
@@ -25,27 +31,42 @@ export async function listFields(appliesTo?: 'LC' | 'INVOICE'): Promise<FieldDef
   const url = appliesTo
     ? `/api/v1/fields?applies_to=${appliesTo}`
     : '/api/v1/fields';
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fields failed: ${res.status}`);
-  const body = (await res.json()) as { fields: FieldDefinition[]; total: number };
+  const body = await apiJson<{ fields: FieldDefinition[]; total: number }>(url);
   return body.fields;
 }
 
-/** Starts a streaming lc-check run. Returns immediately with the sessionId. */
+/** MT700 tag metadata so the UI can mirror server-side mandatory rules. */
+export async function listTagMeta(): Promise<TagMeta[]> {
+  return apiJson<TagMeta[]>('/api/v1/lc-meta/tags');
+}
+
+/**
+ * Submit an LC + invoice run. Returns immediately with a session id while the
+ * pipeline is queued; UI subscribes to SSE / polls /queue/status to track it.
+ *
+ * Throws ApiError on validation failures (HTTP 400) — caller should surface
+ * the message and let the user fix the input.
+ */
 export async function startCheck(lc: File, invoice: File): Promise<StartResponse> {
   const body = new FormData();
   body.append('lc', lc);
   body.append('invoice', invoice);
-  const res = await fetch(`${API_BASE}/start`, { method: 'POST', body });
-  if (!res.ok) throw new Error(`start failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  return apiJson<StartResponse>(`${API_BASE}/start`, { method: 'POST', body });
+}
+
+/** Cancel a QUEUED session (no-op once running). */
+export async function cancelSession(sessionId: string): Promise<void> {
+  await apiFetch(`${API_BASE}/${sessionId}`, { method: 'DELETE' });
+}
+
+/** Cross-session view: who's running, who's queued, and capacity. */
+export async function getQueueStatus(): Promise<QueueStatus> {
+  return apiJson<QueueStatus>('/api/v1/queue/status');
 }
 
 /** Fetches the raw MT700 text uploaded for a session. */
 export async function getLcRaw(sessionId: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/${sessionId}/lc-raw`);
-  if (!res.ok) throw new Error(`lc-raw failed: ${res.status}`);
-  return res.text();
+  return apiText(`${API_BASE}/${sessionId}/lc-raw`);
 }
 
 /** URL for the uploaded invoice PDF — pass to <embed> or pdf.js. */
@@ -60,16 +81,12 @@ export function invoiceUrl(sessionId: string): string {
  * SSE connection had stayed open.
  */
 export async function getTrace(sessionId: string): Promise<TraceResponse> {
-  const res = await fetch(`${API_BASE}/${sessionId}/trace`);
-  if (!res.ok) throw new Error(`trace failed: ${res.status}`);
-  return res.json();
+  return apiJson<TraceResponse>(`${API_BASE}/${sessionId}/trace`);
 }
 
 /** Recent sessions for the "Last Results" list. */
 export async function listSessions(limit = 20): Promise<SessionSummary[]> {
-  const res = await fetch(`/api/v1/sessions?limit=${limit}`);
-  if (!res.ok) throw new Error(`sessions failed: ${res.status}`);
-  return res.json();
+  return apiJson<SessionSummary[]>(`/api/v1/sessions?limit=${limit}`);
 }
 
 /**
@@ -79,7 +96,7 @@ export async function listSessions(limit = 20): Promise<SessionSummary[]> {
  * performance side-by-side.
  */
 export async function listExtracts(sessionId: string): Promise<ExtractAttempt[]> {
-  const res = await fetch(`${API_BASE}/${sessionId}/extracts`);
-  if (!res.ok) throw new Error(`extracts failed: ${res.status}`);
-  return res.json();
+  return apiJson<ExtractAttempt[]>(`${API_BASE}/${sessionId}/extracts`);
 }
+
+export { ApiError };

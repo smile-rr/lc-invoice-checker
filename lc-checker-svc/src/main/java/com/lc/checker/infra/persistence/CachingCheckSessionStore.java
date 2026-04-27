@@ -103,6 +103,31 @@ public class CachingCheckSessionStore implements CheckSessionStore {
     }
 
     @Override
+    public void enqueueSession(String sessionId) {
+        l2.enqueueSession(sessionId);
+    }
+
+    @Override
+    public Optional<QueuedJob> dequeueOne() {
+        return l2.dequeueOne();
+    }
+
+    @Override
+    public void markFailed(String sessionId, String error) {
+        l2.markFailed(sessionId, error);
+    }
+
+    @Override
+    public QueueSnapshot queueSnapshot() {
+        return l2.queueSnapshot();
+    }
+
+    @Override
+    public boolean cancelQueued(String sessionId, String reason) {
+        return l2.cancelQueued(sessionId, reason);
+    }
+
+    @Override
     public void appendEvent(String sessionId, CheckEvent event) {
         l2.appendEvent(sessionId, event);
     }

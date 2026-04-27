@@ -9,6 +9,8 @@ interface Props {
   onInvoiceChange: (f: File) => void | Promise<void>;
   onClear: () => void;
   onRun: () => void;
+  /** Disable the Run button without showing the busy spinner. */
+  runDisabled?: boolean;
   /** Optional run-button label override — useful for re-run / replay flows. */
   runLabel?: string;
 }
@@ -34,6 +36,7 @@ export function SamplePreview({
   onInvoiceChange,
   onClear,
   onRun,
+  runDisabled,
   runLabel,
 }: Props) {
   return (
@@ -52,13 +55,14 @@ export function SamplePreview({
         <button
           onClick={onClear}
           disabled={busy}
-          className="text-xs text-muted hover:text-navy-1 px-3 py-2 disabled:opacity-40"
-          title="Clear both files and pick again"
+          className="text-xs text-muted hover:text-navy-1 px-3 py-2 disabled:opacity-40 inline-flex items-center gap-1.5"
+          title="Clear both file slots. If you are inside a session, this also leaves the session view — the session itself stays in history."
         >
-          Replace pair
+          <span aria-hidden>↺</span>
+          <span>Reset</span>
         </button>
         <button
-          disabled={busy}
+          disabled={busy || !!runDisabled}
           onClick={onRun}
           className="px-5 py-2.5 rounded-btn font-medium bg-navy-1 text-white hover:bg-navy-2 disabled:opacity-40 disabled:cursor-not-allowed"
         >

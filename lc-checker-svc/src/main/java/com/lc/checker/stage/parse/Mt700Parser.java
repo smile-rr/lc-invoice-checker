@@ -69,13 +69,6 @@ public class Mt700Parser {
 
     private static final Logger log = LoggerFactory.getLogger(Mt700Parser.class);
 
-    /**
-     * Business-mandatory tags consumed by {@code InputValidator} as the
-     * pre-pipeline gate. Kept here so the validator and parser share a
-     * single source of truth for which tags must exist on the wire.
-     */
-    public static final List<String> MANDATORY_TAGS = List.of("20", "31D", "32B", "45A", "50", "59");
-
     /** All :50: option letters accepted as the "applicant" party tag. */
     private static final Set<String> APPLICANT_TAGS = Set.of("50", "50B", "50F");
 
@@ -132,6 +125,7 @@ public class Mt700Parser {
         // The parser's job is to extract whatever's present; missing fields
         // become null and surface downstream as DOUBTS verdicts on rules that
         // need them.
+        applyTagValidation(raw);
 
         // --- Typed scalar extraction via Prowide Field* --------------------
 
@@ -627,9 +621,41 @@ public class Mt700Parser {
         return lt.substring(0, 8) + lt.substring(9, 12);
     }
 
-    /** Exposed for unit tests — keeps the mandatory set single-sourced. */
-    static Set<String> mandatoryTags() {
-        return Set.copyOf(MANDATORY_TAGS);
+    /** Exposed for unit tests — sourced from the YAML registry. */
+    Set<String> mandatoryTags() {
+        return Set.copyOf(tagMappings.mandatoryTags());
+    }
+
+    /**
+     * Apply per-tag {@code validation:} blocks from {@code lc-tag-mapping.yaml}.
+     * Pattern / max_length / min_length rules run on the raw tag value as it
+     * arrives off the wire. First failure throws {@link LcParseException} with
+     * field=":<tag>:" so the GlobalExceptionHandler can surface a clean 400.
+     */
+    private void applyTagValidation(Map<String, String> raw) {
+        for (var entry : raw.entrySet()) {
+            String tag = entry.getKey();
+            String value = entry.getValue();
+            var mapping = tagMappings.byTag(tag).orElse(null);
+            if (mapping == null || mapping.validation() == null) continue;
+            var v = mapping.validation();
+            String trimmed = value == null ? "" : value.trim();
+            if (v.minLength() != null && trimmed.length() < v.minLength()) {
+                throw new LcParseException(":" + tag + ":",
+                        "Tag :" + tag + ": value length " + trimmed.length()
+                                + " < min " + v.minLength());
+            }
+            if (v.maxLength() != null && trimmed.length() > v.maxLength()) {
+                throw new LcParseException(":" + tag + ":",
+                        "Tag :" + tag + ": value length " + trimmed.length()
+                                + " > max " + v.maxLength());
+            }
+            if (v.pattern() != null && !v.pattern().isBlank()
+                    && !Pattern.compile(v.pattern()).matcher(trimmed).matches()) {
+                throw new LcParseException(":" + tag + ":",
+                        "Tag :" + tag + ": value does not match pattern " + v.pattern());
+            }
+        }
     }
 
     /**

@@ -51,6 +51,9 @@ export function useStep(
 }
 
 function derivedStep(s: SessionState, configured: Set<string> | null): StepKey {
+  // Queued sessions belong on the Upload view (the QueueWaitCard renders
+  // there, side-by-side with the file preview the user already uploaded).
+  if (s.queueContext) return 'upload';
   const enabled = (k: StepKey) => !isStepSkipped(k, configured);
   const stageActive = (n: StageName) =>
     s.stages[n].status === 'running' || s.stages[n].status === 'done';

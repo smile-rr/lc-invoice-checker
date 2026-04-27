@@ -49,6 +49,21 @@ ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS lc_sha256        CHAR(64);
 ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS invoice_filename TEXT;
 ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS invoice_sha256   CHAR(64);
 
+-- Queue state machine — single-worker DB-backed queue.
+-- status now takes: QUEUED | RUNNING | COMPLETED | FAILED. Newly-uploaded
+-- sessions land as QUEUED with enqueued_at set; the JobDispatcher claims one
+-- at a time via SELECT … FOR UPDATE SKIP LOCKED, transitioning QUEUED → RUNNING
+-- (stamps dequeued_at) and finally → COMPLETED | FAILED.
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS enqueued_at  TIMESTAMP;
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS dequeued_at  TIMESTAMP;
+ALTER TABLE check_sessions ADD COLUMN IF NOT EXISTS queue_attempt INT NOT NULL DEFAULT 0;
+
+-- Partial index — almost all sessions are not in QUEUED state, so a partial
+-- index keeps the dispatcher dequeue cheap regardless of total session count.
+CREATE INDEX IF NOT EXISTS idx_sessions_queue
+    ON check_sessions (status, enqueued_at)
+    WHERE status = 'QUEUED';
+
 -- ---------------------------------------------------------------------------
 -- Unified pipeline step table — one row per step, any stage.
 --

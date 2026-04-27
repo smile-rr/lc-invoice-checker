@@ -1,5 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useConfirm } from '../../hooks/useConfirm';
+import { useQueueStatus } from '../../hooks/useQueueStatus';
+import { HealthDot } from './HealthIndicator';
 import { HistoryDropdown } from './HistoryDropdown';
 
 export function TopNav() {
@@ -7,6 +9,12 @@ export function TopNav() {
   const nav = useNavigate();
   const onSession = loc.pathname.startsWith('/session/');
   const { confirm, Dialog } = useConfirm();
+  // The chip is only useful when something is RUNNING — the hook keeps polling
+  // while the chip is visible AND while the HistoryDropdown is open (separate
+  // mount) and stops cleanly otherwise.
+  const queueStatus = useQueueStatus(true);
+  const runningId = queueStatus?.running?.[0] ?? null;
+  const queuedDepth = queueStatus?.queued?.length ?? 0;
 
   // The brand link and the "New Check" button both navigate to "/". When the
   // operator is currently viewing a session result, that navigation visually
@@ -41,7 +49,21 @@ export function TopNav() {
           <span className="text-teal-2 text-[11px] font-mono ml-1.5">UCP 600 + ISBP 821</span>
         </span>
       </Link>
-      <nav className="ml-auto flex items-center gap-1 text-xs">
+      <nav className="ml-auto flex items-center gap-2 text-xs">
+        <HealthDot />
+        {runningId && (
+          <button
+            onClick={() => nav(`/session/${runningId}`)}
+            className="font-mono text-[11px] px-2 py-1 rounded bg-teal-1/15 text-teal-2 hover:bg-teal-1/30 inline-flex items-center gap-1.5"
+            title={`Currently running: ${runningId}${queuedDepth > 0 ? ` · ${queuedDepth} queued` : ''}`}
+          >
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-teal-2 animate-pulse" />
+            <span>{runningId.slice(0, 8)} · running</span>
+            {queuedDepth > 0 && (
+              <span className="text-[10px] text-teal-2/70">+{queuedDepth} queued</span>
+            )}
+          </button>
+        )}
         <HistoryDropdown />
         <Link
           to="/"

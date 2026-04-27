@@ -70,7 +70,7 @@ public class TagMappingRegistry {
             }
             // The YAML key is the tag — re-stamp it onto the record so callers don't have to track both.
             TagMapping mapping = new TagMapping(tag, bare.fieldKeys(), bare.parser(),
-                    bare.mandatory(), bare.defaults());
+                    bare.mandatory(), bare.defaults(), bare.validation());
             for (String key : mapping.fieldKeys()) {
                 if (fieldPool.byKey(key).isEmpty()) {
                     throw new IllegalStateException("Tag :" + tag + ": references unknown field_key: " + key);

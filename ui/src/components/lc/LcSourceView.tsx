@@ -92,6 +92,7 @@ export function LcSourceView({
           value={b.text}
           pinned={selectedTag === b.tag}
           tone="source"
+          malformed={!b.tag.startsWith('block') && !isStrictTag(b.tag)}
           onClick={() => onSelect(selectedTag === b.tag ? null : b.tag)}
         />
       ))}
@@ -106,7 +107,9 @@ interface Block {
 
 /**
  * Mirror the backend's {@code ParsedRowProjector#buildSortKey}: envelope
- * blocks (block1/2/3:nnn) sort before body tags (1_<tag>).
+ * blocks (block1/2/3:nnn) sort before body tags (1_<tag>). Malformed tags
+ * (e.g. ":40Ad:") still get a key so they appear at their natural alphanumeric
+ * position next to their valid neighbours instead of being shoved to the end.
  */
 function sortKey(tag: string): string {
   if (tag.startsWith('block')) return '0_' + tag;
@@ -146,7 +149,12 @@ function parseBlocks(text: string): Block[] {
   // inside envelope content.
   const bodyMatch = text.match(/\{4:([\s\S]*?)-?\}\s*$/);
   const body = bodyMatch ? bodyMatch[1] : text;
-  const tagRe = /:(\d{2}[A-Z]?):/g;
+  // Line-anchored tag detector — accepts ANY ":xxx:" at line start (up to 5
+  // chars between colons) so malformed tags like ":40Ad:" become their own
+  // row instead of being silently glued into the previous tag's value.
+  // The strict-format check (and a `malformed` flag for the row UI) lives in
+  // the consumer.
+  const tagRe = /^:([^:\s]{1,5}):/gm;
   const matches: Array<{ tag: string; index: number }> = [];
   let t: RegExpExecArray | null;
   while ((t = tagRe.exec(body)) !== null) {
@@ -162,4 +170,9 @@ function parseBlocks(text: string): Block[] {
   }
 
   return out;
+}
+
+/** True for tags that fit strict SWIFT format (2 digits + optional uppercase letter). */
+export function isStrictTag(tag: string): boolean {
+  return /^\d{2}[A-Z]?$/.test(tag);
 }

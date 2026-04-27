@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.lc.checker.domain.result.Summary;
 
 /**
@@ -67,6 +68,19 @@ public class GlobalExceptionHandler {
                 .body(new ApiError("VALIDATION_FAILED", "request",
                         "Missing multipart part: " + e.getRequestPartName(),
                         e.getRequestPartName(), mdcSession()));
+    }
+
+    /**
+     * Spring throws this when no @RequestMapping matches and the request falls
+     * through to the static-resource handler with no static file either. Map
+     * to a clean 404 instead of letting it land in the generic 500 handler —
+     * "this URL does not exist" is a 4xx, not a server fault.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> noResource(NoResourceFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiError("NOT_FOUND", null,
+                        "No handler for " + e.getResourcePath(), null, mdcSession()));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

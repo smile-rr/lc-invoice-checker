@@ -2,28 +2,23 @@ package com.lc.checker.api.controller;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
-import com.lc.checker.pipeline.LcCheckPipeline;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
 import com.lc.checker.infra.persistence.CheckSessionStore.SessionFileRefs;
+import com.lc.checker.infra.queue.JobDispatcher;
 import com.lc.checker.infra.storage.InvoiceFileStore;
 import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEventBus;
-import com.lc.checker.infra.stream.CheckEventPublisher;
-import io.opentelemetry.context.Context;
-import io.opentelemetry.context.Scope;
+import com.lc.checker.infra.validation.InputValidator;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,26 +30,23 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import com.lc.checker.infra.observability.MdcFilter;
 
 /**
- * Streaming counterpart to {@link LcCheckController}. The UI flow is:
+ * Upload + SSE entry points for the LC check.
  *
+ * <p>Flow:
  * <ol>
- *   <li>{@code POST /api/v1/lc-check/start} — multipart {lc, invoice}; returns the
- *       {@code sessionId} immediately and submits the pipeline to a background
- *       executor.</li>
+ *   <li>{@code POST /api/v1/lc-check/start} — multipart {lc, invoice};
+ *       validates the input, persists files to MinIO, INSERTs the session row
+ *       in {@code QUEUED} state, and returns the session id immediately.
+ *       The actual pipeline runs later, claimed by {@link JobDispatcher}.</li>
  *   <li>{@code GET /api/v1/lc-check/{sessionId}/stream} — SSE, fed by
- *       {@link CheckEventBus}; replays buffered events then streams live until
- *       {@code report.complete}.</li>
+ *       {@link CheckEventBus}; while QUEUED, the dispatcher emits queue
+ *       position events; once dequeued, normal pipeline events flow.</li>
  *   <li>{@code GET /api/v1/lc-check/{sessionId}/lc-raw} and
  *       {@code GET /api/v1/lc-check/{sessionId}/invoice} — serve the original
  *       uploaded files back for side-by-side rendering in the UI.</li>
  * </ol>
- *
- * <p>Files are held in an in-memory map keyed by sessionId. The existing
- * {@code CheckSessionStore} TTL (60 min) is the de-facto eviction bound — we
- * clean up on pipeline completion too.
  */
 @RestController
 @RequestMapping("/api/v1/lc-check")
@@ -64,36 +56,38 @@ public class LcCheckStreamController {
     /** SseEmitter timeout — give a very long window; the bus closes cleanly on completion. */
     private static final long SSE_TIMEOUT_MS = 30L * 60 * 1000; // 30 min
 
-    private final LcCheckPipeline pipeline;
     private final CheckEventBus bus;
-    private final Executor executor;
     private final CheckSessionStore store;
     private final InvoiceFileStore fileStore;
+    private final InputValidator validator;
+    private final JobDispatcher dispatcher;
 
     /**
-     * Session-scoped upload bundle. The in-memory map is the hot-path cache —
-     * MinIO is the durable backing store keyed by SHA-256. Both are populated
-     * synchronously on {@code /start}; reads prefer memory and fall back to
-     * MinIO via {@link CheckSessionStore#findSessionFiles}.
+     * Session-scoped upload bundle, kept hot for the {@code /lc-raw} +
+     * {@code /invoice} endpoints. MinIO is the durable backing store keyed by
+     * SHA-256; this is just a cache to avoid a round-trip on the request that
+     * just uploaded.
      */
     public record SessionFiles(String lcText, String invoiceFilename, byte[] invoiceBytes) {}
 
-    private final Map<String, SessionFiles> filesBySession = new ConcurrentHashMap<>();
+    private final java.util.Map<String, SessionFiles> filesBySession = new ConcurrentHashMap<>();
 
-    public LcCheckStreamController(LcCheckPipeline pipeline,
-                                    CheckEventBus bus,
-                                    @Qualifier("lcCheckExecutor") Executor executor,
+    public LcCheckStreamController(CheckEventBus bus,
                                     CheckSessionStore store,
-                                    InvoiceFileStore fileStore) {
-        this.pipeline = pipeline;
+                                    InvoiceFileStore fileStore,
+                                    InputValidator validator,
+                                    JobDispatcher dispatcher) {
         this.bus = bus;
-        this.executor = executor;
         this.store = store;
         this.fileStore = fileStore;
+        this.validator = validator;
+        this.dispatcher = dispatcher;
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record StartResponse(String sessionId,
+                                 String status,
+                                 int queuePosition,
                                  String invoiceFilename,
                                  long invoiceBytes,
                                  int lcLength) {}
@@ -104,17 +98,21 @@ public class LcCheckStreamController {
             @RequestPart("invoice") MultipartFile invoice) throws IOException {
         String sessionId = MDC.get(MdcKeys.SESSION_ID);
         if (sessionId == null || sessionId.isBlank()) {
-            // Fallback — MdcFilter normally populates this. Keeps us safe if a client
-            // bypasses the filter chain (e.g. integration test).
             sessionId = UUID.randomUUID().toString();
         }
 
         byte[] lcBytes = lc.getBytes();
-        String lcText = new String(lcBytes, StandardCharsets.UTF_8);
         byte[] pdfBytes = invoice.getBytes();
         String pdfName = invoice.getOriginalFilename();
         String lcName  = lc.getOriginalFilename();
 
+        // Pre-pipeline validation. Throws on bad input — GlobalExceptionHandler
+        // converts to a 400 ApiError before we touch storage or the queue.
+        String lcText = new String(lcBytes, StandardCharsets.UTF_8);
+        validator.validateLcText(lcText);
+        validator.validatePdf(pdfBytes);
+
+        // Cache uploaded bytes for the immediate /lc-raw + /invoice reads.
         filesBySession.put(sessionId, new SessionFiles(lcText, pdfName, pdfBytes));
 
         // Content-address by SHA-256 so identical re-uploads hit the same blob.
@@ -123,52 +121,28 @@ public class LcCheckStreamController {
         String lcSha      = Sha256.hex(lcBytes);
         String invoiceSha = Sha256.hex(pdfBytes);
 
-        // Persist filenames + hashes BEFORE the pipeline runs. The session row
-        // may not exist yet (LcParseStage creates it later) — recordSessionFiles
-        // upserts a stub if needed.
-        store.recordSessionFiles(sessionId, lcName, lcSha, pdfName, invoiceSha);
-
-        // Sync put with bounded timeout (configured on the S3Client). Failures
-        // are logged inside the file store; we don't 502 the request because
-        // the pipeline can still complete and live render works from memory.
+        // Durable persistence: bytes to MinIO first (so the dispatcher can later
+        // re-read them), then INSERT the session row directly in QUEUED state,
+        // then attach file metadata. Enqueue-first avoids a momentary RUNNING
+        // phantom row that would briefly show up in queueSnapshot().
         fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
         fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
+        store.enqueueSession(sessionId);
+        store.recordSessionFiles(sessionId, lcName, lcSha, pdfName, invoiceSha);
+        dispatcher.onEnqueued(sessionId);
 
-        log.info("lc-check/start: session={} lcBytes={} invoiceBytes={} invoiceName={} lcSha={} invSha={}",
+        // Compute queue position for the just-enqueued session so the UI's
+        // first render of the session page can show "you're #N" without a
+        // round-trip to /queue/status.
+        var snap = store.queueSnapshot();
+        int position = snap.queued().indexOf(sessionId) + 1;
+
+        log.info("lc-check/start: session={} lcBytes={} invoiceBytes={} invoiceName={} lcSha={} invSha={} queuePos={}",
                 sessionId, lc.getSize(), invoice.getSize(), pdfName,
-                lcSha.substring(0, 12), invoiceSha.substring(0, 12));
-
-        final String sid = sessionId;
-        final CheckEventPublisher publisher = bus.publisherFor(sid);
-        publisher.status("session", "started",
-                "Run started for invoice " + (pdfName == null ? "" : pdfName),
-                Map.of("sessionId", sid,
-                        "invoiceFilename", pdfName == null ? "" : pdfName,
-                        "invoiceBytes", pdfBytes.length));
-
-        // Capture the OTel context (which contains the current HTTP request
-        // span). Restoring it inside the executor task means the session span
-        // we create in pipeline.run() becomes a child of the request span,
-        // and every subsequent rule / extractor / LLM span lives in the SAME
-        // trace tree. Without this, the pipeline runs in a thread that has
-        // no current OTel context and starts an entirely separate trace.
-        Context capturedOtelContext = Context.current();
-        executor.execute(() -> {
-            MDC.put(MdcKeys.SESSION_ID, sid);
-            try (Scope scope = capturedOtelContext.makeCurrent()) {
-                pipeline.run(sid, lcText, pdfBytes, pdfName, publisher);
-            } catch (RuntimeException e) {
-                // The pipeline already emits per-stage error events and persists
-                // the failure. We just need to close out the stream.
-                log.error("Streaming pipeline failed for session={}: {}", sid, e.getMessage());
-            } finally {
-                bus.complete(sid);
-                MDC.remove(MdcKeys.SESSION_ID);
-            }
-        });
+                lcSha.substring(0, 12), invoiceSha.substring(0, 12), position);
 
         return ResponseEntity.ok(new StartResponse(
-                sessionId, pdfName, pdfBytes.length, lcText.length()));
+                sessionId, "QUEUED", position, pdfName, pdfBytes.length, lcText.length()));
     }
 
     @GetMapping(path = "/{sessionId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

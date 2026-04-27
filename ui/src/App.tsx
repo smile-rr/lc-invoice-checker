@@ -1,4 +1,5 @@
 import { Route, Routes, useParams } from 'react-router-dom';
+import { HealthIndicator } from './components/shell/HealthIndicator';
 import { TopNav } from './components/shell/TopNav';
 import { UploadPage } from './pages/UploadPage';
 import { SessionPage } from './pages/SessionPage';
@@ -18,6 +19,7 @@ export function App() {
   return (
     <div className="h-dvh flex flex-col overflow-hidden">
       <TopNav />
+      <HealthIndicator />
       <main className="flex-1 min-h-0 overflow-hidden">
         <Routes>
           <Route path="/" element={<UploadPage />} />

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listSessions } from '../../api/client';
+import { useQueueStatus } from '../../hooks/useQueueStatus';
+import { healthBus } from '../../lib/healthBus';
 import type { SessionSummary } from '../../types';
 
 /**
@@ -20,6 +22,14 @@ export function HistoryDropdown() {
   const [loading, setLoading] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
+  // Queue status drives the per-row "Queued · #N" position. Polling only
+  // happens while the dropdown is open — that's the only consumer here.
+  const queueStatus = useQueueStatus(open);
+  const queuePositions = useMemo(() => {
+    const m = new Map<string, number>();
+    queueStatus?.queued?.forEach((q) => m.set(q.session_id, q.position));
+    return m;
+  }, [queueStatus]);
 
   // Single source of truth for "fetch + update" — used both by the on-open
   // effect and the refresh button. Reuses the running-list state on refresh
@@ -44,6 +54,20 @@ export function HistoryDropdown() {
   useEffect(() => {
     if (!open) return;
     void load();
+  }, [open, load]);
+
+  // Auto-refetch when the backend recovers — otherwise an inline "Failed to
+  // load" error sticks until the user manually clicks Refresh, even though
+  // the API is back up.
+  useEffect(() => {
+    if (!open) return;
+    let prev = healthBus.get().status;
+    return healthBus.subscribe((s) => {
+      if (prev !== 'up' && s.status === 'up') {
+        void load();
+      }
+      prev = s.status;
+    });
   }, [open, load]);
 
   useEffect(() => {
@@ -83,7 +107,7 @@ export function HistoryDropdown() {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1.5 w-[420px] max-h-[70vh] overflow-y-auto bg-paper text-navy-1 rounded-card border border-line shadow-xl animate-fadein"
+          className="absolute right-0 top-full mt-1.5 w-[420px] max-h-[70vh] overflow-y-auto bg-paper text-navy-1 rounded-card border border-line shadow-xl animate-fadein z-50"
         >
           <div className="px-3 py-2 border-b border-line flex items-center justify-between">
             <span className="text-xs uppercase tracking-caps text-muted">Recent sessions</span>
@@ -142,7 +166,12 @@ export function HistoryDropdown() {
               onClick={() => handleRowClick(s)}
               className="w-full text-left px-3 py-2.5 border-b border-line/60 last:border-0 hover:bg-slate2 flex items-start gap-2"
             >
-              <StatusPill status={s.status} compliant={s.compliant} discrepancies={s.discrepancies} />
+              <StatusPill
+                status={s.status}
+                compliant={s.compliant}
+                discrepancies={s.discrepancies}
+                queuePosition={queuePositions.get(s.session_id)}
+              />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{displayName(s)}</div>
                 <div className="text-xs text-muted truncate mt-0.5">
@@ -179,15 +208,20 @@ function StatusPill({
   status,
   compliant,
   discrepancies,
+  queuePosition,
 }: {
   status: string;
   compliant: boolean | null;
   discrepancies: number;
+  queuePosition?: number;
 }) {
   // Keep the dot small — it's a leading glyph next to the title.
   let cls = 'bg-muted';
   let label = status;
-  if (status === 'RUNNING') {
+  if (status === 'QUEUED') {
+    cls = 'bg-status-gold animate-blink';
+    label = queuePosition ? `Queued · #${queuePosition}` : 'Queued';
+  } else if (status === 'RUNNING') {
     cls = 'bg-status-blue animate-blink';
     label = 'Running';
   } else if (status === 'FAILED') {

@@ -23,11 +23,17 @@ public record TagMapping(
         List<String> fieldKeys,
         ParserType parser,
         boolean mandatory,
-        Map<String, Object> defaults
+        Map<String, Object> defaults,
+        Validation validation
 ) {
 
     public TagMapping {
         fieldKeys = fieldKeys == null ? List.of() : List.copyOf(fieldKeys);
         defaults = defaults == null ? Map.of() : Map.copyOf(defaults);
+    }
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Validation(String pattern, Integer maxLength, Integer minLength) {
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useCheckSession } from '../hooks/useCheckSession';
 import { usePipelineConfig } from '../hooks/usePipelineConfig';
 import { PipelineFlow } from '../components/shell/PipelineFlow';
@@ -9,6 +9,7 @@ import { LcAuditTab } from '../components/tabs/LcAuditTab';
 import { InvoiceAuditTab } from '../components/tabs/InvoiceAuditTab';
 import { ComplianceCheckPanel } from '../components/check/ComplianceCheckPanel';
 import { ReviewTab } from '../components/tabs/ReviewTab';
+import { QueueWaitCard } from '../components/queue/QueueWaitCard';
 import { UploadStep } from '../components/upload/UploadStep';
 
 /**
@@ -23,9 +24,11 @@ import { UploadStep } from '../components/upload/UploadStep';
 export function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const sessionId = id ?? null;
+  const nav = useNavigate();
   const state = useCheckSession(sessionId);
   const pipeline = usePipelineConfig();
   const [step, setStep] = useStep(state, pipeline.configuredStages);
+  const queued = !!state.queueContext;
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -78,7 +81,20 @@ export function SessionPage() {
       )}
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        {step === 'upload' && <Scrollable><UploadStep primaryRunCta={true} /></Scrollable>}
+        {step === 'upload' && (
+          <Scrollable>
+            {queued && state.queueContext && (
+              <div className="max-w-[1600px] mx-auto px-8 pt-5">
+                <QueueWaitCard
+                  sessionId={sessionId}
+                  context={state.queueContext}
+                  onCancelled={() => nav('/')}
+                />
+              </div>
+            )}
+            <UploadStep primaryRunCta={true} />
+          </Scrollable>
+        )}
         {step === 'lc' && <Scrollable><LcAuditTab sessionId={sessionId} lc={state.lc} /></Scrollable>}
         {step === 'invoice' && (
           <Scrollable><InvoiceAuditTab sessionId={sessionId} invoice={state.invoice} /></Scrollable>

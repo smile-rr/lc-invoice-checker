@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { healthBus } from '../lib/healthBus';
 import type { Event } from '../types';
 
 const EVENT_NAMES: Array<Event['type']> = ['status', 'rule', 'error', 'complete'];
@@ -38,7 +39,12 @@ export function useSseEvents(
     }
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) return;
+      // SSE errors short of close mean the browser couldn't reach the
+      // endpoint or got a non-2xx response — surface as a backend-down
+      // signal so HealthIndicator picks it up immediately.
+      healthBus.markDown('SSE connection error');
     };
+    es.onopen = () => healthBus.markUp();
 
     return () => {
       for (const [type, listener] of listeners) {

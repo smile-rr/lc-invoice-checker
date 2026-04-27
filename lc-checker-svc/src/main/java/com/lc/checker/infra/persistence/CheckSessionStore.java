@@ -171,6 +171,48 @@ public interface CheckSessionStore {
         return List.of();
     }
 
+    // ── Queue (single-worker DB-backed dispatcher) ─────────────────────────
+
+    /** Identity of a job claimed off the queue. Bytes live in MinIO under the SHA-256 keys. */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    record QueuedJob(String sessionId,
+                     String lcFilename, String lcSha256,
+                     String invoiceFilename, String invoiceSha256) {}
+
+    /** A snapshot of the queue at a point in time. */
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    record QueueSnapshot(List<String> running, List<String> queued) {
+        public static final QueueSnapshot EMPTY = new QueueSnapshot(List.of(), List.of());
+    }
+
+    /**
+     * Insert a fresh row in {@code QUEUED} state. The session row will be
+     * filled in further by {@link #recordSessionFiles} (called from the same
+     * upload-only handler) and {@link #createSession} (called by the LC parse
+     * stage once the LC reference is known).
+     */
+    default void enqueueSession(String sessionId) { /* no-op for cache stores */ }
+
+    /**
+     * Atomically claim the oldest QUEUED row, transitioning it to RUNNING.
+     * Uses {@code FOR UPDATE SKIP LOCKED} so only one dispatcher across the
+     * cluster wins. Returns empty when the queue is empty.
+     */
+    default Optional<QueuedJob> dequeueOne() { return Optional.empty(); }
+
+    /** Mark a session FAILED and stamp completed_at. Idempotent. */
+    default void markFailed(String sessionId, String error) { /* no-op */ }
+
+    /** Snapshot of running + queued session ids, ordered by enqueued_at. */
+    default QueueSnapshot queueSnapshot() { return QueueSnapshot.EMPTY; }
+
+    /**
+     * Cancel a session: if QUEUED, transition to FAILED with the given reason.
+     * Returns true on a cancel; false if the session is already RUNNING /
+     * COMPLETED / FAILED.
+     */
+    default boolean cancelQueued(String sessionId, String reason) { return false; }
+
     // ── Unified event log ──────────────────────────────────────────────────
 
     /**

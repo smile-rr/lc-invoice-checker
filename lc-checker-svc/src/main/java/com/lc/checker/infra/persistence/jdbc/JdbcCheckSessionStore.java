@@ -441,6 +441,91 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
         }
     }
 
+    // ── Queue ───────────────────────────────────────────────────────────────
+
+    @Override
+    public void enqueueSession(String sessionId) {
+        // Upsert a QUEUED row. recordSessionFiles is called separately in the
+        // controller path and may have already inserted file metadata; in that
+        // case we just flip the row to QUEUED + stamp enqueued_at.
+        jdbc.update("""
+                INSERT INTO check_sessions (id, status, enqueued_at, created_at)
+                VALUES (?::uuid, 'QUEUED', NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    status      = 'QUEUED',
+                    enqueued_at = NOW()
+                """, sessionId);
+        log.debug("enqueueSession: session={}", sessionId);
+    }
+
+    @Override
+    public Optional<QueuedJob> dequeueOne() {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                    UPDATE check_sessions
+                    SET    status = 'RUNNING',
+                           dequeued_at = NOW(),
+                           queue_attempt = queue_attempt + 1
+                    WHERE  id = (
+                        SELECT id FROM check_sessions
+                        WHERE  status = 'QUEUED'
+                        ORDER BY enqueued_at
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    RETURNING id::text AS id, lc_filename, lc_sha256,
+                              invoice_filename, invoice_sha256
+                    """,
+                    (rs, i) -> new QueuedJob(
+                            rs.getString("id"),
+                            rs.getString("lc_filename"),
+                            rs.getString("lc_sha256"),
+                            rs.getString("invoice_filename"),
+                            rs.getString("invoice_sha256"))));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public void markFailed(String sessionId, String error) {
+        jdbc.update("""
+                UPDATE check_sessions
+                SET    status = 'FAILED',
+                       error  = COALESCE(?, error),
+                       completed_at = NOW()
+                WHERE  id = ?::uuid
+                  AND  status NOT IN ('COMPLETED', 'FAILED')
+                """, error, sessionId);
+        log.debug("markFailed: session={} reason={}", sessionId, error);
+    }
+
+    @Override
+    public QueueSnapshot queueSnapshot() {
+        List<String> running = jdbc.queryForList("""
+                SELECT id::text FROM check_sessions WHERE status = 'RUNNING'
+                ORDER BY dequeued_at NULLS LAST, created_at
+                """, String.class);
+        List<String> queued = jdbc.queryForList("""
+                SELECT id::text FROM check_sessions WHERE status = 'QUEUED'
+                ORDER BY enqueued_at
+                """, String.class);
+        return new QueueSnapshot(running, queued);
+    }
+
+    @Override
+    public boolean cancelQueued(String sessionId, String reason) {
+        int rows = jdbc.update("""
+                UPDATE check_sessions
+                SET    status = 'FAILED',
+                       error  = ?,
+                       completed_at = NOW()
+                WHERE  id = ?::uuid
+                  AND  status = 'QUEUED'
+                """, reason, sessionId);
+        return rows > 0;
+    }
+
     // ── Unified event log (Step 7 envelope) ────────────────────────────────
 
     @Override

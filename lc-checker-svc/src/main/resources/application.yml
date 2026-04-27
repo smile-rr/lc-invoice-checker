@@ -158,6 +158,15 @@ springdoc:
   default-produces-media-type: application/json
   packagesToScan: com.lc.checker.api
 
+# --- Pipeline queue ------------------------------------------------------------
+# Single-worker DB-backed queue. JobDispatcher polls for QUEUED rows every
+# poll-delay-ms and runs at most `concurrency` sessions in parallel.
+# Bump concurrency to 2 or 3 if the host can comfortably support more parallel
+# extractor pipelines; default 1 for predictable POC behaviour.
+pipeline:
+  concurrency: ${PIPELINE_CONCURRENCY:1}
+  poll-delay-ms: ${PIPELINE_POLL_DELAY_MS:500}
+
 # --- Actuator + Prometheus + Tracing → Langfuse --------------------------------
 # Tracing pipeline:
 #   Spring AI ChatClient.call → Micrometer observation → OTel span →

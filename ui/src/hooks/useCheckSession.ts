@@ -7,6 +7,7 @@ import type {
   Event,
   InvoiceDocument,
   LcDocument,
+  QueueContext,
   StageName,
 } from '../types';
 
@@ -38,6 +39,14 @@ export type SessionState = {
   report?: DiscrepancyReport;
   /** Pipeline halt — backend stops emitting after this. */
   error?: { message: string; stage?: string };
+  /** Set while the session is QUEUED. Cleared once any non-queue stage starts. */
+  queueContext?: QueueContext | null;
+};
+
+type QueuePayload = {
+  position?: number;
+  depth?: number;
+  running_session_id?: string | null;
 };
 
 function buildInitialStages(): Record<StageName, StageInfo> {
@@ -68,6 +77,19 @@ export function reduce(state: SessionState, action: Action): SessionState {
   const ev = action.event;
   switch (ev.type) {
     case 'status': {
+      // Queue position events use a synthetic stage="queue" that's not part
+      // of the pipeline stage chain; intercept before touching stages map.
+      if ((ev.stage as string) === 'queue') {
+        const p = (ev.data ?? {}) as QueuePayload;
+        return {
+          ...state,
+          queueContext: {
+            position: typeof p.position === 'number' ? p.position : 0,
+            depth: typeof p.depth === 'number' ? p.depth : 0,
+            running_session_id: p.running_session_id ?? null,
+          },
+        };
+      }
       const stage = ev.stage as StageName;
       // started / running both keep the spinner active and just refresh the
       // message; completed flips to done. Anything else falls back to running.
@@ -77,6 +99,10 @@ export function reduce(state: SessionState, action: Action): SessionState {
         : 'running';
       const next: SessionState = {
         ...state,
+        // Any pipeline stage starting clears the queue context — we've left
+        // the waiting room. (Idempotent: replays of an already-running session
+        // don't bring back queueContext from earlier queue events.)
+        queueContext: null,
         stages: {
           ...state.stages,
           [stage]: { status, message: ev.message, data: ev.data },
@@ -139,6 +165,22 @@ export function useCheckSession(sessionId: string | null) {
         if (cancelled) return;
         for (const event of trace.events) {
           dispatch({ kind: 'event', event });
+        }
+        if (trace.queue_context) {
+          // Synthesize a queue status event so the reducer's existing handler
+          // populates state without a new action shape.
+          dispatch({
+            kind: 'event',
+            event: {
+              type: 'status',
+              seq: 0,
+              ts: new Date().toISOString(),
+              stage: 'queue' as StageName,
+              state: 'running',
+              message: '',
+              data: trace.queue_context,
+            },
+          });
         }
       })
       .catch(() => {

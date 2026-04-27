@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { getLcRaw, invoiceUrl, startCheck } from '../../api/client';
+import { ApiError, getLcRaw, invoiceUrl, startCheck } from '../../api/client';
 import { fetchSamplePair, SAMPLES, type SamplePair, type ScenarioKind } from '../../data/samples';
 import { useConfirm } from '../../hooks/useConfirm';
+import { useMandatoryTags } from '../../hooks/useMandatoryTags';
+import { validateInvoiceFile, validateLcFile } from '../../lib/validation';
 import { SamplePreview } from './SamplePreview';
 
 interface Props {
@@ -19,6 +21,8 @@ export function UploadStep({ primaryRunCta = true }: Props) {
   const [invoice, setInvoice] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const { mandatory } = useMandatoryTags();
   // One-shot guard: only ask for confirmation the first time the operator
   // mutates inputs while viewing an existing session. Once they OK the
   // change, subsequent picks (a different sample, swapping a file) don't
@@ -76,6 +80,24 @@ export function UploadStep({ primaryRunCta = true }: Props) {
     return ok;
   }
 
+  // Re-run client-side validation whenever the operator swaps either file.
+  // Errors are accumulated so users see all problems at once instead of fixing
+  // one and bumping into the next on the next attempt.
+  useEffect(() => {
+    let cancelled = false;
+    if (!lc && !invoice) {
+      setValidationErrors([]);
+      return;
+    }
+    (async () => {
+      const errs: string[] = [];
+      if (lc) errs.push(...(await validateLcFile(lc, { mandatoryTags: mandatory })));
+      if (invoice) errs.push(...(await validateInvoiceFile(invoice)));
+      if (!cancelled) setValidationErrors(errs);
+    })();
+    return () => { cancelled = true; };
+  }, [lc, invoice, mandatory]);
+
   async function setLcGuarded(f: File) {
     if (!(await ensureConfirmed())) return;
     setLc(f);
@@ -105,6 +127,10 @@ export function UploadStep({ primaryRunCta = true }: Props) {
 
   async function run() {
     if (!lc || !invoice) return;
+    if (validationErrors.length > 0) {
+      setErr('Resolve the validation issues above before submitting.');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -116,7 +142,15 @@ export function UploadStep({ primaryRunCta = true }: Props) {
       // SSE event has arrived yet.
       nav(`/session/${r.session_id}`);
     } catch (e) {
-      setErr((e as Error).message);
+      // Backend validation errors arrive as ApiError with status=400 and
+      // a structured body — surface the server's `message` directly so the
+      // user sees the same shape as a client-side validation failure.
+      if (e instanceof ApiError && e.body && typeof e.body === 'object') {
+        const body = e.body as { message?: string; field?: string };
+        setErr([body.field, body.message].filter(Boolean).join(' — ') || e.message);
+      } else {
+        setErr((e as Error).message);
+      }
       setBusy(false);
     }
   }
@@ -134,15 +168,36 @@ export function UploadStep({ primaryRunCta = true }: Props) {
           onLcChange={setLcGuarded}
           onInvoiceChange={setInvoiceGuarded}
           onClear={() => {
+            // Inside a session, "Reset" must leave the session URL too —
+            // otherwise SessionPage's tabs keep replaying the previous
+            // session's trace into the new file selection. Navigating to '/'
+            // unmounts SessionPage cleanly and resets all derived state.
+            if (insideSession) {
+              nav('/');
+              return;
+            }
             setLc(null);
             setInvoice(null);
             setErr(null);
           }}
           onRun={run}
+          runDisabled={validationErrors.length > 0}
         />
-        {err && (
-          <div className="max-w-[1600px] mx-auto px-8 pb-4">
-            <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">{err}</div>
+        {(err || validationErrors.length > 0) && (
+          <div className="max-w-[1600px] mx-auto px-8 pb-4 space-y-2">
+            {validationErrors.length > 0 && (
+              <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">
+                <div className="font-mono text-[10px] uppercase tracking-widest mb-1">
+                  Pre-submit validation
+                </div>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {validationErrors.map((m) => <li key={m}>{m}</li>)}
+                </ul>
+              </div>
+            )}
+            {err && (
+              <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">{err}</div>
+            )}
           </div>
         )}
         {Dialog}
@@ -180,7 +235,7 @@ export function UploadStep({ primaryRunCta = true }: Props) {
            the page re-renders into SamplePreview above and this branch unmounts. */}
       <div className="flex items-center gap-3">
         <button
-          disabled={!lc || !invoice || busy}
+          disabled={!lc || !invoice || busy || validationErrors.length > 0}
           onClick={run}
           className={[
             'px-5 py-2.5 rounded-btn font-medium',
@@ -224,6 +279,16 @@ export function UploadStep({ primaryRunCta = true }: Props) {
         </div>
       </div>
 
+      {validationErrors.length > 0 && (
+        <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">
+          <div className="font-mono text-[10px] uppercase tracking-widest mb-1">
+            Pre-submit validation
+          </div>
+          <ul className="list-disc list-inside space-y-0.5">
+            {validationErrors.map((m) => <li key={m}>{m}</li>)}
+          </ul>
+        </div>
+      )}
       {err && (
         <div className="p-3 rounded-btn bg-status-redSoft text-status-red text-sm">{err}</div>
       )}

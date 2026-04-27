@@ -176,8 +176,10 @@ public class LcCheckPipeline {
         Instant started = Instant.now();
         long pipelineStart = System.currentTimeMillis();
 
-        // Stage 0 — input validation. No session row yet, so failure surfaces
-        // straight to the controller without any DB write.
+        // Pre-pipeline validation now runs in the upload controller before the
+        // session is queued, so by the time we get here the input is known
+        // good. Re-run it as a defensive belt-and-braces check; cheap relative
+        // to the rest of the pipeline.
         validator.validateLcText(lcText);
         validator.validatePdf(pdfBytes);
 

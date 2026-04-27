@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import type { CheckResult, CheckStatus, RuleSummary } from '../../types';
+import { CitationPopover } from './CitationPopover';
 
 interface Props {
   /** The completed check result. {@code null} means the rule hasn't run yet
@@ -8,7 +8,6 @@ interface Props {
   /** Catalog metadata for this rule. */
   rule: RuleSummary;
   failuresOnly: boolean;
-  onAuthorityClick?: (ref: string) => void;
 }
 
 const METHOD_LABEL: Record<string, string> = {
@@ -57,7 +56,7 @@ function CategoryBadge({ kind }: { kind: string | null | undefined }) {
 // neutral. This keeps the eye on the verdict, not on a competing wash of
 // reds and greens.
 
-export function RuleCard({ check, rule, failuresOnly, onAuthorityClick }: Props) {
+export function RuleCard({ check, rule, failuresOnly }: Props) {
   if (check === null) {
     return <PendingRuleCard rule={rule} />;
   }
@@ -122,15 +121,15 @@ export function RuleCard({ check, rule, failuresOnly, onAuthorityClick }: Props)
         {(ucpRef || isbpRef) && (
           <>
             <span aria-hidden className="text-line select-none">›</span>
-            {ucpRef  && <CitationChip ref_={ucpRef}  onClick={onAuthorityClick} />}
-            {isbpRef && <CitationChip ref_={isbpRef} onClick={onAuthorityClick} />}
+            {ucpRef  && <CitationPopover reference={ucpRef}  excerpt={rule.ucp_excerpt} />}
+            {isbpRef && <CitationPopover reference={isbpRef} excerpt={rule.isbp_excerpt} />}
           </>
         )}
       </div>
 
-      {/* Data + result + authority — all neutral except the verdict word. */}
+      {/* Data + result. The reference chips above carry the rule basis via
+          their own popover, so no separate authority footnote here. */}
       <DataGrid check={check} tone={tone} />
-      <AuthorityFootnote rule={rule} ucpRef={ucpRef} isbpRef={isbpRef} />
     </article>
   );
 }
@@ -169,8 +168,8 @@ function PendingRuleCard({ rule }: { rule: RuleSummary }) {
         {(ucpRef || isbpRef) && (
           <>
             <span aria-hidden className="text-line select-none">›</span>
-            {ucpRef && <span className="font-mono text-[11px] text-muted">{ucpRef}</span>}
-            {isbpRef && <span className="font-mono text-[11px] text-muted">{isbpRef}</span>}
+            {ucpRef  && <CitationPopover reference={ucpRef}  excerpt={rule.ucp_excerpt} />}
+            {isbpRef && <CitationPopover reference={isbpRef} excerpt={rule.isbp_excerpt} />}
           </>
         )}
       </div>
@@ -178,20 +177,6 @@ function PendingRuleCard({ rule }: { rule: RuleSummary }) {
         Pending verdict…
       </div>
     </article>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Citation chip — muted by default, hover hint reveals it's interactive
-// ---------------------------------------------------------------------------
-
-function CitationChip({ ref_, onClick }: { ref_: string; onClick?: (ref: string) => void }) {
-  const cls = 'font-mono text-[11px] text-muted hover:text-navy-1 hover:underline underline-offset-2';
-  if (!onClick) return <span className="font-mono text-[11px] text-muted">{ref_}</span>;
-  return (
-    <button type="button" onClick={() => onClick(ref_)} className={cls} title={`Filter to ${ref_}`}>
-      {ref_}
-    </button>
   );
 }
 
@@ -252,59 +237,6 @@ function Value({ value }: { value: string | null }) {
   return (
     <div className="font-mono text-sm text-navy-1 whitespace-pre-wrap break-words leading-relaxed">
       {value}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Authority footnote — muted, expandable
-// ---------------------------------------------------------------------------
-
-function AuthorityFootnote({
-  rule, ucpRef, isbpRef,
-}: {
-  rule: RuleSummary | undefined;
-  ucpRef: string | null;
-  isbpRef: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const ucpEx    = rule?.ucp_excerpt ?? null;
-  const isbpEx   = rule?.isbp_excerpt ?? null;
-  if (!ucpRef && !isbpRef) return null;
-  const hasExcerpt = !!(ucpEx || isbpEx);
-
-  return (
-    <div className="px-4 py-2 bg-slate2/40">
-      <button
-        type="button"
-        onClick={() => hasExcerpt && setOpen((v) => !v)}
-        disabled={!hasExcerpt}
-        className={[
-          'flex items-center gap-2 font-sans text-[11px]',
-          hasExcerpt ? 'text-muted hover:text-navy-1 cursor-pointer' : 'text-muted',
-        ].join(' ')}
-      >
-        {hasExcerpt && <span aria-hidden className="text-xs">{open ? '▾' : '▸'}</span>}
-        <span className="font-semibold uppercase tracking-[0.08em]">Authority</span>
-        {ucpRef  && <span className="font-mono text-navy-1">{ucpRef}</span>}
-        {ucpRef && isbpRef && <span aria-hidden className="text-muted">·</span>}
-        {isbpRef && <span className="font-mono text-navy-1">{isbpRef}</span>}
-      </button>
-      {open && hasExcerpt && (
-        <dl className="mt-3 grid gap-2 animate-fadein">
-          {ucpEx  && <ExcerptRow ref_={ucpRef!}  text={ucpEx}  />}
-          {isbpEx && <ExcerptRow ref_={isbpRef!} text={isbpEx} />}
-        </dl>
-      )}
-    </div>
-  );
-}
-
-function ExcerptRow({ ref_, text }: { ref_: string; text: string }) {
-  return (
-    <div className="grid grid-cols-[140px_1fr] gap-3">
-      <dt className="font-mono text-[11px] text-navy-1 pt-0.5 font-semibold">{ref_}</dt>
-      <dd className="font-sans text-xs text-navy-1 leading-snug">{text}</dd>
     </div>
   );
 }

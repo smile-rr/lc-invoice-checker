@@ -21,6 +21,9 @@ interface Props {
   tone?: 'source' | 'parsed';
   onClick?: () => void;
   dataTag?: string;
+  /** When true, renders a yellow ⚠ glyph and tooltip — used by the source
+   *  pane for SWIFT-malformed tags ({@code :40Ad:} etc). */
+  malformed?: boolean;
 }
 
 /**
@@ -43,6 +46,7 @@ export function FieldBlockRow({
   tone = 'source',
   onClick,
   dataTag,
+  malformed = false,
 }: Props) {
   const isSource = tone === 'source';
   return (
@@ -71,9 +75,17 @@ export function FieldBlockRow({
           <span
             className={[
               'inline-block px-1.5 py-0.5 rounded font-mono text-[11px] font-semibold shrink-0',
-              pinned ? 'bg-teal-1 text-white' : 'bg-slate2 text-teal-1 ring-1 ring-line',
+              malformed
+                ? 'bg-status-goldSoft text-status-gold ring-1 ring-status-gold/60'
+                : pinned
+                ? 'bg-teal-1 text-white'
+                : 'bg-slate2 text-teal-1 ring-1 ring-line',
             ].join(' ')}
+            title={malformed
+              ? `Malformed SWIFT tag — expected :NN[L]: (2 digits + optional uppercase letter). ":${tag}:" will be rejected by the pipeline.`
+              : undefined}
           >
+            {malformed ? '⚠ ' : ''}
             {tag.startsWith('block') ? `{${tag.replace('block', '')}}` : `:${tag}:`}
           </span>
         ) : null}

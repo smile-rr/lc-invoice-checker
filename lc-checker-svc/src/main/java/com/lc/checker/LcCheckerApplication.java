@@ -1,11 +1,14 @@
 package com.lc.checker;
 
+import com.lc.checker.infra.queue.QueueProperties;
 import io.swagger.v3.oas.annotations.OpenAPIDefinition;
 import io.swagger.v3.oas.annotations.info.Contact;
 import io.swagger.v3.oas.annotations.info.Info;
 import io.swagger.v3.oas.annotations.servers.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.scheduling.annotation.EnableScheduling;
 /**
  * Entry point for the LC Invoice Checker API.
  *
@@ -22,6 +25,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * table, progressive recording via JDBC Template).
  */
 @SpringBootApplication
+@EnableScheduling
+@EnableConfigurationProperties(QueueProperties.class)
 @OpenAPIDefinition(
         info = @Info(
                 title = "LC Invoice Checker API",

@@ -310,17 +310,43 @@ export interface RuleSummary {
   disabled_reason: string | null;
 }
 
+/**
+ * Queue context for a still-QUEUED session. Sent on the trace response and
+ * pushed via the SSE `status` event with stage="queue", state="waiting".
+ */
+export interface QueueContext {
+  position: number;
+  depth: number;
+  running_session_id: string | null;
+}
+
 /** Trace API reply — same envelope shape as live SSE, ordered by {@link Event.seq}. */
 export interface TraceResponse {
   session_id: string;
   events: Event[];
+  queue_context?: QueueContext | null;
 }
 
 export interface StartResponse {
   session_id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  queue_position: number;
   invoice_filename: string | null;
   invoice_bytes: number;
   lc_length: number;
+}
+
+export interface QueueStatus {
+  concurrency: number;
+  running: string[];
+  queued: Array<{ session_id: string; position: number }>;
+}
+
+export interface TagMeta {
+  tag: string;
+  mandatory: boolean;
+  max_length: number | null;
+  min_length: number | null;
 }
 
 export interface ExtractAttempt {

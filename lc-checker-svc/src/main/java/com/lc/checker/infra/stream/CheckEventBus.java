@@ -41,8 +41,21 @@ public class CheckEventBus {
         } catch (Exception e) {
             log.warn("Persisting event failed for session={}: {}", sessionId, e.getMessage());
         }
+        deliver(sessionId, event, /*buffer=*/true);
+    }
+
+    /**
+     * Fan-out to live subscribers without persisting or buffering. Use for
+     * transient signals (e.g. queue-position updates) that don't belong in the
+     * audit trail or trace replay.
+     */
+    public void publishTransient(String sessionId, CheckEvent event) {
+        deliver(sessionId, event, /*buffer=*/false);
+    }
+
+    private void deliver(String sessionId, CheckEvent event, boolean buffer) {
         SessionChannel ch = channels.computeIfAbsent(sessionId, k -> new SessionChannel());
-        ch.append(event);
+        if (buffer) ch.append(event);
         for (SseEmitter emitter : ch.emitters) {
             try {
                 emitter.send(SseEmitter.event()
