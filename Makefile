@@ -18,9 +18,11 @@
 # | docling   | make docling      | make docling-down    |  8081 | http://127.0.0.1:8081                |
 # | mineru    | make mineru       | make mineru-down     |  8082 | http://127.0.0.1:8082                |
 # | ui        | make ui           | make ui-down         |  5173 | http://127.0.0.1:5173                |
-# | (stack)   | make all          | make all-down        |     — | all = svc/docling/mineru/ui only; all-down = everything |
-# | (status)  | make status       |                      |     — | one-line per component (port-listening) |
-# | (health)  | make health       |                      |     — | hit each /health endpoint (actually working?) |
+# | (stack)   | make all          | make all-down       |     — | all = svc/docling/mineru/ui only; all-down = everything |
+# | (status)  | make status       |                     |     — | one-line per component (port-listening) |
+# | (health)  | make health       |                     |     — | hit each /health endpoint (actually working?) |
+# | (nosleep) | make nosleep      |                     |     — | caffeinate -s -i (prevents Mac sleep)    |
+# | (langfuse)| make langfuse-auth|                     |     — | derive LANGFUSE_AUTH_BASIC from .env keys |
 # +-----------+-------------------+----------------------+-------+--------------------------------------+
 #
 # Local vision LLM is provided by Ollama (`brew install ollama && ollama serve`,
@@ -167,6 +169,26 @@ _ui-bg: _ui-install
 # installed models, then fires a tiny /v1/chat/completions ping using the
 # model named in .env's LOCAL_LLM_VL_MODEL. Surfaces latency + response so
 # you can tell at a glance whether `local_llm_vl` will work end-to-end.
+
+nosleep:  ## prevent Mac from sleeping (Ctrl-C to cancel) — or: caffeinate -s -t 3600
+	@echo "→ preventing sleep … press Ctrl-C to cancel"
+	@caffeinate -s -i
+	@echo "✓ sleep lock released"
+
+langfuse-auth:  ## derive LANGFUSE_AUTH_BASIC from LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY in .env
+	@pk=$$(grep '^LANGFUSE_PUBLIC_KEY=' $(ENV_FILE) | cut -d= -f2); \
+	sk=$$(grep '^LANGFUSE_SECRET_KEY=' $(ENV_FILE) | cut -d= -f2); \
+	if [ -z "$$pk" ] || [ -z "$$sk" ]; then \
+	  echo "✗ LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not found in $(ENV_FILE)"; exit 1; \
+	fi; \
+	auth=$$(python3 -c "import base64; print(base64.b64encode(($$pk+':'+$$sk).encode()).decode())"); \
+	if grep -q '^LANGFUSE_AUTH_BASIC=' $(ENV_FILE); then \
+	  sed -i '' "s|^LANGFUSE_AUTH_BASIC=.*|LANGFUSE_AUTH_BASIC=$${auth}|" $(ENV_FILE); \
+	else \
+	  printf '\nLANGFUSE_AUTH_BASIC=%s\n' "$$auth" >> $(ENV_FILE); \
+	fi; \
+	echo "✓ LANGFUSE_AUTH_BASIC updated in $(ENV_FILE)"; \
+	echo "   → restart svc for change to take effect:  make svc-down && make svc"
 
 test:  ## fire one POST + tail the SSE stream live (uses test/stream.sh)
 	@bash test/stream.sh
@@ -334,7 +356,7 @@ _ui-install:
 	   echo "✓ $(UI_DIR) installed"; \
 	 fi
 
-.PHONY: help all all-down status health llm-test test test-rule test-verdict \
+.PHONY: help all all-down status health llm-test nosleep langfuse-auth test test-rule test-verdict \
         db db-down _docker-up _db-apply-schema \
         svc svc-down \
         docling docling-down \
