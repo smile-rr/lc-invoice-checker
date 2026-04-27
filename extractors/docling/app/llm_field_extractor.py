@@ -88,11 +88,12 @@ def llm_extract_fields(markdown: str, prompt: str) -> tuple[dict[str, Any], floa
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    # Wrap the LLM call in a Langfuse Generation. When the inbound /extract
-    # request carries a `traceparent` header from the Java pipeline, the
-    # FastAPI auto-instrumentor has already pinned the OTel context to that
-    # parent trace, so this generation lands under the same Langfuse trace
-    # as the Java rule checks.
+    # Wrap the LLM call in a Langfuse Generation. The merge into Java's
+    # session trace is via the explicit `langfuse.trace.id` attribute set
+    # inside `track_llm_generation` from the X-Session-Id header — NOT via
+    # OTel parent-context propagation. That's why we don't need (and have
+    # deliberately disabled) FastAPIInstrumentor: the inbound HTTP span
+    # would just be noise.
     with track_llm_generation(
         name="docling.field-extract",
         model=model,

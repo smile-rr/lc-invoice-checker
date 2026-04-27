@@ -11,14 +11,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * concurrently.
  *
  * <p>{@code pollDelayMs} is the {@code @Scheduled fixedDelay} between dequeue
- * attempts. 500ms keeps queue latency tight with negligible DB load (single
- * indexed query per pickup).
+ * attempts. Default 2000ms (2s) — bounds user-perceived "queued → started"
+ * latency to ~2s while keeping DB churn from {@code SELECT FOR UPDATE SKIP
+ * LOCKED} negligible. Drop to 1000ms if UX latency matters; raise to 5000ms+
+ * if the queue is mostly idle.
  */
 @ConfigurationProperties(prefix = "pipeline")
 public record QueueProperties(int concurrency, long pollDelayMs) {
 
     public QueueProperties {
         if (concurrency <= 0) concurrency = 1;
-        if (pollDelayMs <= 0) pollDelayMs = 500L;
+        if (pollDelayMs <= 0) pollDelayMs = 2000L;
     }
 }

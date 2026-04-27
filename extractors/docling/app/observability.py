@@ -74,7 +74,6 @@ def init_observability(app: Any) -> None:
     try:
         from opentelemetry import trace as otel_trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -95,12 +94,6 @@ def init_observability(app: Any) -> None:
                 OTLPSpanExporter(endpoint=endpoint, headers={"Authorization": f"Basic {auth}"})
             )
         )
-        # Try to register globally so FastAPI auto-instrumentation finds us,
-        # BUT pull our tracer directly from `provider` so a previously-set
-        # global provider (e.g. from a transitive dep) doesn't silently
-        # silence our generations. set_tracer_provider() has first-call-wins
-        # semantics; the explicit provider.get_tracer(...) below works
-        # regardless of which provider "won" globally.
         try:
             otel_trace.set_tracer_provider(provider)
         except Exception:  # noqa: BLE001
@@ -108,12 +101,19 @@ def init_observability(app: Any) -> None:
         _TRACER = provider.get_tracer(service_name)
         _TRACING_ENABLED = True
 
-        # Inbound POST /extract auto-instrumentation. Pass our provider
-        # EXPLICITLY so FastAPI spans land on the same exporter as our
-        # manual generations even if the global provider isn't ours.
-        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+        # FastAPIInstrumentor is intentionally NOT enabled. Reasons:
+        #   1. /health is hit every ~30s by Docker's healthcheck — auto-
+        #      instrumentation would produce ~2880 noise traces/day per
+        #      sidecar in Langfuse.
+        #   2. The /extract inbound span itself is redundant: it carries
+        #      no `langfuse.trace.id`, so it lands in a SEPARATE Langfuse
+        #      trace from the Java session trace anyway. The only useful
+        #      Python-side span is the manual Generation produced by
+        #      `track_llm_generation` below, which self-joins via the
+        #      session id captured from the X-Session-Id header.
 
-        # Capture X-Session-Id on every inbound request.
+        # Capture X-Session-Id on every inbound request — read by
+        # track_llm_generation to set langfuse.trace.id on the Generation.
         @app.middleware("http")
         async def _capture_session_id(request, call_next):
             sid = request.headers.get("x-session-id")

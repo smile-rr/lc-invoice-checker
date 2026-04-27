@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -24,7 +25,7 @@ import org.springframework.stereotype.Component;
 /**
  * Single-worker job dispatcher backed by Postgres.
  *
- * <p>Every {@code pipeline.poll-delay-ms} (default 500ms) the scheduled tick
+ * <p>Every {@code pipeline.poll-delay-ms} (default 2000ms) the scheduled tick
  * tries to claim a slot on the {@link Semaphore} (capacity =
  * {@code pipeline.concurrency}, default 1) and atomically dequeue one
  * {@code QUEUED} session via {@code SELECT … FOR UPDATE SKIP LOCKED}, which
@@ -52,6 +53,13 @@ public class JobDispatcher {
     private final Executor executor;
     private final QueueSnapshotCache cache;
     private final Semaphore slots;
+
+    /** Heartbeat: emit one INFO line every minute so operators see the dispatcher is alive
+     *  without per-tick log spam. Counters are reset after each heartbeat emission. */
+    private static final long HEARTBEAT_INTERVAL_MS = 60_000L;
+    private final AtomicLong pollsSinceHeartbeat = new AtomicLong();
+    private final AtomicLong dispatchedSinceHeartbeat = new AtomicLong();
+    private volatile long lastHeartbeatMs = System.currentTimeMillis();
 
     public JobDispatcher(CheckSessionStore store,
                          InvoiceFileStore fileStore,
@@ -83,23 +91,42 @@ public class JobDispatcher {
         broadcastQueuePositions();
     }
 
-    @Scheduled(fixedDelayString = "${pipeline.poll-delay-ms:500}")
+    @Scheduled(fixedDelayString = "${pipeline.poll-delay-ms:2000}")
     public void pickup() {
-        if (!slots.tryAcquire()) return;
-        boolean dispatched = false;
+        pollsSinceHeartbeat.incrementAndGet();
         try {
-            Optional<QueuedJob> claimed = store.dequeueOne();
-            if (claimed.isEmpty()) return;
-            QueuedJob job = claimed.get();
-            cache.invalidate();
-            broadcastQueuePositions();
-            dispatched = true;
-            executor.execute(() -> runJob(job));
-        } catch (RuntimeException e) {
-            log.error("Dispatcher dequeue failed: {}", e.getMessage(), e);
+            if (!slots.tryAcquire()) return;
+            boolean dispatched = false;
+            try {
+                Optional<QueuedJob> claimed = store.dequeueOne();
+                if (claimed.isEmpty()) return;
+                QueuedJob job = claimed.get();
+                cache.invalidate();
+                broadcastQueuePositions();
+                dispatched = true;
+                dispatchedSinceHeartbeat.incrementAndGet();
+                log.info("Dispatching session={} invoiceFilename={}",
+                        job.sessionId(), safe(job.invoiceFilename()));
+                executor.execute(() -> runJob(job));
+            } catch (RuntimeException e) {
+                log.error("Dispatcher dequeue failed: {}", e.getMessage(), e);
+            } finally {
+                if (!dispatched) slots.release();
+            }
         } finally {
-            if (!dispatched) slots.release();
+            emitHeartbeatIfDue();
         }
+    }
+
+    private void emitHeartbeatIfDue() {
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastHeartbeatMs;
+        if (elapsed < HEARTBEAT_INTERVAL_MS) return;
+        long polls = pollsSinceHeartbeat.getAndSet(0);
+        long dispatched = dispatchedSinceHeartbeat.getAndSet(0);
+        lastHeartbeatMs = now;
+        log.info("JobDispatcher alive: polls={} dispatched={} elapsedMs={}",
+                polls, dispatched, elapsed);
     }
 
     private void runJob(QueuedJob job) {

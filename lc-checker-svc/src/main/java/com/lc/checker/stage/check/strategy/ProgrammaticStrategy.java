@@ -10,11 +10,15 @@ import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lc.checker.infra.fields.FieldDefinition;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
+import com.lc.checker.infra.fields.TagMappingRegistry;
 import com.lc.checker.infra.observability.LangfuseTags;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +41,16 @@ public class ProgrammaticStrategy implements CheckStrategy {
 
     private final SpelBinder binder;
     private final FieldPoolRegistry fieldPool;
+    private final TagMappingRegistry tagMappings;
     private final Tracer tracer;
     private final ObjectMapper json;
 
     public ProgrammaticStrategy(SpelBinder binder, FieldPoolRegistry fieldPool,
+                                TagMappingRegistry tagMappings,
                                 Tracer tracer, ObjectMapper json) {
         this.binder = binder;
         this.fieldPool = fieldPool;
+        this.tagMappings = tagMappings;
         this.tracer = tracer;
         this.json = json;
     }
@@ -97,10 +104,32 @@ public class ProgrammaticStrategy implements CheckStrategy {
     private StrategyOutcome doExecute(Rule rule, LcDocument lc, InvoiceDocument inv) {
         long start = System.currentTimeMillis();
 
+        // Read once: the actual values (from canonical envelopes) the rule
+        // would have inspected. These are what we display alongside the
+        // verdict, regardless of which strategy branch we land in.
+        ValuePair vp = extractValuePair(rule, lc, inv);
+
         if (rule.expression() == null || rule.expression().isBlank()) {
-            return outcome(rule, CheckStatus.DOUBTS,
+            return outcome(rule, CheckStatus.DOUBTS, vp,
                     new ExpressionTrace(null, bind(lc, inv), null, "Rule has no expression"),
                     "PROGRAMMATIC rule " + rule.id() + " has no expression in catalog",
+                    start);
+        }
+
+        // Domain-aware short-circuit: if every LC field this rule depends on
+        // is blank AND none of those fields' source tags is mandatory in
+        // lc-tag-mapping.yaml, the LC simply doesn't say anything to check
+        // against — NOT_REQUIRED is the right answer (not DOUBTS, which
+        // implies "we tried but couldn't decide").
+        //
+        // When the LC field IS mandatory but blank here, it means
+        // InputValidator was somehow bypassed; we still want to fail loudly,
+        // but that path is rare so we let the regular evaluation proceed.
+        if (rule.fieldKeys() != null && !rule.fieldKeys().isEmpty()
+                && allLcFieldsBlankAndOptional(rule, lc)) {
+            return outcome(rule, CheckStatus.NOT_REQUIRED, vp,
+                    new ExpressionTrace(rule.expression(), bind(lc, inv), null, null),
+                    "LC does not specify " + describeFields(rule) + " — rule does not apply",
                     start);
         }
 
@@ -112,10 +141,20 @@ public class ProgrammaticStrategy implements CheckStrategy {
             result = expr.getValue(ctx);
         } catch (Exception e) {
             log.warn("PROGRAMMATIC rule {} evaluation failed: {}", rule.id(), e.getMessage());
-            return outcome(rule, CheckStatus.DOUBTS,
+            // Bare-arithmetic rules (e.g. UCP-18b-math) throw NPE when an
+            // input is null. If ALL invoice values the rule depends on are
+            // null, the rule simply has nothing to compute against — that's
+            // NOT_REQUIRED, not DOUBTS. Per-rule `missing_invoice_action`
+            // applies when only some are null.
+            CheckStatus fallbackStatus = allInvoiceFieldsBlank(rule, inv)
+                    ? CheckStatus.NOT_REQUIRED
+                    : mapMissingAction(rule);
+            String fallbackDesc = fallbackStatus == CheckStatus.NOT_REQUIRED
+                    ? "Invoice does not provide " + describeFields(rule) + " — rule does not apply"
+                    : "Expression evaluation failed: " + e.getMessage();
+            return outcome(rule, fallbackStatus, vp,
                     new ExpressionTrace(rule.expression(), bound, null, e.getMessage()),
-                    "Expression evaluation failed: " + e.getMessage(),
-                    start);
+                    fallbackDesc, start);
         }
 
         boolean passed = isTruthy(result);
@@ -124,9 +163,116 @@ public class ProgrammaticStrategy implements CheckStrategy {
                 ? rule.name() + " satisfied"
                 : buildDiscrepancyDescription(rule, bound);
 
-        return outcome(rule, status,
+        return outcome(rule, status, vp,
                 new ExpressionTrace(rule.expression(), bound, result, null),
                 description, start);
+    }
+
+    /**
+     * The {@code (lc_value, presented_value)} pair surfaced to the UI for
+     * this rule. Pulled from the canonical envelopes keyed by the rule's
+     * declared {@code field_keys}, so the displayed pair is always exactly
+     * what the rule actually inspected.
+     */
+    private record ValuePair(String lcValue, String invoiceValue) {}
+
+    private ValuePair extractValuePair(Rule rule, LcDocument lc, InvoiceDocument inv) {
+        if (rule.fieldKeys() == null || rule.fieldKeys().isEmpty()) {
+            return new ValuePair(null, null);
+        }
+        List<String> lcVals = new ArrayList<>();
+        List<String> invVals = new ArrayList<>();
+        Map<String, Object> lcFields = lc != null && lc.envelope() != null
+                ? lc.envelope().fields() : Map.of();
+        Map<String, Object> invFields = inv != null && inv.envelope() != null
+                ? inv.envelope().fields() : Map.of();
+        for (String key : rule.fieldKeys()) {
+            FieldDefinition def = fieldPool.byKey(key).orElse(null);
+            if (def == null) continue;
+            if (def.appliesToLc()) {
+                Object v = lcFields.get(key);
+                if (v != null && !String.valueOf(v).isBlank()) {
+                    lcVals.add(formatLabelled(key, v));
+                }
+            }
+            if (def.appliesToInvoice()) {
+                Object v = invFields.get(key);
+                if (v != null && !String.valueOf(v).isBlank()) {
+                    invVals.add(formatLabelled(key, v));
+                }
+            }
+        }
+        return new ValuePair(
+                lcVals.isEmpty() ? null : String.join("\n", lcVals),
+                invVals.isEmpty() ? null : String.join("\n", invVals));
+    }
+
+    private static String formatLabelled(String key, Object value) {
+        return key + ": " + value;
+    }
+
+    /**
+     * True when every LC field referenced by this rule is null/blank AND
+     * none of those fields' MT700 source tags are mandatory in
+     * {@link TagMappingRegistry}. In that case the LC is silent on what the
+     * rule checks, which is a NOT_REQUIRED outcome rather than DOUBTS.
+     */
+    private boolean allLcFieldsBlankAndOptional(Rule rule, LcDocument lc) {
+        if (lc == null || lc.envelope() == null) return false;
+        Map<String, Object> lcFields = lc.envelope().fields();
+        boolean sawLcField = false;
+        for (String key : rule.fieldKeys()) {
+            FieldDefinition def = fieldPool.byKey(key).orElse(null);
+            if (def == null || !def.appliesToLc()) continue;
+            sawLcField = true;
+            Object v = lcFields.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) return false;   // some field present
+            // Field absent — is it mandatory at the LC tag level? If yes,
+            // treat as a real check failure (don't NOT_REQUIRED away a
+            // mandatory miss).
+            if (anySourceTagMandatory(def)) return false;
+        }
+        return sawLcField;
+    }
+
+    private boolean allInvoiceFieldsBlank(Rule rule, InvoiceDocument inv) {
+        if (inv == null || inv.envelope() == null) return false;
+        Map<String, Object> invFields = inv.envelope().fields();
+        boolean sawInvField = false;
+        for (String key : rule.fieldKeys()) {
+            FieldDefinition def = fieldPool.byKey(key).orElse(null);
+            if (def == null || !def.appliesToInvoice()) continue;
+            sawInvField = true;
+            Object v = invFields.get(key);
+            if (v != null && !String.valueOf(v).isBlank()) return false;
+        }
+        return sawInvField;
+    }
+
+    private boolean anySourceTagMandatory(FieldDefinition def) {
+        if (def.sourceTags() == null) return false;
+        for (String tag : def.sourceTags()) {
+            if (tagMappings.mandatoryTags().contains(tag)) return true;
+        }
+        return false;
+    }
+
+    private String describeFields(Rule rule) {
+        return rule.fieldKeys() == null || rule.fieldKeys().isEmpty()
+                ? "the required field"
+                : String.join(", ", rule.fieldKeys());
+    }
+
+    /** Map the catalog's {@link MissingInvoiceAction} to the CheckStatus the
+     *  UI consumes. Default to DOUBTS so unspecified rules don't accidentally
+     *  fail. */
+    private static CheckStatus mapMissingAction(Rule rule) {
+        var ma = rule.missingInvoiceAction();
+        if (ma == null) return CheckStatus.DOUBTS;
+        return switch (ma) {
+            case FAIL   -> CheckStatus.FAIL;
+            case DOUBTS -> CheckStatus.DOUBTS;
+        };
     }
 
     private String toJson(Object o) {
@@ -231,7 +377,8 @@ public class ProgrammaticStrategy implements CheckStrategy {
     }
 
     private static StrategyOutcome outcome(
-            Rule rule, CheckStatus status, ExpressionTrace trace, String description, long start) {
+            Rule rule, CheckStatus status, ValuePair vp,
+            ExpressionTrace trace, String description, long start) {
         long duration = System.currentTimeMillis() - start;
         CheckResult result = new CheckResult(
                 rule.id(),
@@ -241,8 +388,8 @@ public class ProgrammaticStrategy implements CheckStrategy {
                 status,
                 status == CheckStatus.FAIL ? rule.severityOnFail() : null,
                 firstFieldOrNull(rule.fieldKeys()),
-                null,
-                null,
+                vp == null ? null : vp.lcValue(),
+                vp == null ? null : vp.invoiceValue(),
                 rule.ucpRef(),
                 rule.isbpRef(),
                 description

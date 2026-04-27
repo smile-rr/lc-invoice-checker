@@ -33,8 +33,8 @@ Verdict criteria (UCP 600 Art. 18(c) / ISBP 821 Para. C3):
 Return ONLY a JSON object:
 {
   "verdict":         "PASS" | "FAIL" | "DOUBTS" | "NOT_REQUIRED",
-  "lc_value":        "the LC value being compared, or null",
-  "presented_value": "the invoice value being compared, or null",
+  "lc_value":        "newline-separated `field_key: value` evidence pairs you actually read from the LC (e.g. \"beneficiary_name: WIDGET EXPORTS PTE LTD\ngoods_description: 1000 UNITS WIDGETS\"); use null only when the rule does not apply to this LC",
+  "presented_value": "newline-separated `field_key: value` evidence pairs you actually read from the invoice in the same format as lc_value; use null only when the invoice does not contain anything relevant to this rule",
   "reason":          "one-line plain-English"
 }
 

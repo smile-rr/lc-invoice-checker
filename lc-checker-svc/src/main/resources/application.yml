@@ -163,9 +163,15 @@ springdoc:
 # poll-delay-ms and runs at most `concurrency` sessions in parallel.
 # Bump concurrency to 2 or 3 if the host can comfortably support more parallel
 # extractor pipelines; default 1 for predictable POC behaviour.
+#
+# poll-delay-ms = 2000 (2s) is the sweet spot for a POC: user-perceived
+# latency to start ≤ 2s, DB SELECT-FOR-UPDATE-SKIP-LOCKED churn cut 4× vs.
+# the previous 500ms default, and one INFO heartbeat per minute is enough
+# to confirm the dispatcher is alive without log spam. Drop to 1000ms if
+# UX latency matters; raise to 5000ms+ if the queue is rarely loaded.
 pipeline:
   concurrency: ${PIPELINE_CONCURRENCY:1}
-  poll-delay-ms: ${PIPELINE_POLL_DELAY_MS:500}
+  poll-delay-ms: ${PIPELINE_POLL_DELAY_MS:2000}
 
 # --- Actuator + Prometheus + Tracing → Langfuse --------------------------------
 # Tracing pipeline:

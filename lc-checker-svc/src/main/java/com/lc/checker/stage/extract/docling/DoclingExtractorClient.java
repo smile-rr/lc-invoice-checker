@@ -6,11 +6,8 @@ import com.lc.checker.domain.invoice.InvoiceDocument;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractionResult;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
-import com.lc.checker.infra.observability.LangfuseTags;
 import com.lc.checker.stage.extract.InvoiceExtractor;
 import com.lc.checker.stage.extract.InvoiceFieldMapper;
-import io.micrometer.tracing.Span;
-import io.micrometer.tracing.Tracer;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,16 +43,14 @@ public class DoclingExtractorClient implements InvoiceExtractor {
     private final ObjectMapper json;
     private final DoclingExtractorConfig config;
     private final com.lc.checker.stage.extract.PromptBuilder promptBuilder;
-    private final Tracer tracer;
 
     public DoclingExtractorClient(RestClient.Builder restClientBuilder,
             InvoiceFieldMapper mapper, ObjectMapper json, DoclingExtractorConfig config,
-            com.lc.checker.stage.extract.PromptBuilder promptBuilder, Tracer tracer) {
+            com.lc.checker.stage.extract.PromptBuilder promptBuilder) {
         this.mapper = mapper;
         this.json = json;
         this.config = config;
         this.promptBuilder = promptBuilder;
-        this.tracer = tracer;
         // Use SimpleClientHttpRequestFactory (HttpURLConnection) to match the
         // previously-working ExtractorClientConfig (commit 30c16ee). The default
         // JdkClientHttpRequestFactory mishandles Spring's streaming multipart body

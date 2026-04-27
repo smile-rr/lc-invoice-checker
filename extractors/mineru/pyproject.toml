@@ -33,7 +33,6 @@ dependencies = [
     # itself is kept as a transitive convenience for any future Langfuse-
     # specific API calls (datasets, scoring); it is NOT used for tracing.
     "langfuse>=3.0",
-    "opentelemetry-instrumentation-fastapi>=0.48b0",
     "opentelemetry-exporter-otlp-proto-http>=1.27",
     "opentelemetry-sdk>=1.27",
 ]

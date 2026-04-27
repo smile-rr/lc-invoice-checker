@@ -24,11 +24,10 @@ public class MineruExtractorBeans {
             InvoiceFieldMapper mapper,
             ObjectMapper objectMapper,
             PromptBuilder promptBuilder,
-            io.micrometer.tracing.Tracer tracer,
             @Value("${mineru.base-url:http://mineru-svc:8082}") String baseUrl,
             @Value("${mineru.timeout-seconds:180}") int timeoutSeconds) {
         return new MineruExtractorClient(restClientBuilder, mapper, objectMapper,
                 new MineruExtractorConfig("mineru", baseUrl, timeoutSeconds),
-                promptBuilder, tracer);
+                promptBuilder);
     }
 }

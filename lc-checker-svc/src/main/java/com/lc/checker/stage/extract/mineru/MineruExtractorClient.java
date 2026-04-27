@@ -39,17 +39,14 @@ public class MineruExtractorClient implements InvoiceExtractor {
     private final ObjectMapper json;
     private final MineruExtractorConfig config;
     private final com.lc.checker.stage.extract.PromptBuilder promptBuilder;
-    private final io.micrometer.tracing.Tracer tracer;
 
     public MineruExtractorClient(RestClient.Builder restClientBuilder,
             InvoiceFieldMapper mapper, ObjectMapper json, MineruExtractorConfig config,
-            com.lc.checker.stage.extract.PromptBuilder promptBuilder,
-            io.micrometer.tracing.Tracer tracer) {
+            com.lc.checker.stage.extract.PromptBuilder promptBuilder) {
         this.mapper = mapper;
         this.json = json;
         this.config = config;
         this.promptBuilder = promptBuilder;
-        this.tracer = tracer;
         // Use SimpleClientHttpRequestFactory (HttpURLConnection) to match the
         // previously-working ExtractorClientConfig (commit 30c16ee). The default
         // JdkClientHttpRequestFactory mishandles Spring's streaming multipart body

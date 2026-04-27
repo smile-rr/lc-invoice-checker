@@ -23,22 +23,29 @@
 
 mt700:
   official_tags:
+    # Mandatory per SWIFT MT700 Standards Release Guide. Marking these here
+    # makes InputValidator reject LCs that omit them BEFORE the pipeline
+    # runs, so compliance rules never see "blank LC + can't decide" cases.
     "20":  { field_keys: [lc_number],                       parser: SIMPLE_STRING,        mandatory: true,  validation: { max_length: 16 } }
-    "27":  { field_keys: [sequence_of_total],               parser: SIMPLE_STRING,        mandatory: false }
-    "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: false, validation: { pattern: "^[0-9]{6}$" } }
+    "27":  { field_keys: [sequence_of_total],               parser: SIMPLE_STRING,        mandatory: true }
+    "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: true,  validation: { pattern: "^[0-9]{6}$" } }
     "31D": { field_keys: [expiry_date, expiry_place],       parser: DATE_PLUS_TEXT,       mandatory: true,  validation: { pattern: "^[0-9]{6}.+", max_length: 35 } }
     "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true,  validation: { pattern: "^[A-Z]{3}[0-9.,]+$", max_length: 24 } }
     "39A": { field_keys: [tolerance_plus, tolerance_minus], parser: SLASH_SEPARATED_INT,  mandatory: false, defaults: { tolerance_plus: 0, tolerance_minus: 0 } }
     "39B": { field_keys: [max_amount_flag],                 parser: SIMPLE_STRING,        mandatory: false }
-    "40A": { field_keys: [credit_type],                     parser: SIMPLE_STRING,        mandatory: false }
-    "40E": { field_keys: [applicable_rules],                parser: SIMPLE_STRING,        mandatory: false }
+    "40A": { field_keys: [credit_type],                     parser: SIMPLE_STRING,        mandatory: true }
+    "40E": { field_keys: [applicable_rules],                parser: SIMPLE_STRING,        mandatory: true }
+    # 41A / 41D — SWIFT spec is "exactly one of" (M/E). We can't express XOR
+    # in this row-based YAML, so both stay non-mandatory; Mt700Parser falls
+    # back to either when reading available_with / available_by, and a
+    # downstream rule (currently absent) would catch "neither present".
     "41A": { field_keys: [available_with, available_by],    parser: SIMPLE_STRING,        mandatory: false }
     "41D": { field_keys: [available_with, available_by],    parser: SIMPLE_STRING,        mandatory: false }
     "42A": { field_keys: [drawee_bic],                      parser: BIC,                  mandatory: false }
     "42C": { field_keys: [drafts_at],                       parser: SIMPLE_STRING,        mandatory: false }
     "42D": { field_keys: [drawee_bic],                      parser: SIMPLE_STRING,        mandatory: false }
-    "43P": { field_keys: [partial_shipment],                parser: SIMPLE_STRING,        mandatory: false }
-    "43T": { field_keys: [transhipment],                    parser: SIMPLE_STRING,        mandatory: false }
+    "43P": { field_keys: [partial_shipment],                parser: SIMPLE_STRING,        mandatory: true }
+    "43T": { field_keys: [transhipment],                    parser: SIMPLE_STRING,        mandatory: true }
     "44A": { field_keys: [place_of_receipt],                parser: SIMPLE_STRING,        mandatory: false }
     "44B": { field_keys: [place_of_delivery],               parser: SIMPLE_STRING,        mandatory: false }
     "44C": { field_keys: [latest_shipment_date],            parser: DATE_YYMMDD,          mandatory: false }
@@ -49,7 +56,7 @@ mt700:
     "46A": { field_keys: [documents_required],              parser: DOCUMENT_LIST,        mandatory: false }
     "47A": { field_keys: [additional_conditions],           parser: MULTILINE_FULL,       mandatory: false }
     "48":  { field_keys: [presentation_days],               parser: INT_BEFORE_SLASH,     mandatory: false, defaults: { presentation_days: 21 } }
-    "49":  { field_keys: [confirmation_instructions],       parser: ENUM_NORMALIZED,      mandatory: false }
+    "49":  { field_keys: [confirmation_instructions],       parser: ENUM_NORMALIZED,      mandatory: true }
     "50":  { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: true,  validation: { min_length: 1 } }
     "50B": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }
     "50F": { field_keys: [applicant_name, applicant_address],   parser: MULTILINE_FIRST_LINE, mandatory: false }

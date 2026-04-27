@@ -10,15 +10,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.lc.checker.domain.result.Summary;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Translates pipeline exceptions into the flat {@link ApiError} body + matching HTTP
@@ -89,8 +92,25 @@ public class GlobalExceptionHandler {
                 .body(new ApiError("PAYLOAD_TOO_LARGE", "request", e.getMessage(), null, mdcSession()));
     }
 
+    /**
+     * Client's Accept header didn't include any media type we can produce —
+     * common when an SSE-only client (Accept: text/event-stream) hits a URL
+     * that 404'd or otherwise needs to return a JSON ApiError. Spring
+     * normally surfaces this as a noisy "Failure in @ExceptionHandler" WARN
+     * via {@code ExceptionHandlerExceptionResolver}; handling it explicitly
+     * silences that and returns a clean 406 with no body, which is what the
+     * RFC says to do here.
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<Void> notAcceptable(HttpMediaTypeNotAcceptableException e) {
+        log.debug("406 Not Acceptable — supported types: {}", e.getSupportedMediaTypes());
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE).build();
+    }
+
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiError> fallback(Exception e, HttpServletResponse response) {
+    public ResponseEntity<ApiError> fallback(Exception e,
+                                             HttpServletRequest request,
+                                             HttpServletResponse response) {
         // SSE responses are locked to text/event-stream — writing a JSON body here
         // causes a secondary HttpMessageNotWritableException. For committed or
         // streaming responses just log and let the emitter close naturally.
@@ -100,9 +120,30 @@ public class GlobalExceptionHandler {
                     e.getMessage());
             return null;
         }
-        log.error("Unhandled pipeline error", e);
+        // ALWAYS log the original exception at ERROR — this is the root cause
+        // we care about, regardless of what we can write back to the client.
+        log.error("Unhandled pipeline error on {} {} (Accept='{}')",
+                request.getMethod(), request.getRequestURI(),
+                request.getHeader(HttpHeaders.ACCEPT), e);
+        // If the client only accepts text/event-stream (or anything else that
+        // can't carry JSON), trying to return ResponseEntity<ApiError> would
+        // trip Spring's ExceptionHandlerExceptionResolver into logging a
+        // secondary WARN about HttpMediaTypeNotAcceptableException. Detect
+        // that up-front and write 406 with no body instead.
+        if (!clientAcceptsJson(request)) {
+            try { response.setStatus(HttpStatus.NOT_ACCEPTABLE.value()); } catch (Exception ignored) { /* committed */ }
+            return null;
+        }
         return ResponseEntity.internalServerError()
                 .body(new ApiError("INTERNAL_ERROR", null, e.getMessage(), null, mdcSession()));
+    }
+
+    private static boolean clientAcceptsJson(HttpServletRequest request) {
+        String accept = request.getHeader(HttpHeaders.ACCEPT);
+        // Missing / empty / "*/*" all mean "no preference" — JSON is fine.
+        if (accept == null || accept.isBlank() || accept.contains("*/*")) return true;
+        return accept.contains(MediaType.APPLICATION_JSON_VALUE)
+                || accept.contains("application/*");
     }
 
     private static HttpStatus codeForValidation(ValidationException e) {
