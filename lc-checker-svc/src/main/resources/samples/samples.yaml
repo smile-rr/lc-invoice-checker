@@ -1,0 +1,21 @@
+# =============================================================================
+# samples.yaml — Pre-defined LC + invoice sample pairs.
+# =============================================================================
+#
+# Source of truth for the upload page's "Pre-defined samples" picker.
+# Files live under classpath:samples/files/ and travel with the API jar so
+# they're available wherever the API runs (no MinIO dep, no host-mount).
+#
+# To add a pair:
+#   1. Drop the PDF + .txt files into samples/files/ (mirror test/golden/).
+#   2. Append a row below.
+#
+# pass_lc / fail_lc / invoice are filenames inside files/. fail_lc is optional
+# — pairs without a meaningful failure case omit it.
+# =============================================================================
+
+samples:
+  - { id: '01-widgets-singapore',   title: '01 · widgets · Port Klang→Singapore', note: 'Singapore beneficiary, USD 56k CIF, single-line widget invoice.',                            kind: baseline, invoice: '01-widgets-singapore.pdf',  pass_lc: '01-widgets-singapore__pass.txt',  fail_lc: '01-widgets-singapore__fail.txt' }
+  - { id: '02-apparel-acme',        title: '02 · apparel · Acme→DeSports',         note: 'Apparel order (T-Shirts + Shorts), USD 2k DAP, no POL/POD.',                                kind: baseline, invoice: '02-apparel-acme.pdf',       pass_lc: '02-apparel-acme__pass.txt',       fail_lc: '02-apparel-acme__fail.txt' }
+  - { id: '03-painting-artfinder',  title: '03 · painting · Artfinder',            note: 'Original oil painting "Stick Figure" 30x20cm, GBP 100 DDP, no shipping ports.',           kind: baseline, invoice: '03-painting-artfinder.pdf', pass_lc: '03-painting-artfinder__pass.txt', fail_lc: '03-painting-artfinder__fail.txt' }
+  - { id: '04-boots-baton-rouge',   title: '04 · boots · Global UK→Baton Rouge',   note: 'YORK chukka boots, USD 490 FOB, US buyer (address-only extraction).',                       kind: baseline, invoice: '04-boots-baton-rouge.pdf',  pass_lc: '04-boots-baton-rouge__pass.txt',  fail_lc: '04-boots-baton-rouge__fail.txt' }

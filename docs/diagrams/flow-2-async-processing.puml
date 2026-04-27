@@ -1,0 +1,62 @@
+@startuml flow-2-async-processing
+title Flow 2 — Async Compliance Processing (Scheduler)
+
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam sequenceParticipantBackgroundColor #F5F5F5
+skinparam sequenceParticipantBorderColor #999999
+
+participant "Scheduler\n(Spring @Scheduled)" as SCH
+database "PostgreSQL" as DB
+participant "MinIO" as S3
+participant "ExtractorRouter" as ER
+participant "Docling / MiniRU\n(supplementary)" as DOC
+participant "Ollama\nqwen3-vl:4b\n(local vision)" as OL
+participant "ComplianceEngine" as CE
+participant "Qwen3-plus\n(DashScope cloud)" as LLM
+participant "Langfuse\n(observability)" as LF
+
+loop every 5 s
+    SCH -> DB  : SELECT id FROM sessions\nWHERE status=QUEUED\nLIMIT 1 FOR UPDATE SKIP LOCKED
+    DB  --> SCH: session row (or empty)
+
+    alt no pending session
+        SCH -> SCH : sleep
+    else session found
+        SCH -> DB  : UPDATE status=PROCESSING
+        SCH -> S3  : getObject(lc_key, invoice_key)
+        S3  --> SCH: lcText, pdfBytes
+
+        group Stage 1b — Invoice Extraction (parallel)
+            SCH -> OL  : vision extract (base64 pages, field-pool prompt)
+            SCH -> DOC : layout parse (supplementary path)
+            OL  --> SCH: structured fields (primary winner)
+            DOC --> SCH: markdown (stored for trace)
+        end
+
+        SCH -> SCH : merge → InvoiceDocument\n(confidence-threshold gating)
+
+        group Stage 2 — Rule Activation
+            SCH -> DB  : load catalog.yml rules (startup cache)
+        end
+
+        group Stage 3 — Compliance Checks
+            SCH -> CE  : runAll(LcDocument, InvoiceDocument)
+
+            CE -> CE   : Tier 1 — PROGRAMMATIC\nSpEL expressions (no LLM)
+
+            CE -> LLM  : Tier 2 — AGENT rules\n(one call per rule, goods desc / beneficiary / etc.)
+            LLM --> CE : { compliant, reason }
+
+            CE -> LLM  : Tier 3 — AGENT+TOOL rules\n(LLM picks tool, tool does math/date)
+            LLM --> CE : tool call → Java callback → result
+
+            CE -> LF   : trace every LLM prompt + response\n(session_id tag)
+        end
+
+        CE --> SCH : List<CheckResult>
+
+        SCH -> DB  : UPDATE sessions SET\nstatus=DONE,\nreport=DiscrepancyReport JSON,\nlc_doc=LcDocument JSON,\ninvoice_doc=InvoiceDocument JSON
+    end
+end
+@enduml

@@ -131,6 +131,11 @@ function LcPane({ file, onReplace }: { file: File; onReplace: (f: File) => void 
         filename={file.name}
         sizeBytes={new Blob([text]).size || file.size}
         onReplaceClick={() => inputRef.current?.click()}
+        onDownloadClick={() =>
+          // Download the live editor buffer, not the original file — keeps the
+          // saved copy in sync with what Run would actually submit.
+          downloadBlob(new Blob([text], { type: 'text/plain' }), file.name)
+        }
         replaceHint=".txt only"
         edited={edited}
       />
@@ -184,6 +189,7 @@ function InvoicePane({ file, onReplace }: { file: File; onReplace: (f: File) => 
         filename={file.name}
         sizeBytes={file.size}
         onReplaceClick={() => inputRef.current?.click()}
+        onDownloadClick={() => downloadBlob(file, file.name)}
         replaceHint=".pdf only"
       />
       <input
@@ -214,6 +220,7 @@ function PaneHead({
   filename,
   sizeBytes,
   onReplaceClick,
+  onDownloadClick,
   replaceHint,
   edited,
 }: {
@@ -221,6 +228,8 @@ function PaneHead({
   filename: string;
   sizeBytes: number;
   onReplaceClick: () => void;
+  /** Download the current pane content (latest edits included). */
+  onDownloadClick: () => void;
   replaceHint: string;
   /** True if the operator has typed in this pane since the file was loaded. */
   edited?: boolean;
@@ -244,6 +253,18 @@ function PaneHead({
         {(sizeBytes / 1024).toFixed(1)} KB
       </span>
       <button
+        onClick={onDownloadClick}
+        title={`Download ${filename}`}
+        aria-label={`Download ${filename}`}
+        className="px-2 py-1 border border-line text-navy-1 hover:border-teal-2 hover:text-teal-2 transition-colors inline-flex items-center"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 3v12" />
+          <path d="m6 11 6 6 6-6" />
+          <path d="M5 21h14" />
+        </svg>
+      </button>
+      <button
         onClick={onReplaceClick}
         title={`Replace this file (${replaceHint})`}
         className="font-mono text-[10px] uppercase tracking-[0.12em] px-2 py-1 border border-line text-navy-1 hover:border-teal-2 hover:text-teal-2 transition-colors"
@@ -252,6 +273,23 @@ function PaneHead({
       </button>
     </header>
   );
+}
+
+/**
+ * Force-download a Blob with the given filename. Used by both panes' download
+ * buttons. Creating an anchor in-DOM is the cross-browser path that respects
+ * the {@code download} attribute even on Safari.
+ */
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revocation so Safari has time to consume the URL before it's freed.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function isTxt(f: File): boolean {

@@ -1,0 +1,51 @@
+@startuml flow-1-upload
+title Flow 1 — Upload & Session Creation
+
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam sequenceParticipantBackgroundColor #F5F5F5
+skinparam sequenceParticipantBorderColor #999999
+skinparam noteBorderColor #AAAAAA
+
+participant "Client / UI" as C
+participant "Cloudflare\nTunnel" as CF
+participant "Traefik\n:443" as TR
+participant "Auth\nService" as AU
+participant "lc-check-svc\n:8080" as API
+participant "InputValidator" as IV
+participant "Mt700Parser" as MP
+participant "MinIO\n:9000" as S3
+database "PostgreSQL\n:5432" as DB
+
+C  -> CF  : HTTPS POST /api/v1/files/upload\n(multipart: lc=@lc.txt, invoice=@invoice.pdf)
+CF -> TR  : forward (TLS terminated)
+TR -> AU  : verify API key / JWT
+AU --> TR : 200 OK
+TR -> API : route by Host header
+API -> IV : validate(lcText, pdfBytes)
+
+alt LC malformed or PDF invalid
+    IV --> API : LcParseException / PdfUnreadableException
+    API --> C  : 400 { error, stage, message, field }
+end
+
+IV --> API : OK
+API -> MP : parse(lcText)
+MP --> API : LcDocument
+
+API -> S3  : putObject("lc/{sessionId}.txt")
+S3  --> API: lcKey
+API -> S3  : putObject("invoice/{sessionId}.pdf")
+S3  --> API: invoiceKey
+
+API -> DB  : INSERT sessions\n(id, lc_key, invoice_key, status=QUEUED)
+DB  --> API: sessionId (UUID)
+
+API --> C  : 200 { sessionId, status: "QUEUED" }
+
+note right of DB
+  Session row created.
+  Scheduler polls this table
+  to trigger processing.
+end note
+@enduml

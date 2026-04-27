@@ -1,0 +1,44 @@
+@startuml flow-3-sse-stream
+title Flow 3 — SSE Result Streaming
+
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam sequenceParticipantBackgroundColor #F5F5F5
+skinparam sequenceParticipantBorderColor #999999
+
+participant "Client / UI" as C
+participant "Traefik" as TR
+participant "lc-check-svc\nLcCheckStreamController" as API
+database "PostgreSQL" as DB
+
+C  -> TR  : GET /api/v1/lc-check/{sessionId}/stream\nAccept: text/event-stream
+TR -> API : route (SSE keep-alive)
+API -> DB : SELECT status FROM sessions WHERE id=?
+
+alt session not found
+    API --> C : SSE: event:error\ndata: {error:"SESSION_NOT_FOUND"}
+    API --> C : [close]
+end
+
+API --> C  : SSE: event:status\ndata: {status:"QUEUED"}
+
+loop poll every 1.5 s while status != DONE|FAILED
+    API -> DB  : SELECT status, stage_trace FROM sessions WHERE id=?
+    DB  --> API: row
+
+    alt status = PROCESSING
+        API --> C : SSE: event:progress\ndata: {stage, checksDone, checksTotal, currentRule}
+    end
+end
+
+alt status = DONE
+    API -> DB  : SELECT report FROM sessions WHERE id=?
+    DB  --> API: DiscrepancyReport JSON
+    API --> C  : SSE: event:result\ndata: {compliant, discrepancies[], summary, sessionId}
+    API --> C  : SSE: event:done\ndata: {}
+    API --> C  : [close]
+else status = FAILED
+    API --> C  : SSE: event:error\ndata: {error, stage, message}
+    API --> C  : [close]
+end
+@enduml

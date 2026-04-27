@@ -158,7 +158,7 @@ _mineru-bg: _mineru-install
 	    > $(LOG_DIR)/mineru.log 2>&1 &) \
 	  && echo "✓ mineru bg → http://127.0.0.1:8082"
 
-_ui-bg: _ui-install _ui-samples
+_ui-bg: _ui-install
 	@(cd $(UI_DIR) && nohup npm run dev > $(LOG_DIR)/ui.log 2>&1 &) \
 	  && echo "✓ ui bg → http://127.0.0.1:5173"
 
@@ -319,7 +319,7 @@ _mineru-install:
 
 # --- ui (Vite) ---------------------------------------------------------------
 
-ui: _ui-install _ui-samples  ## start Vite dev server (foreground) — http://127.0.0.1:5173
+ui: _ui-install  ## start Vite dev server (foreground) — http://127.0.0.1:5173
 	@echo "→ ui on :5173 → http://127.0.0.1:5173   (Ctrl-C to stop)"
 	@cd $(UI_DIR) && npm run dev
 
@@ -334,12 +334,6 @@ _ui-install:
 	   echo "✓ $(UI_DIR) installed"; \
 	 fi
 
-_ui-samples:
-	@mkdir -p $(UI_DIR)/public/samples
-	@cp docs/refer-doc/sample_lc_mt700.txt $(UI_DIR)/public/samples/ 2>/dev/null || true
-	@cp test/mt700/*.txt    $(UI_DIR)/public/samples/ 2>/dev/null || true
-	@cp test/invoice/*.pdf  $(UI_DIR)/public/samples/ 2>/dev/null || true
-
 .PHONY: help all all-down status health llm-test test test-rule test-verdict \
         db db-down _docker-up _db-apply-schema \
         svc svc-down \
@@ -347,4 +341,4 @@ _ui-samples:
         mineru mineru-down \
         ui ui-down \
         _db-bg _svc-bg _docling-bg _mineru-bg _ui-bg \
-        _docling-install _mineru-install _ui-install _ui-samples
+        _docling-install _mineru-install _ui-install

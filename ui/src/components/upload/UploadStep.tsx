@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, getLcRaw, invoiceUrl, startCheck } from '../../api/client';
-import { fetchSamplePair, SAMPLES, type SamplePair, type ScenarioKind } from '../../data/samples';
+import { fetchSamplePair, loadSamples, type SamplePair, type ScenarioKind } from '../../data/samples';
 import { useConfirm } from '../../hooks/useConfirm';
 import { useMandatoryTags } from '../../hooks/useMandatoryTags';
 import { validateInvoiceFile, validateLcFile } from '../../lib/validation';
@@ -22,6 +22,9 @@ export function UploadStep({ primaryRunCta = true }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  // Samples are pulled from the API at mount-time. Empty array shows nothing
+  // until the first response lands; on failure the error band surfaces it.
+  const [samples, setSamples] = useState<SamplePair[]>([]);
   const { mandatory } = useMandatoryTags();
   // One-shot guard: only ask for confirmation the first time the operator
   // mutates inputs while viewing an existing session. Once they OK the
@@ -35,6 +38,17 @@ export function UploadStep({ primaryRunCta = true }: Props) {
   // newer selection.
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Load the sample manifest from the API once on mount. Soft-fails — if the
+  // API is unreachable the picker grid simply stays empty and the operator
+  // can still drag/drop their own files.
+  useEffect(() => {
+    let cancelled = false;
+    loadSamples()
+      .then((list) => { if (!cancelled) setSamples(list); })
+      .catch((e) => { if (!cancelled) setErr(`Could not load samples: ${(e as Error).message}`); });
+    return () => { cancelled = true; };
+  }, []);
 
   // When the user navigates back to Upload INSIDE an existing session, load
   // that session's pair from the backend so they land directly on the side-
@@ -269,12 +283,12 @@ export function UploadStep({ primaryRunCta = true }: Props) {
             Pre-defined samples
           </span>
           <span className="font-mono text-[10px] text-muted">
-            {SAMPLES.length} scenarios
+            {samples.length} scenarios
           </span>
         </div>
         <div className="grid grid-cols-2 gap-2.5">
-          {SAMPLES.map((s) => (
-            <SampleCard key={s.id} sample={s} onClick={() => loadSample(s)} />
+          {samples.map((s) => (
+            <SampleCard key={s.cardId} sample={s} onClick={() => loadSample(s)} />
           ))}
         </div>
       </div>
