@@ -126,11 +126,42 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
   - **AGENT**: 12 rules — prompt-driven checks via [`prompts/check/`](lc-checker-svc/src/main/resources/prompts/check/) templates
   - **AGENT+TOOLS**: 2 rules — LLM calls Java tool for computation. [`prompts/check/`](lc-checker-svc/src/main/resources/prompts/check/) templates
 
-## Solution Architecture
+## Deployment Architecture
+
+![Deployment Architecture](docs/diagrams/deploy-architecture.png)
+
+![Architecture (Excalidraw)](docs/diagrams/architecture-local.excalidraw)
+
+
 
 ## Performance and Optimization
 
-1. Overall performance
-2. Vision Model for Invoice Extration
-3. Text Model for Rule Check
-4. Cost
+#### Overall performance
+
+- Overall: 2 mins
+
+- LC parse: < 1 seconds
+
+- Invoice extract:
+  - 30~40s: local qwen3-vl:4b mac book pro m1    
+  - 10s: qwen-plus (Aliyun) as reference benchmark
+- LC rule check: 3~4s by qwen3-vl:4b on  my local.    better performance via Text Model and GPU based server.
+
+#### Vision Model for Invoice Extraction
+
+* Bigger size model like qwen3-vl: 7b or larger will result a better accuracy
+
+* Prompt optimization further can improve the extract quality
+* LoRA, QLoRA fine tuning can improve the quality. 
+* Cross reference. Cross reference by different OCR source can ensure 
+
+#### Text Model for Rule Check
+
+* Bigger Size model and GPU hosted server can result better performance
+
+* Specific Rule Prompt template optimization will result accurate rule result and reason.
+
+  pre-condition is OCR Extraction fields accuracy. 
+
+* Fine tuning of the text model driven by UCP, ISBP rules and data 
+
