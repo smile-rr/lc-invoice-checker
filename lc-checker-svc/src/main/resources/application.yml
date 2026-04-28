@@ -163,32 +163,14 @@ rules:
   catalog-path: classpath:/rules/catalog.yml
 
 # --- API documentation (springdoc-openapi → /v3/api-docs → Scalar at /docs.html) ---
-# Title/description/version are set via @OpenAPIDefinition on LcCheckerApplication.
 springdoc:
   api-docs:
-    path: /v3/api-docs               # OpenAPI JSON spec (consumed by Scalar)
+    path: /v3/api-docs
     enabled: true
-  # swagger-ui is disabled — Scalar is our UI layer at /docs.html.
   swagger-ui:
     enabled: false
   default-produces-media-type: application/json
   packagesToScan: com.lc.checker.api
-  pathsToExclude:
-    - /api/v1/lc-check/{sessionId}
-    - /api/v1/lc-check/{sessionId}/lc-raw
-    - /api/v1/lc-check/{sessionId}/extracts
-    - /api/v1/lc-check/{sessionId}/invoice
-    - /api/v1/lc-check/{sessionId}/trace
-    - /api/v1/lc-check/start-by-sample
-    - /api/v1/debug/**
-    - /api/v1/pipeline/**
-    - /api/v1/rules/**
-    - /api/v1/files/**
-    - /api/v1/samples/**
-    - /api/v1/fields/**
-    - /api/v1/queue/**
-    - /api/v1/sessions/**
-    - /api/v1/lc-meta/**
 
 # --- Pipeline queue ------------------------------------------------------------
 # Single-worker DB-backed queue. JobDispatcher polls for QUEUED rows every

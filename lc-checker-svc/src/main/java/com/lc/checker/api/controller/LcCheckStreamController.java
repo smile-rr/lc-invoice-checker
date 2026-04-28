@@ -16,11 +16,6 @@ import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.validation.InputValidator;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -60,7 +55,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  */
 @RestController
 @RequestMapping("/api/v1/lc-check")
-@Tag(name = "LC Check", description = "Submit a compliance check and subscribe to live pipeline events via SSE.")
 public class LcCheckStreamController {
 
     private static final Logger log = LoggerFactory.getLogger(LcCheckStreamController.class);
@@ -84,6 +78,15 @@ public class LcCheckStreamController {
 
     private final java.util.Map<String, SessionFiles> filesBySession = new ConcurrentHashMap<>();
 
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record StartResponse(
+            String sessionId,
+            String status,
+            int queuePosition,
+            String invoiceFilename,
+            long invoiceBytes,
+            int lcLength) {}
+
     public LcCheckStreamController(CheckEventBus bus,
                                     CheckSessionStore store,
                                     InvoiceFileStore fileStore,
@@ -98,35 +101,8 @@ public class LcCheckStreamController {
         this.dispatcher = dispatcher;
     }
 
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    @Schema(description = "Response returned immediately on submission.")
-    public record StartResponse(
-            @Schema(description = "UUID assigned to this run", example = "550e8400-e29b-41d4-a716-446655440000") String sessionId,
-            @Schema(description = "Always 'QUEUED' on success", example = "QUEUED") String status,
-            @Schema(description = "1-based position in the run queue", example = "1") int queuePosition,
-            @Schema(description = "Original invoice filename", example = "invoice.pdf") String invoiceFilename,
-            @Schema(description = "Invoice file size in bytes", example = "45000") long invoiceBytes,
-            @Schema(description = "LC text length in characters", example = "2048") int lcLength) {}
 
     @PostMapping(path = "/start", consumes = "multipart/form-data")
-    @Operation(
-            summary = "submit LC text + invoice PDF, get sessionId immediately",
-            description = """
-                    Submit a multipart POST with two files:
-                    - `lc`       — MT700 plain text (text/plain)
-                    - `invoice`  — commercial invoice PDF (application/pdf)
-
-                    Validation runs immediately. On success the session is queued and
-                    a `session_id` is returned instantly — the actual check runs asynchronously.
-                    Poll `GET /{sessionId}/stream` for live progress.
-                    """)
-    @ApiResponse(
-            responseCode = "200",
-            description = "Session queued. Returns sessionId immediately.",
-            content = @Content(
-                    mediaType = "application/json",
-                    schema = @Schema(implementation = StartResponse.class)
-            ))
     public ResponseEntity<StartResponse> start(
             @RequestPart("lc") MultipartFile lc,
             @RequestPart("invoice") MultipartFile invoice) throws IOException {
@@ -188,41 +164,6 @@ public class LcCheckStreamController {
     }
 
     @GetMapping(path = "/{sessionId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @Operation(
-            summary = "live SSE stream of status and result",
-            description = """
-                    Opens a Server-Sent Events (SSE) stream for the given session. Four event
-                    types are emitted sequentially:
-
-                    1. **status** — stage transition (e.g. `lc_parse: started` → `lc_parse: completed`).
-                       On `completed`, structured data is included (LcDocument, InvoiceDocument, or a
-                       checks summary map).
-                    2. **rule** — one event per completed rule check. `data` is a `CheckResult`.
-                    3. **error** — pipeline halted. `data` is null; no further events follow.
-                    4. **complete** — final report assembled. `data` is a `DiscrepancyReport`.
-                       UI should navigate to the review tab on receipt.
-
-                    All events share the same envelope shape (`CheckEvent`).
-                    """
-    )
-    @ApiResponse(
-            responseCode = "200",
-            description = "SSE stream — text/event-stream, one JSON event per line. "
-                    + "Event `type` field determines the `data` shape: "
-                    + "status → LcDocument | InvoiceDocument | Map; "
-                    + "rule → CheckResult; "
-                    + "error → null; "
-                    + "complete → DiscrepancyReport.",
-            content = @Content(
-                    mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
-                    schema = @Schema(
-                            description = "CheckEvent — one event per line. "
-                                    + "type=status: data=LcDocument|InvoiceDocument|Map "
-                                    + "type=rule: data=CheckResult "
-                                    + "type=error: data=null "
-                                    + "type=complete: data=DiscrepancyReport")
-            )
-    )
     public SseEmitter stream(@PathVariable String sessionId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         return bus.register(sessionId, emitter);
