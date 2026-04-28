@@ -77,7 +77,7 @@ export const INVOICE_FIELDS: InvoiceFieldDef[] = [
     id: 'F06',
     shortName: 'Amount',
     fieldName: 'Invoice Amount ≤ LC Amount',
-    refs: 'UCP 18(b)  UCP 30(a)(b)(c)  ISBP C9,C10',
+    refs: 'UCP 18(b)  UCP 30(a)  UCP 30(b)  UCP 30(c)  ISBP C9  ISBP C10',
     coveringRules: ['UCP-18b-amount', 'UCP-18b-math', 'UCP-30c', 'ISBP-C10'],
     aggregationType: 'weak',
     type: 'MIXED',

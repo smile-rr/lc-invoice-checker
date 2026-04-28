@@ -57,6 +57,13 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
+# --- Sample files ----------------------------------------------------------------
+# Points to test/golden/ relative to the JVM working directory (user.dir).
+# Run the app from the project root so this resolves correctly.
+# Override SAMPLES_FILES_PATH env var for different setups (e.g. /opt/lc-checker/golden/).
+samples:
+  files-path: ${SAMPLES_FILES_PATH:file:/Users/pc-rn/ws/ai-lab/lc-cheker-solution/test/golden/}
+
 server:
   port: ${SERVER_PORT:8080}
 

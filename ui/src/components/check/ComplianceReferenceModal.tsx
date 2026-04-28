@@ -120,9 +120,12 @@ export function ComplianceReferenceModal({ onClose }: Props) {
                           ✅ embedded in all rules
                         </span>
                       ) : (
-                        <span className="font-mono text-navy-1 text-[11px]">
-                          {field.coveringRules.join(' · ')}
-                        </span>
+                        <div
+                          className="font-mono text-navy-1 text-[11px] leading-relaxed"
+                          dangerouslySetInnerHTML={{
+                            __html: field.coveringRules.join('<br>'),
+                          }}
+                        />
                       )}
                     </td>
 
@@ -161,13 +164,18 @@ export function ComplianceReferenceModal({ onClose }: Props) {
 
 // ─── Ref chips — CitationPopover per reference ─────────────────────────────────
 
-/** Parses "UCP 18(a)  ISBP C6" into CitationPopover chips. */
+/** Parses "UCP 18(a)  ISBP C6" / "UCP 30(a)(b)(c)  ISBP C9,C10" into CitationPopover chips. */
 function RefChips({ refs }: { refs: string }) {
   return (
     <div className="flex flex-wrap gap-1">
-      {refs.split('  ').map((r) => {
-        const ref = r.trim();
-        if (!ref) return null;
+      {refs.split('  ').flatMap((chunk) => {
+        const ref = chunk.trim();
+        if (!ref) return [];
+        // Split "UCP 30(a)(b)(c)" → ["UCP 30(a)", "UCP 30(b)", "UCP 30(c)"]
+        // Split "ISBP C9,C10" → ["ISBP C9", "ISBP C10"]
+        const sub = ref.split(/,(?=\S)|\)\(/);
+        return sub.map((s) => s.trim()).filter(Boolean);
+      }).map((ref) => {
         const excerpt = UCP_ISBP_EXCERPTS[ref] ?? null;
         return (
           <CitationPopover

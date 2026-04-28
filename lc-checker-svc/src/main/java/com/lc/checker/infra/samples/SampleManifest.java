@@ -10,7 +10,7 @@ import java.util.List;
  * <p>{@code passLc} is the MT700 filename whose verdict against this invoice is
  * intended to be PASS-only; {@code failLc} is an alternative MT700 with
  * deliberately introduced discrepancies. Both files live under
- * {@code classpath:samples/files/}.
+ * {@code classpath:samples/files/} — resolved via {@code samples.files-path} config.
  *
  * <p>{@code failLc} may be {@code null} when an invoice's extraction is too
  * sparse to construct a meaningful failure case.

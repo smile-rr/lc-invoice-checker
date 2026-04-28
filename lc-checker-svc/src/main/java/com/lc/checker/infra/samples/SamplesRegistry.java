@@ -18,14 +18,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Loads {@code samples.yaml} once at startup and exposes lookups by sample id.
- * Backing files are held on the classpath under {@code samples/files/} and
- * read on demand via {@link #readBytes(String)}.
- *
- * <p>Why classpath instead of MinIO: samples are static, version-controlled
- * demo assets that travel with the API jar. Bundling avoids an extra startup
- * race against MinIO and keeps the deploy atomic. User-uploaded LC/invoice
- * pairs continue to use {@code InvoiceFileStore} → MinIO; only the curated
- * picker assets live here.
+ * Backing files are read from the filesystem path configured via
+ * {@code samples.files-path} (default: {@code file:${user.dir}/test/golden/}).
+ * Override with the {@code SAMPLES_FILES_PATH} env var or {@code samples.files-path}
+ * Spring property for custom deployments.
  *
  * <p>Fail-fast on duplicate ids or missing backing files at boot.
  */
@@ -44,7 +40,7 @@ public class SamplesRegistry {
             @Value("${samples.manifest-path:classpath:/samples/samples.yaml}") String manifestPath,
             @Value("${samples.files-path:classpath:/samples/files/}") String filesPath) throws IOException {
         this.resourceLoader = resourceLoader;
-        this.filesPathBase = filesPath.endsWith("/") ? filesPath : filesPath + "/";
+        this.filesPathBase = resolveFilesPath(filesPath);
 
         Resource resource = resourceLoader.getResource(manifestPath);
         if (!resource.exists()) {
@@ -90,7 +86,7 @@ public class SamplesRegistry {
         return Optional.ofNullable(byId.get(id));
     }
 
-    /** Read a backing file by its filename (relative to {@code samples/files/}). */
+    /** Read a backing file by its filename (relative to {@code samples.files-path}). */
     public byte[] readBytes(String filename) throws IOException {
         Resource r = resourceLoader.getResource(filesPathBase + filename);
         if (!r.exists()) {
@@ -99,6 +95,13 @@ public class SamplesRegistry {
         try (InputStream in = r.getInputStream()) {
             return in.readAllBytes();
         }
+    }
+
+    private String resolveFilesPath(String filesPath) {
+        // Resolve ${user.dir} (set by the JVM) so file:${user.dir}/test/golden/
+        // works regardless of whether Spring expanded the placeholder.
+        String resolved = filesPath.replace("${user.dir}", System.getProperty("user.dir", ""));
+        return resolved.endsWith("/") ? resolved : resolved + "/";
     }
 
     private void requireExists(String filename, String role, String sampleId) {

@@ -132,6 +132,12 @@ export function ComplianceCheckPanel({ state }: Props) {
     [fieldResults],
   );
 
+  /** Only fields with at least one covering rule — excludes F12/F13/F15/F17. */
+  const totalFieldsWithRules = useMemo(
+    () => fieldResults.filter((fr) => fr.fieldDef.coveringRules.length > 0).length,
+    [fieldResults],
+  );
+
   const visibleFieldResults = useMemo(() => {
     let results = fieldResults;
     if (statusFilter !== null) {
@@ -240,7 +246,7 @@ export function ComplianceCheckPanel({ state }: Props) {
               {/* Filter bar — inline after toggle */}
               <StatusFilterBar
                 counts={viewMode === 'rule' ? counts : fieldViewCounts}
-                totalEnabled={viewMode === 'rule' ? catalogRules.length : fieldResults.length}
+                totalEnabled={viewMode === 'rule' ? catalogRules.length : totalFieldsWithRules}
                 totalCompleted={viewMode === 'rule' ? totalCompleted : fieldTotalCompleted}
                 status={statusFilter}
                 ruleId={viewMode === 'rule' ? ruleId : fieldId}

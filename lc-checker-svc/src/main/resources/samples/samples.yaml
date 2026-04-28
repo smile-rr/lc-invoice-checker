@@ -3,14 +3,14 @@
 # =============================================================================
 #
 # Source of truth for the upload page's "Pre-defined samples" picker.
-# Files live under classpath:samples/files/ and travel with the API jar so
-# they're available wherever the API runs (no MinIO dep, no host-mount).
+# Files live under test/golden/ on the filesystem (configured via
+# samples.files-path in application.yml, defaulting to file:${user.dir}/test/golden/).
 #
 # To add a pair:
-#   1. Drop the PDF + .txt files into samples/files/ (mirror test/golden/).
+#   1. Drop the PDF + .txt files into test/golden/.
 #   2. Append a row below.
 #
-# pass_lc / fail_lc / invoice are filenames inside files/. fail_lc is optional
+# pass_lc / fail_lc / invoice are filenames inside test/golden/. fail_lc is optional
 # — pairs without a meaningful failure case omit it.
 # =============================================================================
 

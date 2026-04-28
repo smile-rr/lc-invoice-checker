@@ -41,10 +41,8 @@ export const UCP_ISBP_EXCERPTS: Record<string, string> = {
 
   'UCP 600 Art. 30(a)': 'The words "about" or "approximately" used in connection with the amount of the credit or the quantity or the unit price stated in the credit are to be construed as allowing a tolerance not to exceed 10% more or 10% less.',
   'UCP 30(a)': 'The words "about" or "approximately" used in connection with the amount of the credit or the quantity or the unit price stated in the credit are to be construed as allowing a tolerance not to exceed 10% more or 10% less.',
-
   'UCP 600 Art. 30(b)': 'A tolerance not exceeding 5% more or 5% less in the quantity of the goods is allowed, provided the credit does not stipulate the quantity in terms of a stipulated number of packing units or individual items and the total amount of the drawings does not exceed the amount of the credit.',
   'UCP 30(b)': 'A tolerance not exceeding 5% more or 5% less in the quantity of the goods is allowed, provided the credit does not stipulate the quantity in terms of a stipulated number of packing units or individual items and the total amount of the drawings does not exceed the amount of the credit.',
-
   'UCP 600 Art. 30(c)': 'A drawing under a credit may be for less than the amount of the credit, even if partial drawings or shipments are not permitted.',
   'UCP 30(c)': 'A drawing under a credit may be for less than the amount of the credit, even if partial drawings or shipments are not permitted.',
 

@@ -10,9 +10,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Resolves sample LC / invoice files to their MinIO content-addressed keys
- * (SHA-256). Sample files live on the classpath ({@code samples/files/}) but
- * need to be accessible by SHA-256 hash so the dispatcher can read them the same
- * way it reads user-uploaded files.
+ * (SHA-256). Sample files are read from the filesystem path configured via
+ * {@code samples.files-path} (default: {@code file:${user.dir}/test/golden/}).
  *
  * <p>On first access, the corresponding bytes are uploaded to MinIO under the
  * content-addressed key. Subsequent calls hit the dedup HEAD probe and are free.
