@@ -170,20 +170,20 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
 ### Cost Estimation based on LLM Providers Price
 
-**Pipeline Total Tokens:**  37,975 input / 3,442 output   
+**Pipeline Total Tokens:**  ~40,000 input / ~3,500 output   
 
 | Model             | Total Cost | $/1M input · output |
 | ----------------- | ---------- | ------------------- |
-| GPT-5.5           | $0.293     | $5 · $30            |
-| Claude Opus 4.7   | $0.276     | $5 · $25            |
-| Claude Sonnet 4.6 | $0.166     | $3 · $15            |
-| Gemini 3.1 Pro    | $0.117     | $2 · $12            |
-| GPT-4.1           | $0.103     | $2 · $8             |
-| Gemini 2.5 Pro    | $0.082     | $1.25 · $10         |
-| Claude Haiku 4.5  | $0.055     | $1 · $5             |
-| Qwen3-Max         | $0.043     | $0.78 · $3.90       |
-| Qwen3.5 Plus      | $0.023     | $0.40 · $2.40       |
-| Gemini 2.5 Flash  | $0.020     | $0.30 · $2.50       |
+| GPT-5.5           | $0.305     | $5 · $30            |
+| Claude Opus 4.7   | $0.288     | $5 · $25            |
+| Claude Sonnet 4.6 | $0.173     | $3 · $15            |
+| Gemini 3.1 Pro    | $0.122     | $2 · $12            |
+| GPT-4.1           | $0.108     | $2 · $8             |
+| Gemini 2.5 Pro    | $0.085     | $1.25 · $10         |
+| Claude Haiku 4.5  | $0.058     | $1 · $5             |
+| Qwen3-Max         | $0.045     | $0.78 · $3.90       |
+| Qwen3.5 Plus      | $0.024     | $0.40 · $2.40       |
+| Gemini 2.5 Flash  | $0.021     | $0.30 · $2.50       |
 
 
 
