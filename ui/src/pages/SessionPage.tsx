@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useCheckSession } from '../hooks/useCheckSession';
 import { usePipelineConfig } from '../hooks/usePipelineConfig';
-import { ApiProgressBar } from '../components/shell/ApiProgressBar';
 import { PipelineFlow } from '../components/shell/PipelineFlow';
 import { SessionStrip } from '../components/shell/SessionStrip';
 import { useStep } from '../components/shell/steps';
@@ -68,8 +67,6 @@ export function SessionPage() {
         onSelect={setStep}
         configuredStages={pipeline.configuredStages}
       />
-      <ApiProgressBar />
-
       {state.error && (
         <div className="mx-8 my-4 rounded-card bg-status-redSoft border border-status-red/30 p-4 shrink-0">
           <div className="font-semibold text-status-red">Pipeline error</div>

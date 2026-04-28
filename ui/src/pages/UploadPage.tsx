@@ -1,6 +1,5 @@
 import { useLocation } from 'react-router-dom';
 import { EMPTY_SESSION_STATE } from '../hooks/useCheckSession';
-import { ApiProgressBar } from '../components/shell/ApiProgressBar';
 import { PipelineFlow } from '../components/shell/PipelineFlow';
 import { SessionStrip } from '../components/shell/SessionStrip';
 import { UploadStep } from '../components/upload/UploadStep';
@@ -21,7 +20,6 @@ export function UploadPage() {
     <div className="flex flex-col h-full overflow-hidden">
       <SessionStrip state={EMPTY_SESSION_STATE} />
       <PipelineFlow state={null} active="upload" onSelect={() => {}} />
-      <ApiProgressBar />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <UploadStep key={loc.key} primaryRunCta={true} />
       </div>
