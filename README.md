@@ -4,19 +4,19 @@
 
 ## Major Considerations
 
-#### **Output Accuracy**
+### **Output Accuracy**
 
 Accuracy is the most important consideration. Any missed issue means immediate financial loss — LC funds go to the beneficiary and cannot be recovered.
 
 Hence each stage of **LLM agent output must be right.** Human review remains the final gate as LLM didn't reach that stage yet.
 
-#### **Workload Decoupling**
+### **Workload Decoupling**
 
 Banks have 5 days to check LC and invoice. But document submission can happen anytime, in any volume. Also the LLM inference engine have capacity and limits processing paralel request.
 
 So **decouple submission from processing is needed.** This lets the system scale freely without concurrency failures.
 
-#### **Observation Capability**
+### **Observation Capability**
 
 The vision and language models are black boxes to us. We need to see what goes in and what comes out. That visibility is how we close the accuracy gap. Frameworks like SpringAI, LangChain are convenient — but they hide the details.
 
@@ -26,7 +26,7 @@ That's why we need to **inspect the raw LLM API request and response** for judgi
 
 ## Workflow
 
-#### 1. Task Submission
+### 1. Task Submission
 
 **API:** `POST /api/v1/lc-check/start` — submit LC text + invoice PDF, get sessionId immediately
 
@@ -46,7 +46,7 @@ sequenceDiagram
     API-->>C: 200 { sessionId, status:"QUEUED" }
 ```
 
-#### 2. LC Check Pipeline
+### 2. LC Check Pipeline
 
 **API:** async scheduler — polls queue, runs compliance checks, saves report
 
@@ -82,7 +82,7 @@ sequenceDiagram
     SCH->>DB: save report + DONE
 ```
 
-#### 3. Progress Inquiry (SSE)
+### 3. Progress Inquiry (SSE)
 
 **API:** `GET /api/v1/lc-check/{sessionId}/stream` — live SSE stream of status and result
 
@@ -102,14 +102,14 @@ sequenceDiagram
 
 ## Config-Driven Design
 
-#### **LC MT700 Parsing** 
+### **LC MT700 Parsing** 
 
 We use the 2 files as gold source fields for validation and parse fields from MT700 txt for LC fields. any new fields definition can add there in the config.
 
 - [`field-pool.yaml`](lc-checker-svc/src/main/resources/fields/field-pool.yaml): for definition  of LC fields and description.
 - [`lc-tag-mapping.yaml`](lc-checker-svc/src/main/resources/fields/lc-tag-mapping.yaml): for mapping between MT700 tag to field-pool defination.
 
-#### **Invoice Extraction** 
+### **Invoice Extraction** 
 
 We extract all invoice fields from fields-pool definition, inject all required fields and description into the vision extract prompt.
 
@@ -117,7 +117,7 @@ We extract all invoice fields from fields-pool definition, inject all required f
 
 - [`invoice-extract-vision.st`](lc-checker-svc/src/main/resources/prompts/extract/invoice-extract-vision.st): prompt template for vission llm extract invoice fields.  optimize needed for more accuracy extraction besides the model fine tuning part.  optimize this one first before model fine tuning.
 
-#### **Compliance Rules**
+### **Compliance Rules**
 
 Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/catalog.yml), driven by UCP 600 and ISBP 821. See [`ucp600_isbp821_invoice_rules.md`](docs/refer-doc/ucp600_isbp821_invoice_rules.md) — **Quick Cross-Reference Matrix** for full rule reference.
 
@@ -136,7 +136,7 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
 ## Performance and Optimization
 
-#### Overall performance
+### Overall performance
 
 - Overall: 2 mins
 
@@ -147,7 +147,7 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
   - 10s: qwen-plus (Aliyun) as reference benchmark
 - LC rule check: 3~4s by qwen3-vl:4b on  my local.    better performance via Text Model and GPU based server.
 
-#### Vision Model for Invoice Extraction
+### Vision Model for Invoice Extraction
 
 * Bigger size model like qwen3-vl: 7b or larger will result a better accuracy
 
@@ -155,7 +155,7 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 * LoRA, QLoRA fine tuning can improve the quality. 
 * Cross reference. Cross reference by different OCR source can ensure 
 
-#### Text Model for Rule Check
+### Text Model for Rule Check
 
 * Bigger Size model and GPU hosted server can result better performance
 

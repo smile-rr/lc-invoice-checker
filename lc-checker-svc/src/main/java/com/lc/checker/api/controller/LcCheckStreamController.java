@@ -131,7 +131,7 @@ public class LcCheckStreamController {
         // phantom row that would briefly show up in queueSnapshot().
         boolean lcStored      = fileStore.putLcIfAbsent(lcSha, lcName, lcBytes);
         boolean invoiceStored = fileStore.putInvoiceIfAbsent(invoiceSha, pdfName, pdfBytes);
-        if (!lcStored || !invoiceStored) {
+        if (fileStore.isEnabled() && (!lcStored || !invoiceStored)) {
             log.error("MinIO upload failed: lcStored={} invoiceStored={} sessionId={}",
                     lcStored, invoiceStored, sessionId);
             return ResponseEntity.status(503)
