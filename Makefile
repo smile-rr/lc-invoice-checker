@@ -170,6 +170,57 @@ _ui-bg: _ui-install
 # model named in .env's LOCAL_LLM_VL_MODEL. Surfaces latency + response so
 # you can tell at a glance whether `local_llm_vl` will work end-to-end.
 
+# --- llm / llm-vl (Ollama — GPU-hungry, must stop before docling/mineru) --
+#
+# Ollama runs as a brew service and holds GPU memory. Docling/MiniRU both need
+# GPU to warm up. Use `make llm down` before starting GPU-intensive extractors,
+# and `make llm up` to bring it back after.
+#
+# llm  and llm-vl are synonyms — both names exist because different users
+# remember the command differently.
+
+OLLAMA_UP_RETRIES ?= 30
+
+_llm-check:
+	@if lsof -nP -iTCP:11434 -sTCP:LISTEN >/dev/null 2>&1; then \
+	   echo "  ollama: ✓ listening on :11434"; \
+	 else \
+	   echo "  ollama: · not listening"; \
+	 fi
+
+llm up llm-up llm-vl: _llm-check  ## start Ollama (brew service) and wait for readiness
+	@echo "→ starting ollama …"
+	@brew services start ollama 2>/dev/null || true
+	@for i in $$(seq 1 $(OLLAMA_UP_RETRIES)); do \
+	   if lsof -nP -iTCP:11434 -sTCP:LISTEN >/dev/null 2>&1; then \
+	     echo "  ✓ ollama ready on :11434 ($$$$i/$(OLLAMA_UP_RETRIES) checks)"; exit 0; \
+	   fi; \
+	   sleep 1; \
+	done; \
+	echo "  ✗ ollama did not start on :11434 after $(OLLAMA_UP_RETRIES)s — check: brew services list"; exit 1
+
+llm-down llm-vl-down:  ## stop Ollama (frees GPU memory)
+	@pid=$$(lsof -ti tcp:11434 2>/dev/null); \
+	  if [ -n "$$pid" ]; then echo "→ killing ollama (pid $$pid) …"; kill $$pid 2>/dev/null; sleep 2; else echo "  (ollama not running on :11434)"; fi; \
+	brew services stop ollama 2>/dev/null || true; \
+	echo "✓ ollama stopped"
+
+llm restart llm-vl-restart: llm-down llm-up  ## stop then start Ollama
+
+# Restart GPU extractors after freeing GPU memory.
+# Usage: make llm-down && sleep 1 && make llm-vl-up && make llm-restart-extractors
+llm-restart-extractors:  ## restart docling + mineru (use after make llm-up)
+	@mkdir -p $(LOG_DIR)
+	@echo "→ restarting docling + mineru …"
+	@$(MAKE) --no-print-directory docling-down; $(MAKE) --no-print-directory mineru-down; sleep 2
+	@$(MAKE) --no-print-directory _docling-bg
+	@$(MAKE) --no-print-directory _mineru-bg
+	@echo "✓ docling + mineru restarted — check: make health"
+
+llm: _llm-check
+.PHONY: llm llm-up llm-down llm-vl llm-vl-up llm-vl-down llm-restart llm-vl-restart \
+        llm-restart-extractors _llm-check
+
 nosleep:  ## prevent Mac from sleeping (Ctrl-C to cancel) — or: caffeinate -s -t 3600
 	@echo "→ preventing sleep … press Ctrl-C to cancel"
 	@caffeinate -s -i
@@ -237,6 +288,71 @@ llm-test:  ## ping local Ollama (model from LOCAL_LLM_VL_MODEL in .env)
 	@echo
 	@echo "=== 4. currently loaded in memory (ollama ps) ==="
 	@ollama ps 2>/dev/null || echo "  (ollama CLI unavailable)"
+
+TESTPDF ?= test/sample_invoice.pdf
+
+extract-test-docling:  ## smoke-test Docling /extract endpoint
+	@port=8081; extractor="Docling"; \
+	 echo "=== $$extractor (port $$port) — smoke test ==="; \
+	 if ! lsof -i tcp:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
+	   echo "  ✗ port $$port not listening — is the service running? Try: make docling"; \
+	   exit 1; \
+	 fi; \
+	 health=$$(curl -sS --max-time 5 "http://127.0.0.1:$$port/health" 2>/dev/null || echo "{}"); \
+	 echo "  health: $$health"; \
+	 if [ ! -f "$(TESTPDF)" ]; then echo "  ✗ $(TESTPDF) not found — set TESTPDF=/path/to/invoice.pdf"; exit 1; fi; \
+	 echo "  extracting $(TESTPDF) …"; \
+	 start=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 resp=$$(curl -sS -w "\n---HTTP:%{http_code} TIME:%{time_total}s---" \
+	   -X POST "http://127.0.0.1:$$port/extract" \
+	   -F "file=@$(TESTPDF)" \
+	   -F "prompt=Extract invoice fields. Return ONLY valid JSON." 2>&1); \
+	 end=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 ms=$$(( $$end - $$start )); \
+	 echo "$$resp" | grep -v "^---HTTP:" | head -c 600; echo; \
+	 http_code=$$(echo "$$resp" | grep "---HTTP:" | sed 's/.*---HTTP:\([0-9]*\)---.*/\1/'); \
+	 if [ "$$http_code" = "200" ]; then \
+	   echo "  ✓ PASS — HTTP $$http_code ($${ms}ms)"; \
+	 else \
+	   echo "  ✗ FAIL — HTTP $$http_code ($${ms}ms)"; \
+	 fi
+
+extract-test-mineru:  ## smoke-test MinerU /extract endpoint (⚠ requires free GPU)
+	@port=8082; extractor="MinerU"; \
+	 echo "=== $$extractor (port $$port) — smoke test ==="; \
+	 if ! lsof -i tcp:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
+	   echo "  ✗ port $$port not listening — is the service starting? GPU init can take 2-5 min."; \
+	   echo "  Check warmup progress: tail -f /tmp/lc-checker/mineru.log"; \
+	   exit 1; \
+	 fi; \
+	 health=$$(curl -sS --max-time 5 "http://127.0.0.1:$$port/health" 2>/dev/null || echo "{}"); \
+	 warmup=$$(echo "$$health" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('warmup_done','N/A'))" 2>/dev/null || echo "N/A"); \
+	 echo "  health: $$health"; \
+	 if [ "$$warmup" = "False" ] || [ "$$warmup" = "false" ]; then \
+	   echo "  ⚠ warmup_done=false — GPU model still loading."; \
+	   echo "  GPU may be contended — free it with: make llm-down"; \
+	 fi; \
+	 if [ ! -f "$(TESTPDF)" ]; then echo "  ✗ $(TESTPDF) not found — set TESTPDF=/path/to/invoice.pdf"; exit 1; fi; \
+	 echo "  extracting $(TESTPDF) …"; \
+	 start=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 resp=$$(curl -sS -w "\n---HTTP:%{http_code} TIME:%{time_total}s---" \
+	   -X POST "http://127.0.0.1:$$port/extract" \
+	   -F "file=@$(TESTPDF)" \
+	   -F "prompt=Extract invoice fields. Return ONLY valid JSON." 2>&1); \
+	 end=$$(python3 -c 'import time; print(int(time.time()*1000))'); \
+	 ms=$$(( $$end - $$start )); \
+	 echo "$$resp" | grep -v "^---HTTP:" | head -c 600; echo; \
+	 http_code=$$(echo "$$resp" | grep "---HTTP:" | sed 's/.*---HTTP:\([0-9]*\)---.*/\1/'); \
+	 if [ "$$http_code" = "200" ]; then \
+	   echo "  ✓ PASS — HTTP $$http_code ($${ms}ms)"; \
+	 else \
+	   echo "  ✗ FAIL — HTTP $$http_code ($${ms}ms)"; \
+	 fi
+
+docling-test: extract-test-docling  ## smoke-test Docling /extract endpoint
+mineru-test:  extract-test-mineru   ## smoke-test MinerU /extract endpoint (⚠ requires free GPU)
+
+.PHONY: extract-test-docling extract-test-mineru docling-test mineru-test
 
 # --- db (Docker compose) -----------------------------------------------------
 #
@@ -359,8 +475,10 @@ _ui-install:
 .PHONY: help all all-down status health llm-test nosleep langfuse-auth test test-rule test-verdict \
         db db-down _docker-up _db-apply-schema \
         svc svc-down \
-        docling docling-down \
-        mineru mineru-down \
+        docling docling-down docling-test extract-test-docling \
+        mineru mineru-down mineru-test extract-test-mineru \
         ui ui-down \
         _db-bg _svc-bg _docling-bg _mineru-bg _ui-bg \
-        _docling-install _mineru-install _ui-install
+        _docling-install _mineru-install _ui-install \
+        llm llm-up llm-down llm-vl llm-vl-up llm-vl-down llm-restart llm-vl-restart \
+        llm-restart-extractors _llm-check

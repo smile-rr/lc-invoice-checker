@@ -10,43 +10,34 @@ rules:
   # INVOICE FIELD INDEX
   # Sequence mirrors: ucp600_isbp821_invoice_rules.md → Quick Cross-Reference Matrix
   # ============================================================================
-  # | ID  | Field Name                          | Short     | UCP / ISBP Ref                  | Covering Rules                          | Type          |
-  # | F01 | Issuer (Beneficiary as Seller)      | Issuer    | UCP 18(a)  ISBP C6              | ISBP-C6                                | AGENT         |
-  # | F02 | Buyer Name (Applicant)               | Buyer     | UCP 18(a)  ISBP C5              | ISBP-C5                                | AGENT         |
-  # | F03 | Invoice Signature                    | Signature | UCP 18(a)(d)  ISBP C2            | ISBP-C2                                | AGENT         |
-  # | F04 | LC Number Reference                  | LC Ref    | UCP 18(a)  ISBP C1              | ISBP-C1                                | AGENT         |
-  # | F05 | Currency                            | Currency  | UCP 18(b)  ISBP C8              | UCP-18b-currency                       | PROGRAMMATIC  |
-  # | F06 | Invoice Amount ≤ LC Amount           | Amount    | UCP 18(b)                        | UCP-18b-amount                         | AGENT+TOOL    |
-  # |     |                                     |           | UCP 30(a)(b)(c)  ISBP C9,C10    | UCP-18b-math                           | AGENT+TOOL    |
-  # |     |                                     |           |                                  | UCP-30c                                | PROGRAMMATIC  |
-  # |     |                                     |           |                                  | ISBP-C10                               | AGENT         |
-  # | F07 | Unit Price                          | Unit Price| UCP 18(b)  ISBP C4               | ISBP-C4                                | AGENT         |
-  # | F08 | Goods Description                    | Goods     | UCP 18(c)  ISBP C3              | ISBP-C3                                | AGENT         |
-  # | F09 | Trade Terms (Incoterms)             | Incoterms | UCP 18(b)(c)  ISBP C8           | ISBP-C8                                | AGENT         |
-  # | F10 | Country of Origin                   | Origin    | UCP 18(c)  ISBP C7               | ISBP-C7                                | AGENT         |
-  # | F11 | Invoice Date ≤ Presentation Date     | Inv. Date | UCP 14(h)(i)  ISBP A19           | UCP-14h                                | PROGRAMMATIC  |
-  # |     |                                     |           |                                  | UCP-14i                                | PROGRAMMATIC  |
-  # | F12 | Presentation within 21 days          | Present.  | UCP 14(c)  ISBP A1              | (not included — needs B/L shipment date)  | —             |
-  # | F13 | Non-contradiction with other docs   | Cross-ref | UCP 14(d)  ISBP B1,D1,K1         | (not included — needs cross-document input) | —             |
-  # | F14 | Address (country consistency)        | Address   | UCP 14(e)  ISBP C5,C6            | UCP-14e                                | AGENT         |
-  # | F15 | Abbreviations / Minor Typos          | Format.   | UCP 14(a)  ISBP A14,A15          | ✅ (embedded — applied by all rules)    | —             |
-  # | F16 | Quantity Tolerance (±5% / ±10%)      | Qty Tol.  | UCP 30(a)(b)  ISBP C3,C4         | UCP-30a                                | AGENT         |
-  # |     |                                     |           |                                  | UCP-30b                                | AGENT         |
-  # | F17 | Insurance (CIF invoices)             | Insurance | UCP 28(f)  ISBP E1               | (not included — needs insurance document)     | —             |
+  # ID    | Name              | Rule                    | Type          | UCP / ISBP Ref              | Field Name                               | Reason Not Included
+  # ------+------------------+-------------------------+---------------+-----------------------------+-----------------------------------------+--------------------
+  # F01   | Issuer           | ISBP-C6                | AGENT         | UCP 18(a)  ISBP C6          | Issuer (Beneficiary as Seller)          |
+  # F02   | Buyer            | ISBP-C5                | AGENT         | UCP 18(a)  ISBP C5          | Buyer Name (Applicant)                   |
+  # F03   | Signature        | ISBP-C2                | AGENT         | UCP 18(a)(d)  ISBP C2       | Invoice Signature                       |
+  # F04   | LC Ref           | ISBP-C1                | AGENT         | UCP 18(a)  ISBP C1          | LC Number Reference                      |
+  # F05   | Currency         | UCP-18b-currency       | PROGRAMMATIC  | UCP 18(b)  ISBP C8          | Currency                                |
+  # F06   | Amount           | UCP-18b-amount         | AGENT+TOOL    | UCP 18(b)                   | Invoice Amount <= LC Amount             |
+  #       |                  | UCP-18b-math           | AGENT+TOOL    | UCP 30(a)(b)(c)  ISBP C9,C10|                                        |
+  #       |                  | UCP-30c                | PROGRAMMATIC  |                             |                                        |
+  #       |                  | ISBP-C10               | AGENT         |                             |                                        |
+  # F07   | Unit Price       | ISBP-C4                | AGENT         | UCP 18(b)  ISBP C4          | Unit Price                              |
+  # F08   | Goods            | ISBP-C3                | AGENT         | UCP 18(c)  ISBP C3          | Goods Description                       |
+  # F09   | Incoterms        | ISBP-C8                | AGENT         | UCP 18(b)(c)  ISBP C8       | Trade Terms (Incoterms)                |
+  # F10   | Origin           | ISBP-C7                | AGENT         | UCP 18(c)  ISBP C7          | Country of Origin                       |
+  # F11   | Inv. Date        | UCP-14h                | PROGRAMMATIC  | UCP 14(h)                   | Invoice Date <= Presentation Date       |
+  #       |                  | UCP-14i                | PROGRAMMATIC  | UCP 14(i)  ISBP A19         |                                        |
+  # F12   | Present.         |                        |               | UCP 14(c)  ISBP A1          | Presentation within 21 days             | needs B/L shipment date
+  # F13   | Cross-ref        |                        |               | UCP 14(d)  ISBP B1,D1,K1    | Non-contradiction with other docs       | needs cross-document input
+  # F14   | Address          | UCP-14e                | AGENT         | UCP 14(e)  ISBP C5,C6       | Address (country consistency)           |
+  # F15   | Format           |                        |               | UCP 14(a)  ISBP A14,A15     | Abbreviations / Minor Typos            | applied by all rules
+  # F16   | Qty Tol.         | UCP-30a                | AGENT         | UCP 30(a)                   | Quantity Tolerance (+-5% / +-10%)       |
+  #       |                  | UCP-30b                | AGENT         | UCP 30(b)  ISBP C3,C4       |                                        |
+  # F17   | Insurance        |                        |               | UCP 28(f)  ISBP E1          | Insurance (CIF invoices)                | needs insurance document
 
   # ============================================================================
   # 2. PROGRAMMATIC (Tier 1)
   # ============================================================================
-
-  # NOTE: UCP-18a-issuer and UCP-18a-applicant were removed. They were
-  # advertised as identity checks ("Invoice issuer — beneficiary identity",
-  # "Invoice buyer — applicant identity") but their SpEL was a non-blank
-  # presence test, so they would PASS when the invoice named entirely
-  # different parties from the LC. Identity is owned by ISBP-C6 (issuer)
-  # and ISBP-C5 (buyer) — Tier-2 agent calls that carry ISBP A14 / B1–B5
-  # abbreviation and minor-formatting tolerances. With the system prompt's
-  # standing rules ("both blank → DOUBTS"; "clear mismatch → FAIL, never
-  # NOT_REQUIRED"), ISBP-C5/C6 cover both presence and identity correctly.
 
   - id: UCP-18b-currency
     name: Currency match
