@@ -261,26 +261,26 @@ public class LcCheckStreamController {
         String variant  = (body.variant() == null || body.variant().isBlank()) ? "pass" : body.variant();
         String lcFilename = sampleRef.getLcFilename(sampleId, variant).orElse("lc.txt");
 
-        // Resolve sample LC:
-        // - MinIO up:  lazily upload to MinIO, use SHA-256 key (dedup + durable).
-        // - MinIO down: cache raw bytes in-process so the hot-path /lc-raw and
-        //   the dispatcher can still serve the session without MinIO.
-        String lcSha;
+        // Always read sample LC bytes first and cache the text in the hot
+        // session store so /lc-raw answers from memory on every subsequent
+        // request — MinIO is the durable backing store, not the primary path.
+        byte[] lcBytes = sampleRef.getLcBytes(sampleId, variant)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
+        String lcSha = Sha256.hex(lcBytes);
+        filesBySession.compute(sessionId, (key, existing) ->
+                existing == null
+                        ? new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8), null, null)
+                        : new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8),
+                                existing.invoiceFilename(), existing.invoiceBytes()));
+
+        // MinIO upload: dedup upload so future sessions with the same content
+        // hit the same blob. No-op if already present (content-addressed PUT).
         if (fileStore.isEnabled()) {
-            lcSha = sampleRef.getLcSha256(sampleId, variant)
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
+            fileStore.putLcIfAbsent(lcSha, lcFilename, lcBytes);
         } else {
-            byte[] lcBytes = sampleRef.getLcBytes(sampleId, variant)
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
-            lcSha = Sha256.hex(lcBytes);
-            // Cache so /lc-raw + dispatcher can read it without MinIO.
-            filesBySession.compute(sessionId, (key, existing) ->
-                    existing == null
-                            ? new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8), null, null)
-                            : new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8), existing.invoiceFilename(), existing.invoiceBytes()));
-            log.warn("MinIO unavailable — sample LC cached in-process for sessionId={}", sessionId);
+            log.warn("MinIO unavailable — sample LC served from in-process cache for sessionId={}",
+                    sessionId);
         }
 
         // Invoice: custom upload or sample default.

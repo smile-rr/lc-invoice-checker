@@ -94,9 +94,21 @@ export async function getQueueStatus(): Promise<QueueStatus> {
   return apiJson<QueueStatus>('/api/v1/queue/status');
 }
 
-/** Fetches the raw MT700 text uploaded for a session. */
+/** Session-level cache: prevents duplicate /lc-raw fetches for the same sessionId
+ *  even when multiple components call getLcRaw concurrently (only one HTTP request fires). */
+const lcRawCache = new Map<string, Promise<string>>();
+
+/** Fetches the raw MT700 text uploaded for a session. Result is cached per sessionId. */
 export async function getLcRaw(sessionId: string): Promise<string> {
-  return apiText(`${API_BASE}/${sessionId}/lc-raw`);
+  const cached = lcRawCache.get(sessionId);
+  if (cached) return cached;
+  const promise = apiText(`${API_BASE}/${sessionId}/lc-raw`).finally(() => {
+    // Evict after settle so a future navigation to the same session (after a
+    // page refresh / new sessionId) re-fetches cleanly.
+    lcRawCache.delete(sessionId);
+  });
+  lcRawCache.set(sessionId, promise);
+  return promise;
 }
 
 /** URL for the uploaded invoice PDF — pass to <embed> or pdf.js. */
