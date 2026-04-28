@@ -173,6 +173,22 @@ springdoc:
     enabled: false
   default-produces-media-type: application/json
   packagesToScan: com.lc.checker.api
+  pathsToExclude:
+    - /api/v1/lc-check/{sessionId}
+    - /api/v1/lc-check/{sessionId}/lc-raw
+    - /api/v1/lc-check/{sessionId}/extracts
+    - /api/v1/lc-check/{sessionId}/invoice
+    - /api/v1/lc-check/{sessionId}/trace
+    - /api/v1/lc-check/start-by-sample
+    - /api/v1/debug/**
+    - /api/v1/pipeline/**
+    - /api/v1/rules/**
+    - /api/v1/files/**
+    - /api/v1/samples/**
+    - /api/v1/fields/**
+    - /api/v1/queue/**
+    - /api/v1/sessions/**
+    - /api/v1/lc-meta/**
 
 # --- Pipeline queue ------------------------------------------------------------
 # Single-worker DB-backed queue. JobDispatcher polls for QUEUED rows every

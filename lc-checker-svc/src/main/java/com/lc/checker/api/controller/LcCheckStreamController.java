@@ -99,15 +99,34 @@ public class LcCheckStreamController {
     }
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record StartResponse(String sessionId,
-                                 String status,
-                                 int queuePosition,
-                                 String invoiceFilename,
-                                 long invoiceBytes,
-                                 int lcLength) {}
+    @Schema(description = "Response returned immediately on submission.")
+    public record StartResponse(
+            @Schema(description = "UUID assigned to this run", example = "550e8400-e29b-41d4-a716-446655440000") String sessionId,
+            @Schema(description = "Always 'QUEUED' on success", example = "QUEUED") String status,
+            @Schema(description = "1-based position in the run queue", example = "1") int queuePosition,
+            @Schema(description = "Original invoice filename", example = "invoice.pdf") String invoiceFilename,
+            @Schema(description = "Invoice file size in bytes", example = "45000") long invoiceBytes,
+            @Schema(description = "LC text length in characters", example = "2048") int lcLength) {}
 
     @PostMapping(path = "/start", consumes = "multipart/form-data")
-    @Operation(summary = "submit LC text + invoice PDF, get sessionId immediately")
+    @Operation(
+            summary = "submit LC text + invoice PDF, get sessionId immediately",
+            description = """
+                    Submit a multipart POST with two files:
+                    - `lc`       — MT700 plain text (text/plain)
+                    - `invoice`  — commercial invoice PDF (application/pdf)
+
+                    Validation runs immediately. On success the session is queued and
+                    a `session_id` is returned instantly — the actual check runs asynchronously.
+                    Poll `GET /{sessionId}/stream` for live progress.
+                    """)
+    @ApiResponse(
+            responseCode = "200",
+            description = "Session queued. Returns sessionId immediately.",
+            content = @Content(
+                    mediaType = "application/json",
+                    schema = @Schema(implementation = StartResponse.class)
+            ))
     public ResponseEntity<StartResponse> start(
             @RequestPart("lc") MultipartFile lc,
             @RequestPart("invoice") MultipartFile invoice) throws IOException {

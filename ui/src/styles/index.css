@@ -8,6 +8,14 @@
   100% { transform: translateX(200%); }
 }
 
+/* Indeterminate bar flow: 40%-wide bar with gradient fades travels left-to-right.
+   Standard pattern — Linear / Stripe / GitHub style. */
+@keyframes api-bar-flow {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(80%); }
+  100% { transform: translateX(260%); }
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
