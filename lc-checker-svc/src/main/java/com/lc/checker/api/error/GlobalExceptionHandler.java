@@ -1,5 +1,7 @@
 package com.lc.checker.api.error;
 
+import com.lc.checker.api.error.ApiError;
+import com.lc.checker.api.error.StorageUnavailableException;
 import com.lc.checker.api.exception.SessionNotFoundException;
 import com.lc.checker.stage.extract.ExtractionException;
 import com.lc.checker.stage.extract.ExtractorErrorCode;
@@ -63,6 +65,21 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> notFound(SessionNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(new ApiError("SESSION_NOT_FOUND", null, e.getMessage(), null, e.getSessionId()));
+    }
+
+    /**
+     * Raised by /invoice and /lc-raw when a session row exists in the DB (SHA
+     * is recorded) but the bytes are not retrievable from MinIO — either because
+     * MinIO was restarted and lost data, or it is temporarily unreachable. The
+     * session IS known; only the file bytes are missing.
+     */
+    @ExceptionHandler(StorageUnavailableException.class)
+    public ResponseEntity<ApiError> storageUnavailable(StorageUnavailableException e) {
+        log.warn("Storage unavailable [{}] for session {}: {}", e.fileType(), e.sessionId(), e.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("X-Error-Code", "STORAGE_UNAVAILABLE")
+                .body(new ApiError("STORAGE_UNAVAILABLE", "file_storage",
+                        e.fileType() + " file unavailable — " + e.getMessage(), null, e.sessionId()));
     }
 
     @ExceptionHandler(MissingServletRequestPartException.class)

@@ -3,10 +3,11 @@ package com.lc.checker.infra.storage;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.core.exception.SdkServiceException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -14,7 +15,6 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /**
  * MinIO/S3 implementation. Content-addressed: object keys derive from the
@@ -28,15 +28,22 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * The cache is populated on every successful MinIO PUT/GET and on every
  * failed PUT (so the controller can cache bytes directly without MinIO).
  *
- * <p>No explicit OTel spans are emitted here. To keep Langfuse traces clean
- * and pipeline-rooted, MinIO ops are logged at INFO/WARN only.
+ * <p>Retry with exponential backoff on transient failures (timeout,
+ * connection reset, 500 errors). After exhausting retries, throws
+ * {@link MinioAccessException} so callers can distinguish a storage
+ * connectivity problem from a genuine object-not-found.
  */
-final class MinioFileStore implements InvoiceFileStore {
+public final class MinioFileStore implements InvoiceFileStore {
 
     private static final Logger log = LoggerFactory.getLogger(MinioFileStore.class);
 
     private static final String LC_PREFIX      = "lc/";
     private static final String INVOICE_PREFIX = "invoice/";
+
+    /** Retry: initial delay ms, max delay ms, max attempts. */
+    private static final int RETRY_INIT_MS  = 500;
+    private static final int RETRY_MAX_MS    = 4_000;
+    private static final int RETRY_MAX_ATTEMPTS = 3;
 
     private final S3Client s3;
     private final StorageProperties.Minio cfg;
@@ -79,6 +86,20 @@ final class MinioFileStore implements InvoiceFileStore {
 
     // ── Internals ───────────────────────────────────────────────────────────
 
+    /**
+     * Thrown when MinIO is reachable (connection succeeded) but the object
+     * cannot be read due to a transient error (timeout, 500, connection reset).
+     * This is distinct from a genuine NoSuchKey — the object should be there.
+     */
+    public static class MinioAccessException extends RuntimeException {
+        private final String key;
+        public MinioAccessException(String key, Throwable cause) {
+            super("MinIO read failed for '" + key + "': " + cause.getMessage(), cause);
+            this.key = key;
+        }
+        public String key() { return key; }
+    }
+
     private boolean putIfAbsent(String key, byte[] bytes) {
         long t0 = System.currentTimeMillis();
         // Always populate hot cache first — so dispatcher can retrieve bytes
@@ -94,12 +115,6 @@ final class MinioFileStore implements InvoiceFileStore {
                 return true;
             } catch (NoSuchKeyException ignored) {
                 // fall through to PUT
-            } catch (S3Exception e) {
-                if (e.statusCode() != 404) {
-                    log.warn("MinIO HEAD {} failed (status={}): {} — serving from hot cache",
-                            key, e.statusCode(), e.getMessage());
-                    return true; // hot cache has the bytes
-                }
             }
             s3.putObject(PutObjectRequest.builder()
                             .bucket(cfg.bucket())
@@ -113,13 +128,12 @@ final class MinioFileStore implements InvoiceFileStore {
                     cfg.bucket(), key, bytes == null ? 0 : bytes.length,
                     System.currentTimeMillis() - t0);
             return true;
-        } catch (S3Exception e) {
+        } catch (SdkServiceException e) {
             log.warn("MinIO PUT {} failed (status={}): {} — serving from hot cache",
                     key, e.statusCode(), e.getMessage());
             return true; // hot cache has the bytes
-        } catch (RuntimeException e) {
-            log.warn("MinIO PUT {} failed: {} ({}) — serving from hot cache",
-                    key, e.getMessage(), e.getClass().getSimpleName());
+        } catch (SdkClientException e) {
+            log.warn("MinIO PUT {} unreachable: {} — serving from hot cache", key, e.getMessage());
             return true; // hot cache has the bytes
         }
     }
@@ -132,24 +146,58 @@ final class MinioFileStore implements InvoiceFileStore {
             return Optional.of(cached);
         }
         long t0 = System.currentTimeMillis();
-        try {
-            ResponseBytes<GetObjectResponse> rb = s3.getObjectAsBytes(
-                    GetObjectRequest.builder().bucket(cfg.bucket()).key(key).build());
-            byte[] bytes = rb.asByteArray();
-            // Populate hot cache on successful MinIO read so future reads are fast.
-            hotCache.put(key, bytes);
-            log.debug("MinIO GET ok: bucket={} key={} bytes={} ({}ms)",
-                    cfg.bucket(), key, bytes.length, System.currentTimeMillis() - t0);
-            return Optional.of(bytes);
-        } catch (NoSuchKeyException e) {
-            log.debug("MinIO GET miss: bucket={} key={}", cfg.bucket(), key);
-            return Optional.empty();
-        } catch (S3Exception e) {
-            log.warn("MinIO GET {} failed (status={}): {}", key, e.statusCode(), e.getMessage());
-            return Optional.empty();
-        } catch (RuntimeException e) {
-            log.warn("MinIO GET {} failed: {} ({})", key, e.getMessage(), e.getClass().getSimpleName());
-            return Optional.empty();
+        int attempt = 0;
+        SdkClientException lastFailure = null;
+        while (attempt < RETRY_MAX_ATTEMPTS) {
+            attempt++;
+            try {
+                ResponseBytes<GetObjectResponse> rb = s3.getObjectAsBytes(
+                        GetObjectRequest.builder().bucket(cfg.bucket()).key(key).build());
+                byte[] bytes = rb.asByteArray();
+                // Populate hot cache on successful MinIO read so future reads are fast.
+                hotCache.put(key, bytes);
+                log.debug("MinIO GET ok: bucket={} key={} bytes={} attempts={} ({}ms)",
+                        cfg.bucket(), key, bytes.length, attempt, System.currentTimeMillis() - t0);
+                return Optional.of(bytes);
+            } catch (NoSuchKeyException e) {
+                log.debug("MinIO GET miss: bucket={} key={}", cfg.bucket(), key);
+                return Optional.empty();  // genuinely not found — 404
+            } catch (SdkServiceException e) {
+                // 5xx from MinIO — transient, retry
+                if (e.statusCode() >= 500 && attempt < RETRY_MAX_ATTEMPTS) {
+                    log.warn("MinIO GET {} received {} — retrying (attempt {}/{})",
+                            key, e.statusCode(), attempt, RETRY_MAX_ATTEMPTS);
+                    sleep(calcDelayMs(attempt));
+                    continue;
+                }
+                // 4xx other than NoSuchKey — don't retry, surface as error
+                log.warn("MinIO GET {} failed (status={}): {}", key, e.statusCode(), e.getMessage());
+                throw new MinioAccessException(key, e);
+            } catch (SdkClientException e) {
+                // Connection timeout, reset, unreachable — transient, retry
+                lastFailure = e;
+                if (attempt < RETRY_MAX_ATTEMPTS) {
+                    log.warn("MinIO GET {} attempt {}/{} failed: {} — retrying",
+                            key, attempt, RETRY_MAX_ATTEMPTS, e.getMessage());
+                    sleep(calcDelayMs(attempt));
+                    continue;
+                }
+                log.error("MinIO GET {} unreachable after {} attempts: {}",
+                        key, RETRY_MAX_ATTEMPTS, e.getMessage());
+                throw new MinioAccessException(key, e);
+            }
         }
+        // Should not reach here, but be defensive
+        throw new MinioAccessException(key, lastFailure);
+    }
+
+    private int calcDelayMs(int attempt) {
+        // Exponential backoff with jitter: 500, 1000, 2000 ms
+        int base = RETRY_INIT_MS * (int) Math.pow(2, attempt - 1);
+        return Math.min(base, RETRY_MAX_MS);
+    }
+
+    private static void sleep(int ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
     }
 }

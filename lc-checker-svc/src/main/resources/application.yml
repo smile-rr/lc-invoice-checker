@@ -135,8 +135,16 @@ session:
 # same bytes never duplicates. Session-level retrieval ('/lc-raw', '/invoice')
 # falls back to MinIO when the in-memory hot cache misses (e.g. after restart).
 #
-# When MinIO is unreachable the controller logs a warning and continues with
-# memory-only — the LC check itself doesn't depend on object storage.
+# PERSISTENCE REQUIREMENT: MinIO MUST use durable backing store (Docker volumes
+# or a dedicated server with persistent disk). If MinIO loses data (restarted
+# without persistence), previously stored files are unrecoverable — the /invoice
+# and /lc-raw cold paths will return HTTP 503 STORAGE_UNAVAILABLE for all
+# historical sessions whose SHA references are in the DB but whose bytes are
+# gone from MinIO. To add MinIO with persistent Docker volumes, see the MinIO
+# section in the root docker-compose.yml.
+#
+# When MINIO_ENABLED=false the controller logs a loud ERROR and sessions are
+# memory-only — they survive within the same JVM but NOT across restarts.
 storage:
   minio:
     enabled:    ${MINIO_ENABLED:true}
@@ -146,9 +154,10 @@ storage:
     access-key: ${MINIO_ACCESS_KEY:minioadmin}
     secret-key: ${MINIO_SECRET_KEY:minioadmin}
     path-style: ${MINIO_PATH_STYLE:true}
-    # Hard ceiling for synchronous put/get on the request thread. Failures or
-    # timeouts are logged and downgraded to memory-only behaviour.
-    request-timeout-seconds: ${MINIO_REQUEST_TIMEOUT_SECONDS:3}
+    # Hard ceiling for synchronous put/get on the request thread. 30s gives enough
+    # headroom for a remote MinIO across LAN/WAN on first connection after restart.
+    # Failures after timeout are retried up to 3× in MinioFileStore.get().
+    request-timeout-seconds: ${MINIO_REQUEST_TIMEOUT_SECONDS:30}
 
 rules:
   catalog-path: classpath:/rules/catalog.yml

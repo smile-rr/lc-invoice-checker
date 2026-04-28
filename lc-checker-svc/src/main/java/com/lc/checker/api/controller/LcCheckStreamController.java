@@ -2,6 +2,7 @@ package com.lc.checker.api.controller;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.lc.checker.api.error.StorageUnavailableException;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.ExtractAttempt;
@@ -9,6 +10,8 @@ import com.lc.checker.infra.persistence.CheckSessionStore.SessionFileRefs;
 import com.lc.checker.infra.queue.JobDispatcher;
 import com.lc.checker.infra.samples.SampleRefStore;
 import com.lc.checker.infra.storage.InvoiceFileStore;
+import com.lc.checker.infra.storage.MinioFileStore;
+import com.lc.checker.infra.storage.MinioFileStore.MinioAccessException;
 import com.lc.checker.infra.storage.Sha256;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.validation.InputValidator;
@@ -170,15 +173,24 @@ public class LcCheckStreamController {
         if (f != null) {
             return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(f.lcText());
         }
-        // Cold path: server restarted (or session never registered here, e.g.
-        // synchronous /lc-check entry point). Reach into MinIO via the hash.
+        // Cold path: server restarted. Derive the MinIO key from the SHA-256
+        // stored in the DB. Catches MinioAccessException (connection failure)
+        // and surfaces it as HTTP 503 so the UI shows a meaningful error.
         return store.findSessionFiles(sessionId)
                 .map(SessionFileRefs::lcSha256)
                 .filter(s -> s != null && !s.isBlank())
-                .flatMap(fileStore::getLc)
-                .map(bytes -> ResponseEntity.ok()
-                        .contentType(MediaType.TEXT_PLAIN)
-                        .body(new String(bytes, StandardCharsets.UTF_8)))
+                .<ResponseEntity<String>>map(sha -> {
+                    try {
+                        return fileStore.getLc(sha)
+                                .<ResponseEntity<String>>map(bytes -> ResponseEntity.ok()
+                                        .contentType(MediaType.TEXT_PLAIN)
+                                        .body(new String(bytes, StandardCharsets.UTF_8)))
+                                .orElseGet(() -> ResponseEntity.notFound().build());
+                    } catch (MinioAccessException e) {
+                        throw new StorageUnavailableException(sessionId, "lc_raw",
+                                "MinIO unreachable after retries: " + e.getMessage());
+                    }
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -200,13 +212,21 @@ public class LcCheckStreamController {
         if (f != null) {
             return pdfResponse(f.invoiceBytes(), f.invoiceFilename());
         }
-        // Cold path: rehydrate from MinIO using the recorded hash. Filename
-        // comes from the session row (preserved across restarts) so the user
-        // still sees the name they uploaded under.
+        // Cold path: session is in DB (SHA recorded) but bytes are not in the
+        // in-process cache — e.g. after a JVM restart. Rehydrate from MinIO.
+        // MinioAccessException (connection failure) → HTTP 503 STORAGE_UNAVAILABLE.
         return store.findSessionFiles(sessionId)
                 .filter(refs -> refs.invoiceSha256() != null && !refs.invoiceSha256().isBlank())
-                .flatMap(refs -> fileStore.getInvoice(refs.invoiceSha256())
-                        .map(bytes -> pdfResponse(bytes, refs.invoiceFilename())))
+                .<ResponseEntity<byte[]>>map(refs -> {
+                    try {
+                        return fileStore.getInvoice(refs.invoiceSha256())
+                                .<ResponseEntity<byte[]>>map(bytes -> pdfResponse(bytes, refs.invoiceFilename()))
+                                .orElseGet(() -> ResponseEntity.notFound().build());
+                    } catch (MinioAccessException e) {
+                        throw new StorageUnavailableException(sessionId, "invoice",
+                                "MinIO unreachable after retries: " + e.getMessage());
+                    }
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

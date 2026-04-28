@@ -50,6 +50,9 @@ public class StorageConfig {
                         .apiCallTimeout(timeout)
                         .apiCallAttemptTimeout(timeout)
                         .build())
+                // timeout is MINIO_REQUEST_TIMEOUT_SECONDS (default 30s, set in .env).
+                // 3s is too tight for a remote MinIO across a LAN — first connection
+                // after a JVM restart may need extra time for TCP handshake / routing.
                 .build();
     }
 
@@ -57,7 +60,9 @@ public class StorageConfig {
     public InvoiceFileStore invoiceFileStore(S3Client s3, StorageProperties props) {
         StorageProperties.Minio cfg = props.minio();
         if (cfg == null || !cfg.enabled()) {
-            log.warn("MinIO disabled — InvoiceFileStore is a no-op; sessions will not survive restart");
+            log.error("MinIO disabled (MINIO_ENABLED=false or config missing) — InvoiceFileStore is a no-op. "
+                    + "Sessions are memory-only and will NOT survive JVM restart. "
+                    + "Set MINIO_ENABLED=true and ensure MinIO endpoint is reachable.");
             return new NoopInvoiceFileStore();
         }
         return new MinioFileStore(s3, cfg);

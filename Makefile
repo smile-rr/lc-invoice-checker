@@ -271,12 +271,12 @@ _docker-up:
 	 if ! brew list --formula 2>/dev/null | grep -q '^colima$$'; then \
 	   echo "✗ colima not installed — run: brew install colima"; exit 1; \
 	 fi; \
-	 if colima status >/dev/null 2>&1 && docker context inspect colima >/dev/null 2>&1; then \
+	 if colima status >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then \
 	   echo "→ colima is up; switching docker context"; \
 	   docker context use colima >/dev/null; \
 	 else \
-	   echo "→ docker daemon not responding — starting colima via brew"; \
-	   brew services start colima >/dev/null 2>&1 || true; \
+	   echo "→ docker daemon not responding — starting colima"; \
+	   colima start --arch aarch64 --cpu 2 --memory 2 --disk 20 >/dev/null 2>&1 || true; \
 	   docker context use colima >/dev/null 2>&1 || true; \
 	 fi; \
 	 for i in $$(seq 1 60); do \
