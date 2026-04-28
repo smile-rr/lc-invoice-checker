@@ -12,6 +12,8 @@ import { useApiProgress } from '../../hooks/useApiProgress';
 export function ApiProgressBar() {
   const active = useApiProgress();
 
+  if (!active) return null;
+
   return (
     <div
       className="relative h-[3px] w-full overflow-hidden z-[200]"
@@ -22,9 +24,7 @@ export function ApiProgressBar() {
         style={{
           background: 'linear-gradient(90deg, transparent 0%, #22c55e 30%, #22c55e 70%, transparent 100%)',
           width: '40%',
-          opacity: active ? 1 : 0,
-          transition: 'opacity 0.25s ease',
-          animation: active ? 'api-bar-flow 1.5s ease-in-out infinite' : 'none',
+          animation: 'api-bar-flow 1.5s ease-in-out infinite',
         }}
       />
     </div>
