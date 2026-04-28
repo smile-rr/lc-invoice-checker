@@ -13,21 +13,21 @@ export function ApiProgressBar() {
 
   return (
     <div
-      className="fixed inset-x-0 top-0 z-[9999] h-[3px] overflow-hidden"
+      className="fixed inset-x-0 top-10 z-100 h-0.5 overflow-hidden"
       aria-hidden="true"
       style={{ pointerEvents: 'none' }}
     >
-      {/* Background track — always present, barely visible */}
-      <div className="absolute inset-0 bg-navy-1 opacity-[0.06]" />
+      {/* Background track */}
+      <div className="absolute inset-0 bg-[#22c55e] opacity-10" />
 
-      {/* Active bar with left-to-right shimmer */}
+      {/* Bright green wave sweeping left to right */}
       <div
-        className="absolute inset-y-0 left-0 bg-navy-1 transition-opacity duration-300"
+        className="absolute inset-y-0 left-0 transition-opacity duration-200"
         style={{
-          width: active ? '60%' : '100%',
+          backgroundColor: '#22c55e',
+          width: active ? '70%' : '100%',
           opacity: active ? 1 : 0,
-          // Indeterminate shimmer: width animates from 0→100% when active
-          animation: active ? 'api-progress-shimmer 1.4s ease-in-out infinite' : 'none',
+          animation: active ? 'api-progress-shimmer 1.2s ease-in-out infinite' : 'none',
         }}
       />
     </div>

@@ -139,11 +139,11 @@ export function ComplianceCheckPanel({ state }: Props) {
 
   const fieldTotalCompleted = useMemo(() => {
     if (!ready) return 0;
-    let n = 0;
+    const fields = new Set<string>();
     for (const r of catalogRules) {
-      if (r.invoice_field && resultByRuleId.has(r.id)) n++;
+      if (r.invoice_field && resultByRuleId.has(r.id)) fields.add(r.invoice_field);
     }
-    return n;
+    return fields.size;
   }, [ready, catalogRules, resultByRuleId]);
 
   // Field view counts: PASS/FAIL/DOUBTS/NOT_REQUIRED per field — used by FieldStrip chips.

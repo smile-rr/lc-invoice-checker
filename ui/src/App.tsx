@@ -19,8 +19,8 @@ function KeyedSessionPage() {
 export function App() {
   return (
     <div className="h-dvh flex flex-col overflow-hidden">
-      <ApiProgressBar />
       <TopNav />
+      <ApiProgressBar />
       <HealthIndicator />
       <main className="flex-1 min-h-0 overflow-hidden">
         <Routes>

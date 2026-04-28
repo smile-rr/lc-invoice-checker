@@ -470,7 +470,10 @@ function SourceSlot({
 // the LC / Invoice slots above so the operator can see at a glance which
 // two files a click will load.
 
-function SampleCard({ sample, onClick }: { sample: SamplePair; onClick: () => void }) {
+function SampleCard({ sample, onClick }: {
+  sample: SamplePair;
+  onClick: () => void;
+}) {
   const badge = SCENARIO_BADGE[sample.kind];
   return (
     <button

@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Shimmer sweep used by the sample-card loading overlay */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
