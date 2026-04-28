@@ -37,6 +37,7 @@ public record LcDocument(
         String expiryPlace,             // :31D:
         String currency,                // :32B: leading 3 chars
         BigDecimal amount,              // :32B: remainder (European decimal supported)
+        boolean aboutCreditAmount,      // :32B: raw text contains ABOUT / APPROXIMATELY
         int tolerancePlus,              // :39A: first number, percent
         int toleranceMinus,             // :39A: second number, percent
         String maxAmountFlag,           // :39B:

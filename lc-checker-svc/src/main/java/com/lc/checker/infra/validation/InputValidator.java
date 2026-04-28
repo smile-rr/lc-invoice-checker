@@ -1,10 +1,12 @@
 package com.lc.checker.infra.validation;
 
-import com.lc.checker.infra.fields.TagMappingRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import com.lc.checker.infra.fields.TagMappingRegistry;
 
 /**
  * Pre-pipeline request gate. Rejects obviously broken input before the MT700 parser

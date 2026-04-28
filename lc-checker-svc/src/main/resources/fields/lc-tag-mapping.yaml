@@ -30,7 +30,7 @@ mt700:
     "27":  { field_keys: [sequence_of_total],               parser: SIMPLE_STRING,        mandatory: true }
     "31C": { field_keys: [issue_date],                      parser: DATE_YYMMDD,          mandatory: true,  validation: { pattern: "^[0-9]{6}$" } }
     "31D": { field_keys: [expiry_date, expiry_place],       parser: DATE_PLUS_TEXT,       mandatory: true,  validation: { pattern: "^[0-9]{6}.+", max_length: 35 } }
-    "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true,  validation: { pattern: "^[A-Z]{3}[0-9.,]+$", max_length: 24 } }
+    "32B": { field_keys: [credit_currency, credit_amount],  parser: AMOUNT_WITH_CURRENCY, mandatory: true,  validation: { pattern: "^(ABOUT |APPROXIMATELY )?[A-Z]{3}[0-9.,]+$", max_length: 35 } }
     "39A": { field_keys: [tolerance_plus, tolerance_minus], parser: SLASH_SEPARATED_INT,  mandatory: false, defaults: { tolerance_plus: 0, tolerance_minus: 0 } }
     "39B": { field_keys: [max_amount_flag],                 parser: SIMPLE_STRING,        mandatory: false }
     "40A": { field_keys: [credit_type],                     parser: SIMPLE_STRING,        mandatory: true }

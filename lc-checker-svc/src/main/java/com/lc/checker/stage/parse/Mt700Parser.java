@@ -77,6 +77,9 @@ public class Mt700Parser {
 
     /** :48: presentation-period leading digits (e.g. "21" or "21/DAYS"). */
     private static final Pattern F48_DIGITS = Pattern.compile("^\\s*(\\d+).*$");
+    /** :32B: with ABOUT / APPROXIMATELY prefix — captures 3-letter currency. */
+    private static final Pattern Field32B_ABOUT =
+            Pattern.compile("^(ABOUT |APPROXIMATELY )?([A-Z]{3})[0-9.,]+$");
 
     private final TagMappingRegistry tagMappings;
     private final DocumentListParser documentListParser;
@@ -142,9 +145,31 @@ public class Mt700Parser {
         String expiryPlace = f31d == null ? null : safe(f31d.getPlace());
 
         Field32B f32b = mt.getField32B();
-        String currency = f32b == null ? null : safe(f32b.getCurrency());
+        // Grab the raw tag value first — Prowide's Field32B internally rejects ABOUT /
+        // APPROXIMATELY (its typed regex is ^[A-Z]{3}[0-9.,]+$), so currency/amount
+        // from the typed field may be null even when the tag is present.
+        String field32BRaw = f32b == null ? null : f32b.getValue();
+        boolean aboutCreditAmount = false;
+        String currency = null;
+        BigDecimal amount = null;
+        if (field32BRaw != null) {
+            String upper = field32BRaw.toUpperCase();
+            if (upper.contains("ABOUT") || upper.contains("APPROXIMATELY")) {
+                aboutCreditAmount = true;
+                // Extract currency directly from raw: "ABOUT EUR50000,00" → "EUR"
+                // Format: [ABOUT/APPROXIMATELY] + 3-letter-currency + amount
+                java.util.regex.Matcher m = Field32B_ABOUT.matcher(upper);
+                if (m.matches()) {
+                    currency = m.group(2); // group 2 = 3-letter currency code
+                }
+            }
+        }
+        // When no ABOUT prefix, rely on Prowide's typed parse.
+        if (!aboutCreditAmount) {
+            currency = f32b == null ? null : safe(f32b.getCurrency());
+        }
         if (currency != null && currency.isBlank()) currency = null;
-        BigDecimal amount = f32b == null ? null : f32b.getAmountAsBigDecimal();
+        amount = f32b == null ? null : f32b.getAmountAsBigDecimal();
         if (f32b != null && (currency == null || amount == null)) {
             log.warn("Partial :32B: parse — currency={}, amount={}, raw='{}'",
                     currency, amount, f32b.getValue());
@@ -187,6 +212,7 @@ public class Mt700Parser {
         // Bundle all Prowide-typed scalars into a single object for buildEnvelope().
         ParsedScalars scalars = new ParsedScalars(
                 lcNumber, issueDate, expiryDate, expiryPlace, currency, amount,
+                aboutCreditAmount,
                 tolerancePlus, toleranceMinus, latestShipmentDate, presentationDays,
                 applicant, beneficiary, documentsRequired,
                 goodsDescriptionRaw, splitAvailableWithBy(availableRaw));
@@ -216,6 +242,7 @@ public class Mt700Parser {
                 expiryPlace,
                 currency,
                 amount,
+                aboutCreditAmount,
                 tolerancePlus,
                 toleranceMinus,
                 raw.get("39B"),
@@ -256,6 +283,7 @@ public class Mt700Parser {
             String expiryPlace,
             String currency,
             BigDecimal amount,
+            boolean aboutCreditAmount,
             int tolerancePlus,
             int toleranceMinus,
             LocalDate latestShipmentDate,
@@ -337,6 +365,10 @@ public class Mt700Parser {
         // Block 3 :108: user reference
         String userRef = header.get("108");
         if (userRef != null) put(fields, "user_reference", userRef.trim());
+
+        // ── Derived fields (not from SWIFT tags) ─────────────────────────────────
+        // about_credit_amount: parsed from raw :32B: text before Prowide typed parse.
+        put(fields, "about_credit_amount", scalars.aboutCreditAmount() ? "true" : "false");
 
         return new FieldEnvelope("LC", fields, extras, raw, warnings);
     }
