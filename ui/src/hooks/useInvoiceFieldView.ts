@@ -11,7 +11,7 @@
  * to FAIL. Otherwise any DOUBTS collapses to DOUBTS. All PASS → PASS.
  */
 import { useMemo } from 'react';
-import type { CheckResult, RuleSummary } from '../types';
+import type { BusinessPhase, CheckResult, RuleSummary } from '../types';
 import {
   INVOICE_FIELDS,
   aggregateVerdict,
@@ -37,6 +37,8 @@ export interface SubRuleEntry {
 export interface FieldResult {
   fieldId: string;
   fieldDef: InvoiceFieldDef;
+  /** Phase derived from the first covering rule's catalog business_phase. */
+  businessPhase: BusinessPhase | null;
   /** Aggregated verdict across all sub-rules (excludes NOT_REQUIRED from calc). */
   verdict: CheckResult['status'] | null;
   /** Rules that ran and returned something. */
@@ -73,6 +75,14 @@ export function prepareFieldView(
     else rulesByField.set(r.invoice_field, [r]);
   }
 
+  // Build a rule-id → BusinessPhase lookup from the catalog.
+  const phaseByRuleId = new Map<string, BusinessPhase>();
+  for (const r of catalogRules) {
+    if (r.business_phase) {
+      phaseByRuleId.set(r.id, r.business_phase as BusinessPhase);
+    }
+  }
+
   return INVOICE_FIELDS.map((fieldDef): FieldResult => {
     const fieldRules = rulesByField.get(fieldDef.id) ?? [];
 
@@ -80,6 +90,12 @@ export function prepareFieldView(
     const pendingRuleIds: string[] = [];
 
     let passed = 0, failed = 0, doubts = 0, notRequired = 0;
+
+    // Derive phase from the first covering rule in the catalog.
+    const firstRule = fieldRules[0];
+    const businessPhase: BusinessPhase | null = firstRule
+      ? (phaseByRuleId.get(firstRule.id) ?? null)
+      : null;
 
     for (const rule of fieldRules) {
       const result = resultByRuleId.get(rule.id);
@@ -117,6 +133,7 @@ export function prepareFieldView(
     return {
       fieldId: fieldDef.id,
       fieldDef,
+      businessPhase,
       verdict,
       subRules,
       pendingRuleIds,

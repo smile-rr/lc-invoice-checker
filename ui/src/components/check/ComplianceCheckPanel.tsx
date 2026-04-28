@@ -3,7 +3,7 @@ import type { BusinessPhase, CheckResult, CheckStatus, RuleSummary } from '../..
 import type { SessionState } from '../../hooks/useCheckSession';
 import { useRuleCatalog } from '../../hooks/useRuleCatalog';
 import { useScrollspy } from '../../hooks/useScrollspy';
-import { useInvoiceFieldView } from '../../hooks/useInvoiceFieldView';
+import { useInvoiceFieldView, type FieldResult } from '../../hooks/useInvoiceFieldView';
 import { ComplianceReferenceModal } from './ComplianceReferenceModal';
 import { ComplianceSidebar } from './ComplianceSidebar';
 import { PhaseSection } from './PhaseSection';
@@ -14,6 +14,20 @@ import { StatusFilterBar, type StatusFilter } from './StatusFilterBar';
 import { FieldCard } from './FieldCard';
 
 type ViewMode = 'rule' | 'field';
+
+/** Groups FieldResults by their business_phase — mirrors groupRulesByPhase for rules. */
+type FieldPhaseGroups = Map<BusinessPhase, FieldResult[]>;
+
+function groupFieldResultsByPhase(results: FieldResult[]): FieldPhaseGroups {
+  const out = new Map<BusinessPhase, FieldResult[]>();
+  for (const fr of results) {
+    const p = (fr.businessPhase ?? 'PROCEDURAL') as BusinessPhase;
+    const arr = out.get(p);
+    if (arr) arr.push(fr);
+    else out.set(p, [fr]);
+  }
+  return out;
+}
 
 interface Props {
   state: SessionState;
@@ -148,6 +162,12 @@ export function ComplianceCheckPanel({ state }: Props) {
     }
     return results;
   }, [fieldResults, statusFilter, fieldId]);
+
+  /** Phase-grouped view of the filtered field results — mirrors groupRulesByPhase for rules. */
+  const visibleFieldByPhase = useMemo(
+    () => groupFieldResultsByPhase(visibleFieldResults),
+    [visibleFieldResults],
+  );
 
   // ─── Scrollspy ─────────────────────────────────────────────────────────────
 
@@ -287,7 +307,7 @@ export function ComplianceCheckPanel({ state }: Props) {
                   />
                 ) : (
                   <FieldView
-                    visibleFieldResults={visibleFieldResults}
+                    visibleFieldByPhase={visibleFieldByPhase}
                     onViewSource={onViewSource}
                   />
                 )}
@@ -365,17 +385,15 @@ function PhaseView({
 // ─── Field view ─────────────────────────────────────────────────────────────
 
 function FieldView({
-  visibleFieldResults,
+  visibleFieldByPhase,
   onViewSource,
 }: {
-  visibleFieldResults: import('../../hooks/useInvoiceFieldView').FieldResult[];
+  visibleFieldByPhase: FieldPhaseGroups;
   onViewSource: (t: DrawerTarget) => void;
 }) {
-  const fieldResultsWithRules = visibleFieldResults.filter(
-    (fr) => fr.subRules.length > 0 || fr.pendingRuleIds.length > 0,
-  );
+  const hasAnyFields = Array.from(visibleFieldByPhase.values()).some((arr) => arr.length > 0);
 
-  if (fieldResultsWithRules.length === 0) {
+  if (!hasAnyFields) {
     return (
       <div className="font-sans text-sm text-muted italic px-1 py-4">
         No fields match the current filter.
@@ -385,14 +403,31 @@ function FieldView({
 
   return (
     <>
-      {fieldResultsWithRules.map((fr) => (
-        <FieldCard
-          key={fr.fieldId}
-          fieldResult={fr}
-          failuresOnly={false}
-          onViewSource={onViewSource}
-        />
-      ))}
+      {PHASE_ORDER.map((phase) => {
+        const phaseFields = visibleFieldByPhase.get(phase) ?? [];
+        if (phaseFields.length === 0) return null;
+        const ran = phaseFields.length;
+        return (
+          <PhaseSection
+            key={phase}
+            id={SECTION_ID(phase)}
+            phase={phase}
+            totalRulesInPhase={ran}
+            visibleRuleCount={ran}
+            hasFilter={false}
+            checks={[]}
+          >
+            {phaseFields.map((fr) => (
+              <FieldCard
+                key={fr.fieldId}
+                fieldResult={fr}
+                failuresOnly={false}
+                onViewSource={onViewSource}
+              />
+            ))}
+          </PhaseSection>
+        );
+      })}
     </>
   );
 }

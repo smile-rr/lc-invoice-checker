@@ -112,13 +112,8 @@ function groupAndSort(
   rows: ParsedRow[],
   mode: SortMode,
 ): Array<{ title: string | null; rows: ParsedRow[] }> {
-  if (mode === 'tag-asc') {
-    const sorted = [...rows].sort((a, b) =>
-      a.sort_key.localeCompare(b.sort_key, 'en', { numeric: true }),
-    );
-    return [{ title: null, rows: sorted }];
-  }
-  // 'declared' — group by `group` field, preserving first-encounter order.
+  // Build group map from first-encounter order so "declared" preserves source order
+  // and "tag-asc" still shows meaningful sections with sorted contents.
   const order: string[] = [];
   const map: Record<string, ParsedRow[]> = {};
   for (const r of rows) {
@@ -129,5 +124,16 @@ function groupAndSort(
     }
     map[g].push(r);
   }
-  return order.map((g) => ({ title: GROUP_LABEL[g] ?? g, rows: map[g] }));
+
+  return order.map((g) => {
+    const groupRows = map[g];
+    if (mode === 'tag-asc') {
+      // Sort rows within group by tag number, keep group section header.
+      groupRows.sort((a, b) =>
+        a.sort_key.localeCompare(b.sort_key, 'en', { numeric: true }),
+      );
+    }
+    // "declared": preserve source-declaration order (already in map order).
+    return { title: GROUP_LABEL[g] ?? g, rows: groupRows };
+  });
 }

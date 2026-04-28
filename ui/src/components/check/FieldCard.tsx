@@ -10,7 +10,7 @@
  *
  * NOT_INCLUDED / EMBEDDED fields render their existing placeholder.
  */
-import type { CheckStatus } from '../../types';
+import type { BusinessPhase, CheckStatus } from '../../types';
 import type { FieldResult, SubRuleEntry } from '../../hooks/useInvoiceFieldView';
 import { CitationPopover } from './CitationPopover';
 import { UCP_ISBP_EXCERPTS } from '../../data/ucpIsbpExcerpts';
@@ -175,9 +175,9 @@ export function FieldCard({ fieldResult, failuresOnly, onViewSource }: Props) {
   const lcText = mergeFieldValues(subRules, 'lc');
   const invoiceText = mergeFieldValues(subRules, 'invoice');
 
-  // Phase + method from first sub-rule (all rules for same field share these)
   const first = subRules[0];
-  const phase = first ? (subRules[0].ruleId ? guessPhase(first.ruleId) : null) : null;
+  // Phase from the first covering rule (now sourced from catalog, not a string guess).
+  const phase = fieldResult.businessPhase;
   const method = first ? METHOD_LABEL[first.checkType ?? 'AGENT'] ?? '—' : null;
 
   const typeTag = fieldDef.type ? TYPE_LABEL[fieldDef.type] ?? fieldDef.type : '—';
@@ -208,7 +208,7 @@ export function FieldCard({ fieldResult, failuresOnly, onViewSource }: Props) {
       <div className="px-4 py-2 border-b border-line bg-paper flex flex-wrap items-center gap-x-2 gap-y-1">
         {phase && (
           <>
-            <span className="font-sans text-[11px] uppercase tracking-[0.05em] text-muted">{phase}</span>
+            <span className="font-sans text-[11px] uppercase tracking-[0.05em] text-muted">{phaseLabel(phase)}</span>
             <span aria-hidden className="text-line select-none">›</span>
           </>
         )}
@@ -342,13 +342,16 @@ function MergedDataRows({
   );
 }
 
-// ─── Phase label guess ────────────────────────────────────────────────────────
+// ─── Phase label ────────────────────────────────────────────────────────────────
 
-/** Guess phase label from a rule ID. Used only for display; ideally comes from catalog. */
-function guessPhase(ruleId: string): string {
-  if (ruleId.startsWith('ISBP-C5') || ruleId.startsWith('ISBP-C6') || ruleId.startsWith('UCP-14e')) return 'Parties';
-  if (ruleId.startsWith('UCP-18b') || ruleId.startsWith('UCP-30') || ruleId.startsWith('ISBP-C4') || ruleId.startsWith('ISBP-C10')) return 'Money';
-  if (ruleId.startsWith('ISBP-C3') || ruleId.startsWith('ISBP-C7')) return 'Goods';
-  if (ruleId.startsWith('ISBP-C8')) return 'Logistics';
-  return 'Procedural';
+const PHASE_LABEL: Record<BusinessPhase, string> = {
+  PARTIES:    'Parties',
+  MONEY:      'Money',
+  GOODS:      'Goods',
+  LOGISTICS:  'Logistics',
+  PROCEDURAL: 'Procedural',
+};
+
+function phaseLabel(phase: string): string {
+  return PHASE_LABEL[phase as BusinessPhase] ?? phase;
 }
