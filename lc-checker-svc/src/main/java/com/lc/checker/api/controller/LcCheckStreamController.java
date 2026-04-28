@@ -13,8 +13,14 @@ import com.lc.checker.infra.storage.InvoiceFileStore;
 import com.lc.checker.infra.storage.MinioFileStore;
 import com.lc.checker.infra.storage.MinioFileStore.MinioAccessException;
 import com.lc.checker.infra.storage.Sha256;
+import com.lc.checker.infra.stream.CheckEvent;
 import com.lc.checker.infra.stream.CheckEventBus;
 import com.lc.checker.infra.validation.InputValidator;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -54,6 +60,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  */
 @RestController
 @RequestMapping("/api/v1/lc-check")
+@Tag(name = "LC Check", description = "Submit a compliance check and subscribe to live pipeline events via SSE.")
 public class LcCheckStreamController {
 
     private static final Logger log = LoggerFactory.getLogger(LcCheckStreamController.class);
@@ -100,6 +107,7 @@ public class LcCheckStreamController {
                                  int lcLength) {}
 
     @PostMapping(path = "/start", consumes = "multipart/form-data")
+    @Operation(summary = "submit LC text + invoice PDF, get sessionId immediately")
     public ResponseEntity<StartResponse> start(
             @RequestPart("lc") MultipartFile lc,
             @RequestPart("invoice") MultipartFile invoice) throws IOException {
@@ -161,6 +169,41 @@ public class LcCheckStreamController {
     }
 
     @GetMapping(path = "/{sessionId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(
+            summary = "live SSE stream of status and result",
+            description = """
+                    Opens a Server-Sent Events (SSE) stream for the given session. Four event
+                    types are emitted sequentially:
+
+                    1. **status** — stage transition (e.g. `lc_parse: started` → `lc_parse: completed`).
+                       On `completed`, structured data is included (LcDocument, InvoiceDocument, or a
+                       checks summary map).
+                    2. **rule** — one event per completed rule check. `data` is a `CheckResult`.
+                    3. **error** — pipeline halted. `data` is null; no further events follow.
+                    4. **complete** — final report assembled. `data` is a `DiscrepancyReport`.
+                       UI should navigate to the review tab on receipt.
+
+                    All events share the same envelope shape (`CheckEvent`).
+                    """
+    )
+    @ApiResponse(
+            responseCode = "200",
+            description = "SSE stream — text/event-stream, one JSON event per line. "
+                    + "Event `type` field determines the `data` shape: "
+                    + "status → LcDocument | InvoiceDocument | Map; "
+                    + "rule → CheckResult; "
+                    + "error → null; "
+                    + "complete → DiscrepancyReport.",
+            content = @Content(
+                    mediaType = MediaType.TEXT_EVENT_STREAM_VALUE,
+                    schema = @Schema(
+                            description = "CheckEvent — one event per line. "
+                                    + "type=status: data=LcDocument|InvoiceDocument|Map "
+                                    + "type=rule: data=CheckResult "
+                                    + "type=error: data=null "
+                                    + "type=complete: data=DiscrepancyReport")
+            )
+    )
     public SseEmitter stream(@PathVariable String sessionId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         return bus.register(sessionId, emitter);

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.util.Locale;
 
@@ -29,17 +30,26 @@ import java.util.Locale;
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+@Schema(description = "Unified SSE envelope shared by the /stream endpoint and /trace replay API.")
 public record CheckEvent(
-        long seq,
-        Instant ts,
-        Type type,
-        String stage,    // STATUS + ERROR (e.g. "lc_parse", "programmatic")
-        String state,    // STATUS only: "started" | "completed"
-        String message,  // STATUS + ERROR human-readable text
-        Object data      // RULE: CheckResult; COMPLETE: DiscrepancyReport;
-                         // STATUS.completed: LcDocument | InvoiceDocument | summary map
+        @Schema(description = "Monotonically increasing sequence number (0-based)", example = "0") long seq,
+        @Schema(description = "Wall-clock timestamp of event emission (ISO-8601 UTC)", example = "2026-04-28T10:15:30.123Z") Instant ts,
+        @Schema(description = "Event type: status | rule | error | complete", example = "status") Type type,
+        @Schema(description = "Pipeline stage name, present for status and error events", example = "lc_parse") String stage,
+        @Schema(description = "State within the stage: 'started' or 'completed', present for status events", example = "completed") String state,
+        @Schema(description = "Human-readable message for status and error events", example = "LC parsed successfully") String message,
+        @Schema(
+                description = """
+                        Payload shape is determined by event type:
+                        - status+completed: LcDocument, InvoiceDocument, or a checks-summary Map
+                        - rule:             CheckResult
+                        - error:            null
+                        - complete:         DiscrepancyReport""",
+                example = "{\"passed\": 11, \"failed\": 2, \"warnings\": 1, \"skipped\": 0}")
+        Object data
 ) {
 
+    @Schema(description = "One of: status (stage transition), rule (rule result), error (pipeline halted), complete (final report)")
     public enum Type {
         STATUS, RULE, ERROR, COMPLETE;
 
