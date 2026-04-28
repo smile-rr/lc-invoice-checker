@@ -1,10 +1,14 @@
 import type { BusinessPhase, CheckResult } from '../../types';
 
 interface Props {
-  /** All completed rule outcomes — sidebar projects per-phase tallies. */
+  /** All completed rule outcomes. */
   checks: CheckResult[];
-  activeId: BusinessPhase | null;
+  /** Active phase — drives the left-dot indicator. */
+  activePhase: BusinessPhase | null;
+  /** Jump to phase section. */
   onJumpPhase: (phase: BusinessPhase) => void;
+  /** Open the compliance reference modal. */
+  onReference: () => void;
 }
 
 const PHASE_ORDER: BusinessPhase[] = [
@@ -54,31 +58,37 @@ function tallyByPhase(checks: CheckResult[]): Record<BusinessPhase, PhaseTally> 
 }
 
 /**
- * Left navigation rail — phases as wayfinding only. Rules are grouped by
- * business_phase in the main panel; this sidebar tallies and lets the
- * operator jump to a phase. Sub-stage progress lives in the page stepper.
+ * Left navigation rail — phase groups with tallies. Always shows phase-based
+ * navigation regardless of whether Rule or Field view is active.
  */
-export function ComplianceSidebar({ checks, activeId, onJumpPhase }: Props) {
+export function ComplianceSidebar({
+  checks,
+  activePhase,
+  onJumpPhase,
+  onReference,
+}: Props) {
   const tallies = tallyByPhase(checks);
 
   return (
     <aside
       aria-label="Compliance Check phase navigation"
-      className="w-[240px] shrink-0 border-r border-line bg-paper h-full overflow-y-auto"
+      className="w-[240px] shrink-0 border-r border-line bg-paper h-full overflow-y-auto flex flex-col"
     >
-      <div className="px-4 py-3 border-b border-line">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-line shrink-0">
         <div className="font-sans text-[11px] uppercase tracking-[0.10em] text-muted font-medium">
-          Phase navigation
+          Navigation
         </div>
         <div className="font-sans text-sm font-semibold text-navy-1 mt-0.5">
           Stage 03 · Compliance Check
         </div>
       </div>
 
-      <ol className="py-2">
+      {/* Phase nav list */}
+      <ol className="py-2 flex-1">
         {PHASE_ORDER.map((phase) => {
           const t = tallies[phase];
-          const active = activeId === phase;
+          const active = activePhase === phase;
           const hasIssue = t.discrepant > 0;
           return (
             <li key={phase}>
@@ -115,6 +125,23 @@ export function ComplianceSidebar({ checks, activeId, onJumpPhase }: Props) {
           );
         })}
       </ol>
+
+      {/* Reference button — always at bottom */}
+      <div className="px-4 py-3 border-t border-line shrink-0">
+        <button
+          type="button"
+          onClick={onReference}
+          className={[
+            'w-full grid grid-cols-[16px_1fr] items-center gap-2 px-3 py-2 rounded text-left',
+            'border border-line transition-colors hover:border-teal-2 hover:bg-teal-1/5 group',
+          ].join(' ')}
+        >
+          <span className="font-mono text-[11px] text-muted group-hover:text-teal-2">📖</span>
+          <span className="font-mono text-[11px] uppercase tracking-widest font-semibold text-muted group-hover:text-teal-2">
+            Reference
+          </span>
+        </button>
+      </div>
     </aside>
   );
 }

@@ -309,6 +309,7 @@ export interface RuleSummary {
   isbp_excerpt: string | null;
   rule_reference_label: string | null;
   output_field: string | null;
+  invoice_field: string | null;
   severity_on_fail: Severity | null;
   enabled: boolean;
   disabled_reason: string | null;

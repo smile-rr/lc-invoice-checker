@@ -1,16 +1,12 @@
 import type { SessionState } from '../../hooks/useCheckSession';
-import { useNavigate } from 'react-router-dom';
 
 interface Props {
   state: SessionState;
 }
 
 /**
- * Single-line session header. Verdict + LC info + count chips + session id,
- * crammed into ~40px so the body gets the vertical real estate. Counts come
- * from {@code report.summary} when the report is final (backend source of
- * truth) and only fall back to a live count derived from {@code state.checks}
- * during streaming, when {@code summary} hasn't been assembled yet.
+ * Single-line session header. Verdict + LC info + session id,
+ * crammed into ~40px so the body gets the vertical real estate.
  *
  * Forensic tracing now lives in Langfuse — the local trace modal was removed
  * because it dumped raw JSON that Langfuse renders as a proper timeline.
@@ -22,15 +18,6 @@ export function SessionStrip({ state }: Props) {
   // "running" means we have a session but no final report yet — distinct from
   // "idle" (no session at all, e.g. on the landing page).
   const running = !idle && !report && !state.error;
-
-  const nav = useNavigate();
-  // Canonical compliance-check statuses: PASS / FAIL / DOUBTS / NOT_REQUIRED.
-  // The Compliance Check step owns the actual filter UI (StatusFilterBar);
-  // the chips here are deep-links into it.
-  const goToCheck = (filter: 'fail' | 'pass' | 'doubts' | 'not_required') => {
-    if (!state.sessionId) return;
-    nav(`/session/${state.sessionId}?step=check&filter=${filter}`);
-  };
 
   // Idle render: same vertical footprint as the populated strip so the page
   // shell stays identical between '/' and '/session/:id'. No counts, no trace
@@ -46,32 +33,11 @@ export function SessionStrip({ state }: Props) {
             Start a new compliance check below
           </span>
         </div>
-        {/* Disabled chip placeholders preserve horizontal balance with the
-            populated strip — same widths, same baseline, just dim. */}
-        <div className="flex items-center gap-3 font-mono text-[11px] opacity-30 select-none">
-          <span className="px-2 py-0.5">0 Fail</span>
-          <span className="px-2 py-0.5">0 Pass</span>
-          <span className="px-2 py-0.5">0 Doubts</span>
-          <span className="px-2 py-0.5">0 Not required</span>
-        </div>
+        {/* Spacer preserves horizontal balance with the populated strip. */}
+        <div className="flex-1" />
       </div>
     );
   }
-
-  // Prefer authoritative summary from the report; fall back to live derivation.
-  const counts = report?.summary
-    ? {
-        pass:         report.summary.passed,
-        fail:         report.summary.failed,
-        doubts:       report.summary.doubts,
-        not_required: report.summary.not_required,
-      }
-    : {
-        pass:         state.checks.filter((c) => c.status === 'PASS').length,
-        fail:         state.checks.filter((c) => c.status === 'FAIL').length,
-        doubts:       state.checks.filter((c) => c.status === 'DOUBTS').length,
-        not_required: state.checks.filter((c) => c.status === 'NOT_REQUIRED').length,
-      };
 
   return (
     <div className="bg-paper px-6 h-10 border-b border-line flex items-center gap-4 text-xs">
@@ -116,27 +82,6 @@ export function SessionStrip({ state }: Props) {
         </span>
       </div>
 
-      {/* Count chips — labels match the canonical CheckStatus enum
-          (PASS / FAIL / DOUBTS / NOT_REQUIRED) so operators see the same
-          terminology in the strip as on the rule cards. */}
-      <div className="flex items-center gap-3 font-mono text-[11px]">
-        <Chip
-          label="Fail" n={counts.fail} tone="red"
-          highlight={counts.fail > 0}
-          onClick={() => goToCheck('fail')}
-        />
-        <Chip label="Pass" n={counts.pass} tone="green" onClick={() => goToCheck('pass')} />
-        <Chip
-          label="Doubts" n={counts.doubts} tone="gold"
-          highlight={counts.doubts > 0}
-          onClick={() => goToCheck('doubts')}
-        />
-        <Chip
-          label="Not required" n={counts.not_required} tone="muted"
-          onClick={() => goToCheck('not_required')}
-        />
-      </div>
-
       {/* Session id — short label; click to copy the full UUID for log /
           Langfuse correlation. */}
       <button
@@ -152,42 +97,6 @@ export function SessionStrip({ state }: Props) {
         {state.sessionId?.slice(0, 8) ?? '—'}
       </button>
     </div>
-  );
-}
-
-function Chip({
-  label,
-  n,
-  tone,
-  highlight,
-  onClick,
-}: {
-  label: string;
-  n: number;
-  tone: 'red' | 'green' | 'gold' | 'muted';
-  highlight?: boolean;
-  onClick: () => void;
-}) {
-  const cls: Record<string, string> = {
-    red: 'text-status-red',
-    green: 'text-status-green',
-    gold: 'text-status-gold',
-    muted: 'text-muted',
-  };
-  return (
-    <button
-      onClick={onClick}
-      disabled={n === 0}
-      title={`Show ${label.toLowerCase()} rules`}
-      className={[
-        'inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded transition whitespace-nowrap',
-        n === 0 ? 'opacity-40 cursor-default' : 'hover:bg-slate2 cursor-pointer',
-        highlight ? 'underline underline-offset-2' : '',
-      ].join(' ')}
-    >
-      <span className={`font-bold ${cls[tone]}`}>{n}</span>
-      <span className="text-muted">{label}</span>
-    </button>
   );
 }
 

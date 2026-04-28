@@ -1,5 +1,56 @@
 # LC Invoice Checker
 
+
+
+
+
+## Major Considerations
+
+**Accuracy:**   accuracy is the major and most important consideration of this application. Any issue not detected by the bank for this check, it will immediuately indicate a loss for this LC funding to the benificiatary account to the bank.  Human review and justmengt today is inevitable even by the top integellentcy model in the world today. Vision and Langurage Model still not 100% to avoid issue in OCR and rule check risk.
+
+WorkLoad Decoupling:  Though bank have 5 days to check for the lc and invoice per the rule. But there's no ensurance for a batch upload and submittion in bank operation side. LLM Inference engine might not be able to handle highvolume and causing failure and issues. Hence descoping the task submission from LC check pipeline is required. If the processing capability not able to handle the submited task. Increase the Processing Capability Limit and deploy more Infra level instance will resolve the problem without system burdens.
+
+**Observations**:
+
+The vision model for invoice and Languguage Model for rule check are blackbox for us. Visualize the input and output for the model is important to achive 100% accurancy for the given expections. Using frameworks like Spring AI, Langchain may easy of the work for devalopment of complex features. But we may more focus on the native data LLM model receives as input and output. Not hidde the iceburge by the framework layer.
+
+## Workflow
+
+Task Submission:
+
+LC Check Pipeline
+
+Progress and Status Inquiry
+
+## Key Step as Configuration
+
+LC mt700 text parsing:
+
+Invoice Fields Extract
+
+UCP600, ISBP821 Rule Check
+
+## Solution Architecture 
+
+## Performance and Optimization
+
+1. Overall performance
+2. Vision Model for Invoice Extration
+3. Text Model for Rule Check
+4. Cost
+
+
+
+EndHere
+
+-----------------------------
+
+
+
+
+
+
+
 An automated **Letter of Credit compliance checker** built for the AI Engineer take-home assessment. Accepts a SWIFT MT700 LC (plain text) and a commercial invoice (PDF), checks the invoice against UCP 600 / ISBP 821 rules, and returns a structured JSON discrepancy report.
 
 > **Assessment spec:** [`docs/refer-doc/AI-Engineer-test-case-v2.txt`](docs/refer-doc/AI-Engineer-test-case-v2.txt)

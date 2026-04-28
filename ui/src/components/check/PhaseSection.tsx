@@ -55,9 +55,6 @@ export function PhaseSection({
   children,
 }: Props) {
   const ran = checks.length;
-  const passed = checks.filter((c) => c.status === 'PASS').length;
-  const failed = checks.filter((c) => c.status === 'FAIL').length;
-  const doubts = checks.filter((c) => c.status === 'DOUBTS').length;
 
   return (
     <section id={id} className="mb-10 scroll-mt-2" aria-labelledby={`${id}-title`}>
@@ -82,9 +79,6 @@ export function PhaseSection({
           <span className="font-mono text-[11px] tabular-nums shrink-0 text-muted">
             <span className="text-navy-1 font-semibold">{ran}</span>
             <span> / {totalRulesInPhase || ran}</span>
-            {passed > 0 && <span className="ml-2 text-status-green">{passed} pass</span>}
-            {failed > 0 && <span className="ml-2 text-status-red">{failed} fail</span>}
-            {doubts > 0 && <span className="ml-2 text-status-gold">{doubts} doubts</span>}
           </span>
         </header>
 
@@ -94,9 +88,31 @@ export function PhaseSection({
               No rules match the current filter in this phase.
             </div>
           ) : totalRulesInPhase === 0 ? (
-            <div className="font-sans text-xs text-muted italic px-1">
-              No rules in this phase yet.
-            </div>
+            phase === 'HOLISTIC' ? (
+              <div className="px-1 space-y-2">
+                <div className="font-sans text-xs text-muted leading-relaxed">
+                  <span className="font-semibold text-navy-1">Cross-document consistency check</span>
+                  {' '}— not yet included (requires B/L, packing list, and/or certificate of origin input).
+                </div>
+                <div className="font-sans text-xs text-muted/70 leading-relaxed">
+                  Per{' '}
+                  <span className="font-mono text-[10px]">UCP 600 Art. 14(d)</span>
+                  {': '}data in any presented document must not contradict data in the credit
+                  or in other stipulated documents (B/L, packing list, certificate of origin).
+                </div>
+                <div className="flex items-start gap-2 mt-2 px-3 py-2 rounded border border-status-gold/30 bg-status-goldSoft/40">
+                  <span className="text-status-gold text-[13px] leading-none mt-0.5 shrink-0">⏳</span>
+                  <div className="font-sans text-xs text-status-gold leading-relaxed">
+                    <span className="font-semibold">Pending input:</span>
+                    {' '}Bill of Lading, Packing List, Certificate of Origin
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="font-sans text-xs text-muted italic px-1">
+                No rules in this phase yet.
+              </div>
+            )
           ) : (
             <div>{children}</div>
           )}

@@ -1,34 +1,25 @@
-import type { CheckStatus, CheckTypeEnum } from '../../types';
+import type { CheckStatus } from '../../types';
 
 export type StatusFilter = CheckStatus | null;
-export type TypeFilter = CheckTypeEnum | null;
 
 interface Props {
-  /** Counts per status across the enabled-rule set. The four numbers always
-   *  sum to {@code totalCompleted} (rules with a result so far). */
+  /** Counts per status across the enabled-rule set. */
   counts: Record<CheckStatus, number>;
-  /** Counts per check_type across enabled rules — for the debug-side chips. */
-  typeCounts: Record<CheckTypeEnum, number>;
-  /** Per-type completion counts (rules with a result). Used for the
-   *  "4/8 PROG · 2/9 AGENT · 6/17 total" progress strip. */
-  typeCompleted: Record<CheckTypeEnum, number>;
-  /** Total enabled rules — denominator on the progress strip. */
+  /** Total enabled rules — denominator on the N/M badge. */
   totalEnabled: number;
   /** Total completed (rules with any result). */
   totalCompleted: number;
-  /** Active filters; either may be null. AND together at apply time. */
+  /** Active status filter. */
   status: StatusFilter;
-  type: TypeFilter;
-  /** Active rule-id filter, if any (driven by the catalog strip). When set,
-   *  the bar shows it in the summary banner with a click-to-clear. */
+  /** Active rule-id (rule view) or fieldId (field view) filter. */
   ruleId: string | null;
+  /** Which view mode — drives the banner label ("rule" vs "field"). */
+  viewMode: 'rule' | 'field';
   onStatusChange: (next: StatusFilter) => void;
-  onTypeChange: (next: TypeFilter) => void;
   onClearAll: () => void;
 }
 
 const STATUS_ORDER: CheckStatus[] = ['PASS', 'FAIL', 'DOUBTS', 'NOT_REQUIRED'];
-const TYPE_ORDER: CheckTypeEnum[] = ['PROGRAMMATIC', 'AGENT'];
 
 const STATUS_LABEL: Record<CheckStatus, string> = {
   PASS:         'Pass',
@@ -37,13 +28,6 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
   NOT_REQUIRED: 'Not required',
 };
 
-const TYPE_LABEL: Record<CheckTypeEnum, string> = {
-  PROGRAMMATIC: 'Programmatic',
-  AGENT:        'Agent',
-};
-
-// Stronger active state: filled background, bolder border, leading check-mark.
-// Inactive is the same as before.
 const STATUS_TONE: Record<CheckStatus, { active: string; inactive: string }> = {
   PASS: {
     active:   'bg-status-green text-white border-status-green ring-2 ring-status-green/30 shadow-sm',
@@ -63,57 +47,31 @@ const STATUS_TONE: Record<CheckStatus, { active: string; inactive: string }> = {
   },
 };
 
-const TYPE_TONE: Record<CheckTypeEnum, { active: string; inactive: string }> = {
-  PROGRAMMATIC: {
-    active:   'bg-teal-2 text-white border-teal-2 ring-2 ring-teal-2/25 shadow-sm',
-    inactive: 'border-line text-teal-2 hover:bg-teal-1/10',
-  },
-  AGENT: {
-    active:   'bg-navy-1 text-white border-navy-1 ring-2 ring-navy-1/25 shadow-sm',
-    inactive: 'border-line text-navy-1 hover:bg-navy-1/5',
-  },
-};
-
 /**
- * Status + type filter chip bar.
+ * Status filter chip bar — simplified.
  *
  * Layout (left → right):
- *   [All] | [Pass] [Fail] [Doubts] [Not req] | [PROG] [AGENT] | progress
+ *   [All] | [Pass] [Fail] [Doubts] [Not req]          N/M total
  *
- * The leading {@code All} chip resets every active filter at once and is
- * always visible (matches the chip vocabulary instead of a separate Reset
- * button). Active chips use a stronger filled-background style with a ring
- * and leading check-mark so the user knows which dimension is narrowing
- * the list.
- *
- * A summary banner appears below the chip row only when at least one filter
- * is active — it names the active filters and exposes a single Clear action.
- *
- * The trailing progress strip shows
- * {@code <progCompleted>/<progTotal> PROG · <agentCompleted>/<agentTotal> AGENT · <total>/<totalEnabled> total}
- * and updates on every rule.completed event.
+ * A summary banner appears below the chip row only when a filter is active —
+ * it names the active filters and exposes a single Clear action.
  */
 export function StatusFilterBar({
   counts,
-  typeCounts,
-  typeCompleted,
   totalEnabled,
   totalCompleted,
   status,
-  type,
   ruleId,
+  viewMode,
   onStatusChange,
-  onTypeChange,
   onClearAll,
 }: Props) {
-  const anyFilter = status !== null || type !== null || ruleId !== null;
+  const anyFilter = status !== null || ruleId !== null;
 
   return (
-    <div className="border-b border-line bg-paper">
+    <div>
       <div className="px-4 py-2 flex items-center gap-2 overflow-x-auto">
-        {/* All — always visible. Filled when no filter is active so users see
-            the current state ("everything is shown"); when a filter is active,
-            it becomes the call-to-action to reset. */}
+        {/* All — always visible. Filled when no filter is active. */}
         <button
           type="button"
           onClick={onClearAll}
@@ -131,10 +89,9 @@ export function StatusFilterBar({
           <span className="font-sans normal-case font-medium tracking-normal">All</span>
         </button>
 
-        <GroupDivider />
-        <GroupLabel>Status</GroupLabel>
+        <span className="w-px h-5 bg-line shrink-0" />
 
-        {/* Status chips — rounded-sm rectangles (verdict shape). */}
+        {/* Status chips. */}
         {STATUS_ORDER.map((s) => {
           const isActive = status === s;
           const tone = STATUS_TONE[s];
@@ -157,50 +114,12 @@ export function StatusFilterBar({
           );
         })}
 
-        <GroupDivider wide />
-        <GroupLabel>Rule type</GroupLabel>
-
-        {/* Type chips — rounded-full PILLS with leading category glyph so the
-            shape clearly separates them from STATUS chips above. Same colour
-            as the inline rule-card category badge. */}
-        {TYPE_ORDER.map((t) => {
-          const isActive = type === t;
-          const tone = TYPE_TONE[t];
-          return (
-            <button
-              key={t}
-              type="button"
-              onClick={() => onTypeChange(isActive ? null : t)}
-              aria-pressed={isActive}
-              title={`Show only ${TYPE_LABEL[t]} rules`}
-              className={[
-                'inline-flex items-baseline gap-1.5 px-3 py-1 rounded-full border whitespace-nowrap transition-colors',
-                'font-mono text-[11px] uppercase tracking-[0.07em] font-bold',
-                isActive ? tone.active : tone.inactive,
-              ].join(' ')}
-            >
-              <span aria-hidden className="font-mono text-[10px] opacity-80">
-                {t === 'PROGRAMMATIC' ? '⟨/⟩' : '✦'}
-              </span>
-              <span>{typeCounts[t]}</span>
-              <span className="font-sans normal-case font-medium tracking-normal">{TYPE_LABEL[t]}</span>
-            </button>
-          );
-        })}
-
-        {/* Progress strip — completed / total per category and overall. */}
-        <span className="ml-auto font-sans text-[11px] text-muted whitespace-nowrap font-mono">
-          <span className="text-teal-2 font-bold">
-            {typeCompleted.PROGRAMMATIC}/{typeCounts.PROGRAMMATIC} PROG
-          </span>
-          <span className="mx-1.5 text-line">·</span>
-          <span className="text-navy-1 font-bold">
-            {typeCompleted.AGENT}/{typeCounts.AGENT} AGENT
-          </span>
-          <span className="mx-1.5 text-line">·</span>
-          <span className="text-navy-1 font-bold">
-            {totalCompleted}/{totalEnabled} total
-          </span>
+        {/* Single N/M total badge — right-aligned. */}
+        <span className="ml-auto font-mono text-[11px] text-muted whitespace-nowrap shrink-0">
+          <span className="font-bold text-navy-1">{totalCompleted}</span>
+          <span className="text-muted mx-0.5">/</span>
+          <span className="font-bold text-navy-1">{totalEnabled}</span>
+          <span className="text-muted ml-1">{viewMode === 'rule' ? 'total rules' : 'total fields'}</span>
         </span>
       </div>
 
@@ -212,14 +131,9 @@ export function StatusFilterBar({
               status = <span className="text-navy-1 font-bold">{STATUS_LABEL[status]}</span>
             </span>
           )}
-          {type !== null && (
-            <span className="font-mono">
-              category = <span className="text-navy-1 font-bold">{TYPE_LABEL[type]}</span>
-            </span>
-          )}
           {ruleId !== null && (
             <span className="font-mono">
-              rule = <span className="text-navy-1 font-bold">{ruleId}</span>
+              {viewMode === 'field' ? 'field' : 'rule'} = <span className="text-navy-1 font-bold">{ruleId}</span>
             </span>
           )}
           <button
@@ -232,31 +146,5 @@ export function StatusFilterBar({
         </div>
       )}
     </div>
-  );
-}
-
-// Inline tag prefixed to each chip cluster so the row reads as
-// "STATUS · [chips]   RULE TYPE · [chips]" without relying on the eye to
-// register a 1px hairline as a group boundary.
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      aria-hidden
-      className="font-sans text-[10px] uppercase tracking-[0.18em] font-semibold text-muted/80 shrink-0 select-none"
-    >
-      {children}
-    </span>
-  );
-}
-
-// Stronger group divider than the previous 1px hairline. `wide` adds extra
-// horizontal breathing room before the second cluster (RULE TYPE) so the
-// shape change (rectangle → pill) lands with more breathing space.
-function GroupDivider({ wide = false }: { wide?: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={['w-px h-5 bg-line shrink-0', wide ? 'mx-3' : 'mx-2'].join(' ')}
-    />
   );
 }

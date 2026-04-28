@@ -35,6 +35,7 @@ public record Rule(
         String isbpExcerpt,
         String ruleReferenceLabel,
         String outputField,
+        String invoiceField,
         List<String> fieldKeys,
         MissingInvoiceAction missingInvoiceAction,
         Severity severityOnFail,

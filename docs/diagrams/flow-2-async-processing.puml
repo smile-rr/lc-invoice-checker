@@ -1,62 +1,37 @@
 @startuml flow-2-async-processing
-title Flow 2 — Async Compliance Processing (Scheduler)
+title Flow 2 — LC Check Pipeline
 
 skinparam sequenceArrowThickness 2
 skinparam roundcorner 8
 skinparam sequenceParticipantBackgroundColor #F5F5F5
 skinparam sequenceParticipantBorderColor #999999
 
-participant "Scheduler\n(Spring @Scheduled)" as SCH
+participant "Scheduler" as SCH
 database "PostgreSQL" as DB
-participant "MinIO" as S3
-participant "ExtractorRouter" as ER
-participant "Docling / MiniRU\n(supplementary)" as DOC
-participant "Ollama\nqwen3-vl:4b\n(local vision)" as OL
+participant "S3 (MinIO)" as S3
+participant "Vision LLM" as OL
 participant "ComplianceEngine" as CE
-participant "Qwen3-plus\n(DashScope cloud)" as LLM
-participant "Langfuse\n(observability)" as LF
+participant "Text LLM" as LLM
 
-loop every 5 s
-    SCH -> DB  : SELECT id FROM sessions\nWHERE status=QUEUED\nLIMIT 1 FOR UPDATE SKIP LOCKED
-    DB  --> SCH: session row (or empty)
+SCH -> SCH : poll/schedule
+SCH -> DB  : poll QUEUED sessions
+SCH -> DB  : mark PROCESSING
+SCH -> S3  : fetch LC + invoice files
+S3  --> SCH: files
 
-    alt no pending session
-        SCH -> SCH : sleep
-    else session found
-        SCH -> DB  : UPDATE status=PROCESSING
-        SCH -> S3  : getObject(lc_key, invoice_key)
-        S3  --> SCH: lcText, pdfBytes
+SCH -> SCH : parse LC text
+SCH -> OL  : extract invoice fields
 
-        group Stage 1b — Invoice Extraction (parallel)
-            SCH -> OL  : vision extract (base64 pages, field-pool prompt)
-            SCH -> DOC : layout parse (supplementary path)
-            OL  --> SCH: structured fields (primary winner)
-            DOC --> SCH: markdown (stored for trace)
-        end
+SCH -> CE  : run compliance rules
 
-        SCH -> SCH : merge → InvoiceDocument\n(confidence-threshold gating)
+CE -> CE   : Tier 1 — PROGRAMMATIC (SpEL, no LLM)
 
-        group Stage 2 — Rule Activation
-            SCH -> DB  : load catalog.yml rules (startup cache)
-        end
+CE -> LLM  : Tier 2 — AGENT rules (1 call per rule)
+LLM --> CE : { compliant, reason }
 
-        group Stage 3 — Compliance Checks
-            SCH -> CE  : runAll(LcDocument, InvoiceDocument)
+CE -> LLM  : Tier 3 — AGENT + TOOL
+LLM --> CE : result
 
-            CE -> CE   : Tier 1 — PROGRAMMATIC\nSpEL expressions (no LLM)
-
-            CE -> LLM  : Tier 2 — AGENT rules\n(one call per rule, goods desc / beneficiary / etc.)
-            LLM --> CE : { compliant, reason }
-
-            CE -> LLM  : Tier 3 — AGENT+TOOL rules\n(LLM picks tool, tool does math/date)
-            LLM --> CE : tool call → Java callback → result
-
-            CE -> LF   : trace every LLM prompt + response\n(session_id tag)
-        end
-
-        CE --> SCH : List<CheckResult>
-
-        SCH -> DB  : UPDATE sessions SET\nstatus=DONE,\nreport=DiscrepancyReport JSON,\nlc_doc=LcDocument JSON,\ninvoice_doc=InvoiceDocument JSON
-    end
-end
+CE --> SCH : List<CheckResult>
+SCH -> DB  : save report + DONE
 @enduml

@@ -2,6 +2,21 @@ import type { CheckResult, CheckStatus, RuleSummary } from '../../types';
 import { CitationPopover } from './CitationPopover';
 import type { DrawerTarget } from './SourceDrawer';
 
+/** Sub-rule entry used in compact variant (field-level grouping view). */
+export interface CompactSubRule {
+  ruleId: string;
+  ruleName: string | null;
+  status: CheckStatus;
+  description: string | null;
+  lcValue: string | null;
+  presentedValue: string | null;
+  checkType: CheckResult['check_type'] | null;
+  severity: CheckResult['severity'] | null;
+  ucpRef: string | null;
+  isbpRef: string | null;
+  equationUsed?: string | null;
+}
+
 interface Props {
   /** The completed check result. {@code null} means the rule hasn't run yet
    *  (e.g. its stage is still in flight) — card renders in pending state. */
@@ -12,6 +27,10 @@ interface Props {
   /** Open the source-viewer drawer for this row. The card builds the target
    *  from its own evidence; the parent decides whether the drawer is shown. */
   onViewSource?: (target: DrawerTarget) => void;
+  /** Card variant — 'full' = standard card with DataGrid; 'compact' = inline row. */
+  variant?: 'full' | 'compact';
+  /** Sub-rules shown in compact mode (from field-level grouping). */
+  subRules?: CompactSubRule[];
 }
 
 const METHOD_LABEL: Record<string, string> = {
@@ -60,7 +79,27 @@ function CategoryBadge({ kind }: { kind: string | null | undefined }) {
 // neutral. This keeps the eye on the verdict, not on a competing wash of
 // reds and greens.
 
-export function RuleCard({ check, rule, failuresOnly, onViewSource }: Props) {
+export function RuleCard({
+  check,
+  rule,
+  failuresOnly,
+  onViewSource,
+  variant = 'full',
+  subRules,
+}: Props) {
+  // Compact variant: always full-card, sub-rules listed inside
+  if (variant === 'compact') {
+    return (
+      <CompactRuleCard
+        check={check}
+        rule={rule}
+        subRules={subRules}
+        onViewSource={onViewSource}
+      />
+    );
+  }
+
+  // Full variant
   if (check === null) {
     return <PendingRuleCard rule={rule} />;
   }
@@ -131,16 +170,169 @@ export function RuleCard({ check, rule, failuresOnly, onViewSource }: Props) {
         )}
       </div>
 
-      {/* Data + result. The reference chips above carry the rule basis via
-          their own popover, so no separate authority footnote here. */}
+      {/* Data + result. */}
       <DataGrid check={check} tone={tone} />
 
-      {/* Footer — equation_used (Tier-3 only) + View source button.
-          Hidden entirely when neither has anything to show. */}
+      {/* Footer — equation_used (Tier-3 only) + View source button. */}
       {(check.equation_used || onViewSource) && (
         <CardFooter check={check} onViewSource={onViewSource} />
       )}
     </article>
+  );
+}
+
+// ─── Compact variant ─────────────────────────────────────────────────────────
+
+function CompactRuleCard({
+  check,
+  rule,
+  subRules,
+  onViewSource,
+}: {
+  check: CheckResult | null;
+  rule: RuleSummary;
+  subRules?: CompactSubRule[];
+  onViewSource?: (target: DrawerTarget) => void;
+}) {
+  // Pending compact row
+  if (check === null) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 border-l-[3px] border-l-line/50 bg-paper rounded-sm">
+        <span className="font-mono text-[10px] font-bold text-muted/60 shrink-0">{rule.id}</span>
+        <span className="font-sans text-[11px] text-muted/60 truncate flex-1">{rule.name}</span>
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-muted/50 animate-pulse" />
+      </div>
+    );
+  }
+
+  const tone = statusTone(check.status);
+
+  return (
+    <div
+      id={`rule-${check.rule_id}`}
+      className={[
+        'border border-line rounded-sm bg-paper overflow-hidden',
+        `border-l-[3px] ${tone.borderLeft}`,
+      ].join(' ')}
+    >
+      {/* Compact header */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="font-mono text-[10px] font-bold text-navy-1 shrink-0">{check.rule_id}</span>
+        <CategoryBadge kind={check.check_type ?? rule.check_type} />
+        <span className="flex-1 min-w-0">
+          <span className="font-sans text-[11px] text-muted truncate block">
+            {check.rule_name ?? rule.name ?? check.rule_id}
+          </span>
+        </span>
+        <span
+          className={[
+            'shrink-0 inline-flex items-center gap-1',
+            'font-mono text-[10px] uppercase tracking-[0.08em] font-bold',
+            'px-1.5 py-0.5 rounded-sm border',
+            tone.badge,
+          ].join(' ')}
+        >
+          {tone.glyph} {statusShort(check.status)}
+        </span>
+        {onViewSource && (
+          <button
+            onClick={() =>
+              onViewSource({
+                ruleId: check.rule_id,
+                ruleName: check.rule_name ?? check.rule_id,
+                lcEvidence: check.lc_value,
+                invoiceEvidence: check.presented_value,
+              })
+            }
+            className="shrink-0 font-mono text-[10px] uppercase tracking-[0.06em] px-1.5 py-0.5 rounded-sm border border-line bg-paper text-muted hover:border-teal-1/60 hover:text-teal-1 transition-colors"
+            title="View source"
+          >
+            src
+          </button>
+        )}
+      </div>
+
+      {/* Inline values */}
+      {(check.lc_value || check.presented_value || check.description) && (
+        <div className="px-3 py-1.5 border-t border-line/60 bg-slate2/30 flex flex-wrap gap-x-4 gap-y-0.5">
+          {check.lc_value && (
+            <div className="text-[10px]">
+              <span className="font-mono uppercase tracking-wider text-muted/60">LC: </span>
+              <span className="font-mono text-navy-1">{check.lc_value}</span>
+            </div>
+          )}
+          {check.presented_value && (
+            <div className="text-[10px]">
+              <span className="font-mono uppercase tracking-wider text-muted/60">Inv: </span>
+              <span className="font-mono text-navy-1">{check.presented_value}</span>
+            </div>
+          )}
+          {check.description && (
+            <div className="w-full text-[10px] text-muted line-clamp-1">
+              {check.description}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sub-rules (nested compact rows) */}
+      {subRules && subRules.length > 0 && (
+        <div className="border-t border-line/60 bg-slate2/20">
+          {subRules.map((sr) => (
+            <SubRuleRow key={sr.ruleId} sub={sr} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubRuleRow({ sub }: { sub: CompactSubRule }) {
+  const tone = statusTone(sub.status);
+  return (
+    <div className="flex items-start gap-2 px-3 py-1.5 border-t border-line/40">
+      <span
+        className={[
+          'shrink-0 inline-flex items-center',
+          'font-mono text-[9px] uppercase tracking-[0.08em] font-bold',
+          'px-1 py-0.5 rounded-sm border mt-0.5',
+          tone.badge,
+        ].join(' ')}
+      >
+        {statusShort(sub.status)}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className="font-mono text-[10px] font-semibold text-navy-1">{sub.ruleId}</span>
+          {sub.ruleName && (
+            <span className="font-sans text-[10px] text-muted truncate">{sub.ruleName}</span>
+          )}
+        </div>
+        {sub.lcValue || sub.presentedValue ? (
+          <div className="flex flex-wrap gap-x-3">
+            {sub.lcValue && (
+              <span className="text-[9px]">
+                <span className="font-mono text-muted/60">LC </span>
+                <span className="font-mono text-navy-1">{sub.lcValue}</span>
+              </span>
+            )}
+            {sub.presentedValue && (
+              <span className="text-[9px]">
+                <span className="font-mono text-muted/60">Inv </span>
+                <span className="font-mono text-navy-1">{sub.presentedValue}</span>
+              </span>
+            )}
+          </div>
+        ) : sub.description ? (
+          <div className="font-sans text-[10px] text-muted line-clamp-1">{sub.description}</div>
+        ) : null}
+      </div>
+      {sub.equationUsed && (
+        <span className="shrink-0 font-mono text-[9px] text-muted/60 mt-0.5" title={sub.equationUsed}>
+          ∑
+        </span>
+      )}
+    </div>
   );
 }
 

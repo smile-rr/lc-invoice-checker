@@ -100,7 +100,7 @@ export function CitationPopover({ reference, excerpt }: Props) {
       ref={popoverRef}
       role="dialog"
       aria-label={reference}
-      className="fixed w-[360px] z-40 bg-paper text-navy-1 rounded-card border border-line shadow-xl animate-fadein"
+      className="fixed w-[360px] z-[60] bg-paper text-navy-1 rounded-card border border-line shadow-xl animate-fadein"
       style={{ top: coords.top, left: coords.left }}
     >
       <div className="px-3 py-2 border-b border-line flex items-baseline justify-between gap-2">
