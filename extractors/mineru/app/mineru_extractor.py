@@ -34,6 +34,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Force offline mode: only use locally-cached model weights, never reach the network.
+# Set before any HuggingFace / transformers import so the flag takes effect at import time.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 
 # ---------------------------------------------------------------------------
 # Pipeline knobs — env-driven so quality/speed can be tuned without redeploy.
@@ -135,6 +140,28 @@ def library_version() -> str:
         return "unknown"
 
 
+# ---------------------------------------------------------------------------
+# Pipeline lifecycle — singleton so model weights are loaded once per process.
+# ---------------------------------------------------------------------------
+
+_PIPELINE = None
+_pipeline_lock = threading.Lock()
+
+
+def _get_pipeline():
+    global _PIPELINE
+    if _PIPELINE is not None:
+        return _PIPELINE
+    with _pipeline_lock:
+        if _PIPELINE is not None:  # double-check after acquiring lock
+            return _PIPELINE
+        from mineru.backend.pipeline import pipeline_analyze
+
+        logger.info("mineru: initialising pipeline (offline=%s)", os.environ.get("HF_HUB_OFFLINE"))
+        _PIPELINE = pipeline_analyze
+    return _PIPELINE
+
+
 def _run_mineru(pdf_bytes: bytes) -> tuple[str, str]:
     """Run MinerU >= 3.0 pipeline on PDF bytes, return (markdown, plain_text).
 
@@ -144,9 +171,10 @@ def _run_mineru(pdf_bytes: bytes) -> tuple[str, str]:
 
     Raises RuntimeError if the pipeline fails.
     """
-    from mineru.backend.pipeline import pipeline_analyze
     from mineru.backend.pipeline import pipeline_middle_json_mkcontent as mk
     from mineru.data.data_reader_writer.filebase import FileBasedDataWriter
+
+    pipeline_analyze = _get_pipeline()
 
     # Thread-safe result collection from the on_doc_ready callback
     result_holder: dict[str, Any] = {}
@@ -268,9 +296,10 @@ def warm_up() -> None:
 
     MinerU >= 3.0 downloads models lazily on first use. warm_up() forces that
     to happen at container start (before the 120 s extraction budget starts).
+    With HF_HUB_OFFLINE=1 this reads only from the local disk cache.
     """
     try:
-        from mineru.backend.pipeline import pipeline_analyze
+        pipeline_analyze = _get_pipeline()
         from mineru.data.data_reader_writer.filebase import FileBasedDataWriter
         import tempfile
 

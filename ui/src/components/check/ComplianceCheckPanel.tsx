@@ -61,7 +61,7 @@ const ZERO_COUNTS: Record<CheckStatus, number> = {
  *   2. RuleCatalogStrip / FieldStrip — chips per rule or per field.
  */
 export function ComplianceCheckPanel({ state }: Props) {
-  const { rules: catalogRules } = useRuleCatalog();
+  const { rules: catalogRules, ready } = useRuleCatalog();
   const [viewMode, setViewMode] = useState<ViewMode>('field');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   const [ruleId, setRuleId] = useState<string | null>(null);
@@ -118,7 +118,35 @@ export function ComplianceCheckPanel({ state }: Props) {
 
   const fieldResults = useInvoiceFieldView(catalogRules, state.checks);
 
-  // Field view counts: PASS/FAIL/DOUBTS per field
+  // Derive field counts directly from the live catalog — no reference to INVOICE_FIELDS.coveringRules.
+  const rulesByField = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of catalogRules) {
+      if (!r.invoice_field) continue;
+      m.set(r.invoice_field, (m.get(r.invoice_field) ?? 0) + 1);
+    }
+    return m;
+  }, [catalogRules]);
+
+  /**
+   * Denominator: fields that have at least one active rule in the catalog.
+   * Numerator: individual rules with a result — updates progressively as each rule completes.
+   */
+  const totalFieldsWithRules = useMemo(
+    () => ready ? [...rulesByField.values()].filter((n) => n > 0).length : 0,
+    [ready, rulesByField],
+  );
+
+  const fieldTotalCompleted = useMemo(() => {
+    if (!ready) return 0;
+    let n = 0;
+    for (const r of catalogRules) {
+      if (r.invoice_field && resultByRuleId.has(r.id)) n++;
+    }
+    return n;
+  }, [ready, catalogRules, resultByRuleId]);
+
+  // Field view counts: PASS/FAIL/DOUBTS/NOT_REQUIRED per field — used by FieldStrip chips.
   const fieldCounts = useMemo(() => {
     const out = new Map<string, Record<CheckStatus, number>>();
     for (const fr of fieldResults) {
@@ -132,7 +160,7 @@ export function ComplianceCheckPanel({ state }: Props) {
     return out;
   }, [fieldResults]);
 
-  // Overall field-view status counts
+  // Overall field-view status counts — used by the filter bar.
   const fieldViewCounts = useMemo(() => {
     const out: Record<CheckStatus, number> = { ...ZERO_COUNTS };
     for (const fr of fieldResults) {
@@ -140,17 +168,6 @@ export function ComplianceCheckPanel({ state }: Props) {
     }
     return out;
   }, [fieldResults]);
-
-  const fieldTotalCompleted = useMemo(
-    () => fieldResults.filter((fr) => fr.subRules.length > 0 || fr.pendingRuleIds.length > 0).length,
-    [fieldResults],
-  );
-
-  /** Only fields with at least one covering rule — excludes F12/F13/F15/F17. */
-  const totalFieldsWithRules = useMemo(
-    () => fieldResults.filter((fr) => fr.fieldDef.coveringRules.length > 0).length,
-    [fieldResults],
-  );
 
   const visibleFieldResults = useMemo(() => {
     let results = fieldResults;
