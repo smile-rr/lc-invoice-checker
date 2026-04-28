@@ -2,13 +2,9 @@
 
 
 
-- **UI** 	 : https://lccheck.moments-plus.com/ 
+> **System URL** : https://lccheck.moments-plus.com/ 
 
-- **API**	: https://lccheck.moments-plus.com/api 
 
-- **TRACE**: https://langfuse-infra.moments-plus.com/project/cmognu1es00y1qm07ck0jof88/traces 
-
-  
 
 
 ## Major Considerations
