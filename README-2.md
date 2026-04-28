@@ -95,12 +95,8 @@ sequenceDiagram
     C->>API: connect
     API->>API: read Cache (miss → PostgreSQL)
     API-->>C: SSE: QUEUED
-
-    loop every 1.5s
-        API->>API: read Cache (miss → PostgreSQL)
-        API-->>C: SSE: status update
-    end
-
+    API->>API: read Cache (miss → PostgreSQL)
+    API-->>C: SSE: status update
     API-->>C: SSE: DONE + report
 ```
 
