@@ -81,7 +81,7 @@ export function LcSourceView({
     <div
       ref={containerRef}
       className={[
-        'bg-slate2 rounded-card overflow-auto max-h-[72vh] transition-colors',
+        'bg-slate2 rounded-card overflow-auto min-h-[72vh] max-h-[72vh] transition-colors',
         active ? 'ring-2 ring-teal-1 border border-teal-1' : 'border border-line',
       ].join(' ')}
     >

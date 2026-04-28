@@ -27,7 +27,7 @@ const ZOOM_STEP = 0.25;
  * {@code sticky top-0} inside the scroll container so it follows the user
  * down a tall document.
  */
-export function InvoiceViewer({ sessionId, src, file, highlight, maxHeightClass = 'max-h-[76vh]' }: Props) {
+export function InvoiceViewer({ sessionId, src, file, highlight, maxHeightClass = 'min-h-[76vh] max-h-[76vh]' }: Props) {
   const [numPages, setNumPages] = useState(0);
   const [zoom, setZoom] = useState(1.0);
   const [err, setErr] = useState<string | null>(null);

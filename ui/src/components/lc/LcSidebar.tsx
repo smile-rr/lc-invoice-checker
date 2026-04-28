@@ -68,7 +68,7 @@ export function LcSidebar({
     <aside
       ref={containerRef}
       className={[
-        'bg-paper rounded-card overflow-auto max-h-[72vh] transition-colors',
+        'bg-paper rounded-card overflow-auto min-h-[72vh] max-h-[72vh] transition-colors',
         active ? 'ring-2 ring-teal-1 border border-teal-1' : 'border border-line',
       ].join(' ')}
     >

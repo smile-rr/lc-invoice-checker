@@ -66,7 +66,7 @@ export function InvoicePanel({
     : 0;
 
   return (
-    <div className="rounded-card border border-line overflow-hidden bg-paper flex flex-col max-h-[76vh]">
+    <div className="rounded-card border border-line overflow-hidden bg-paper flex flex-col min-h-[76vh] max-h-[76vh]">
       {/* Top zone — extractor selector as a row of stat cards.
            Confidence is the primary number; meta sits underneath. The active
            card gets a teal border + soft tint so the selection is obvious at
