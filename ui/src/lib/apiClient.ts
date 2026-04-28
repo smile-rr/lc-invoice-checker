@@ -3,6 +3,7 @@
 //   - Error classification (NETWORK / HTTP_4XX / HTTP_5XX / TIMEOUT / PARSE)
 //   - Health-bus signalling so HealthIndicator reacts within a single request
 //     instead of waiting for the next 15s background poll.
+//   - Global API progress bus so any UI component can react to in-flight requests.
 // All UI fetches should go through this instead of raw fetch.
 
 import { healthBus } from './healthBus';
@@ -20,6 +21,36 @@ export class ApiError extends Error {
     this.body = body;
   }
 }
+
+// ── Global API progress bus ────────────────────────────────────────────────────
+// Lightweight event emitter so apiFetch can signal loading state without
+// importing React or any UI module. Any code can subscribe/unsubscribe.
+
+type ProgressListener = (active: boolean) => void;
+
+class ProgressBus {
+  private count = 0;
+  private readonly listeners = new Set<ProgressListener>();
+
+  add(): void {
+    this.count++;
+    if (this.count === 1) this.listeners.forEach((l) => l(true));
+  }
+
+  remove(): void {
+    this.count = Math.max(0, this.count - 1);
+    if (this.count === 0) this.listeners.forEach((l) => l(false));
+  }
+
+  subscribe(fn: ProgressListener): () => void {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  }
+}
+
+export const progressBus = new ProgressBus();
+
+// ── Core fetch ────────────────────────────────────────────────────────────────
 
 interface RequestOpts extends RequestInit {
   /** Override the 15s default. */
@@ -44,6 +75,7 @@ function classifyHttp(status: number): ApiErrorCode {
 
 export async function apiFetch(input: string, opts: RequestOpts = {}): Promise<Response> {
   const { timeoutMs = 15000, skipHealth, ...rest } = opts;
+  progressBus.add();
   let res: Response;
   try {
     res = await fetch(input, { ...rest, signal: AbortSignal.timeout(timeoutMs) });
@@ -53,8 +85,10 @@ export async function apiFetch(input: string, opts: RequestOpts = {}): Promise<R
     const code: ApiErrorCode = isAbort ? 'TIMEOUT' : 'NETWORK';
     const message = isAbort ? `Request timed out (${timeoutMs}ms)` : `Network error: ${err.message}`;
     if (!skipHealth) healthBus.markDown(message);
+    progressBus.remove();
     throw new ApiError(message, code);
   }
+  progressBus.remove();
   if (!res.ok) {
     if (res.status >= 500 && !skipHealth) {
       healthBus.markDown(`HTTP ${res.status}`);

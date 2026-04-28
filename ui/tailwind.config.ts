@@ -74,11 +74,18 @@ export default {
           '0%':   { opacity: '0', transform: 'translateY(4px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        // Indeterminate progress shimmer — sweeps left to right repeatedly
+        'api-progress-shimmer': {
+          '0%':   { transform: 'translateX(-100%)', width: '40%' },
+          '50%':  { transform: 'translateX(100%)', width: '70%' },
+          '100%': { transform: 'translateX(200%)', width: '40%' },
+        },
       },
       animation: {
         blink:   'blink 1.2s ease-in-out infinite',
         flash:   'flash 1s ease-out',
         fadein:  'fadein 0.2s ease-out',
+        'api-progress-shimmer': 'api-progress-shimmer 1.4s ease-in-out infinite',
       },
     },
   },
