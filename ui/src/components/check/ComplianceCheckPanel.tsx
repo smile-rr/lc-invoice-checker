@@ -4,7 +4,6 @@ import type { SessionState } from '../../hooks/useCheckSession';
 import { useRuleCatalog } from '../../hooks/useRuleCatalog';
 import { useScrollspy } from '../../hooks/useScrollspy';
 import { useInvoiceFieldView } from '../../hooks/useInvoiceFieldView';
-import { INVOICE_FIELDS } from '../../data/invoiceFields';
 import { ComplianceReferenceModal } from './ComplianceReferenceModal';
 import { ComplianceSidebar } from './ComplianceSidebar';
 import { PhaseSection } from './PhaseSection';
@@ -26,7 +25,6 @@ const PHASE_ORDER: BusinessPhase[] = [
   'GOODS',
   'LOGISTICS',
   'PROCEDURAL',
-  'HOLISTIC',
 ];
 
 const SECTION_ID = (phase: BusinessPhase) => `phase-${phase}`;
@@ -242,7 +240,7 @@ export function ComplianceCheckPanel({ state }: Props) {
               {/* Filter bar — inline after toggle */}
               <StatusFilterBar
                 counts={viewMode === 'rule' ? counts : fieldViewCounts}
-                totalEnabled={viewMode === 'rule' ? catalogRules.length : INVOICE_FIELDS.length}
+                totalEnabled={viewMode === 'rule' ? catalogRules.length : fieldResults.length}
                 totalCompleted={viewMode === 'rule' ? totalCompleted : fieldTotalCompleted}
                 status={statusFilter}
                 ruleId={viewMode === 'rule' ? ruleId : fieldId}
@@ -331,7 +329,7 @@ function PhaseView({
         const phaseChecks: CheckResult[] = phaseRules
           .map((r) => resultByRuleId.get(r.id))
           .filter((c): c is CheckResult => Boolean(c));
-        if (enabledCount === 0 && phase !== 'HOLISTIC') return null;
+        if (enabledCount === 0) return null;
         return (
           <PhaseSection
             key={phase}
@@ -342,17 +340,15 @@ function PhaseView({
             hasFilter={hasFilter}
             checks={phaseChecks}
           >
-            {phase === 'HOLISTIC' && enabledCount === 0
-              ? null
-              : phaseRules.map((rule) => (
-                  <RuleCard
-                    key={rule.id}
-                    rule={rule}
-                    check={resultByRuleId.get(rule.id) ?? null}
-                    failuresOnly={false}
-                    onViewSource={onViewSource}
-                  />
-                ))}
+            {phaseRules.map((rule) => (
+              <RuleCard
+                key={rule.id}
+                rule={rule}
+                check={resultByRuleId.get(rule.id) ?? null}
+                failuresOnly={false}
+                onViewSource={onViewSource}
+              />
+            ))}
           </PhaseSection>
         );
       })}

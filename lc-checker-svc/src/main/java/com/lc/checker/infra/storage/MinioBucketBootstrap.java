@@ -38,7 +38,7 @@ public class MinioBucketBootstrap {
         }
         try {
             s3.headBucket(HeadBucketRequest.builder().bucket(cfg.bucket()).build());
-            log.info("MinIO bucket '{}' exists at {}", cfg.bucket(), cfg.endpoint());
+            log.info("MinIO bucket '{}' exists at {} — store enabled", cfg.bucket(), cfg.endpoint());
         } catch (NoSuchBucketException e) {
             createBucket();
         } catch (S3Exception e) {
@@ -58,7 +58,7 @@ public class MinioBucketBootstrap {
     private void createBucket() {
         try {
             s3.createBucket(CreateBucketRequest.builder().bucket(cfg.bucket()).build());
-            log.info("MinIO bucket '{}' created at {}", cfg.bucket(), cfg.endpoint());
+            log.info("MinIO bucket '{}' created at {} — store enabled", cfg.bucket(), cfg.endpoint());
         } catch (RuntimeException e) {
             log.warn("MinIO createBucket('{}') failed: {} — sessions will run memory-only",
                     cfg.bucket(), e.getMessage());

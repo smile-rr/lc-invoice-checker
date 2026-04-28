@@ -76,6 +76,47 @@ public class SampleRefStore {
         return registry.byId(sampleId).map(SampleManifest::invoice);
     }
 
+    /**
+     * Returns raw LC bytes for a sample/variant. Does NOT upload to MinIO — caller
+     * is responsible for caching or storing the bytes. Used when MinIO is unavailable
+     * and the controller needs to cache sample LC bytes in memory for the session.
+     */
+    public Optional<byte[]> getLcBytes(String sampleId, String variant) {
+        return registry.byId(sampleId)
+                .flatMap(s -> {
+                    String filename = "fail".equalsIgnoreCase(variant) ? s.failLc() : s.passLc();
+                    if (filename == null || filename.isBlank()) {
+                        return Optional.<byte[]>empty();
+                    }
+                    try {
+                        return Optional.of(registry.readBytes(filename));
+                    } catch (IOException e) {
+                        log.error("SampleRefStore: failed to read LC from classpath: {}", filename, e);
+                        return Optional.<byte[]>empty();
+                    }
+                });
+    }
+
+    /**
+     * Returns raw invoice bytes for a sample. Does NOT upload to MinIO — caller
+     * is responsible for caching or storing the bytes.
+     */
+    public Optional<byte[]> getInvoiceBytes(String sampleId) {
+        return registry.byId(sampleId)
+                .flatMap(s -> {
+                    String filename = s.invoice();
+                    if (filename == null || filename.isBlank()) {
+                        return Optional.<byte[]>empty();
+                    }
+                    try {
+                        return Optional.of(registry.readBytes(filename));
+                    } catch (IOException e) {
+                        log.error("SampleRefStore: failed to read invoice from classpath: {}", filename, e);
+                        return Optional.<byte[]>empty();
+                    }
+                });
+    }
+
     // ── Internal ─────────────────────────────────────────────────────────────
 
     private Optional<String> resolveLc(SampleManifest s, String variant) {

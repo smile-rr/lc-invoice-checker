@@ -161,5 +161,57 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
   pre-condition is OCR Extraction fields accuracy. 
 
-* Fine tuning of the text model driven by UCP, ISBP rules and data 
+* Fine tuning of the text model driven by UCP, ISBP rules and data
+
+---
+
+## Screenshots & Live Demo
+
+**Live Demo:** [https://lcheck.moments-plus.com](https://lcheck.moments-plus.com)
+
+### 00 — Landing Page
+
+![Landing Page](docs/screenshots/00.landing-page.png)
+
+### 01 — LC MT700 Parser
+
+![LC MT700 Parser](docs/screenshots/01.landing-page-preview.png)
+
+### 02 — LC Parser Result
+
+![LC Parser Result](docs/screenshots/02.lc-parser.png)
+
+### 03 — Invoice PDF Extraction
+
+![Invoice Extraction](docs/screenshots/03.invoice-extract.png)
+
+### 04 — Compliance Check
+
+Compliance engine runs all rules against extracted LC and invoice fields.
+
+- **Passed:** all rules satisfied
+
+![Compliance Check — Passed](docs/screenshots/04-1.compliance-check-passed.png)
+
+- **Failed:** one or more discrepancies detected
+
+![Compliance Check — Failed](docs/screenshots/04-2.compliance-check-failed.png)
+
+### 05 — Final Review & Report
+
+Human reviewer makes the final decision based on the compliance report.
+
+- **Passed:** compliant with discrepancies resolved
+
+![Final Review — Passed](docs/screenshots/05-1.final-review-passed.png)
+
+- **Failed:** non-compliant; discrepancy report issued
+
+![Final Review — Failed](docs/screenshots/05-2.final-review-failed.png)
+
+### Observation — Langfuse Tracing
+
+Monitor raw LLM requests and responses via Langfuse to debug and tune model performance across all pipeline stages.
+
+![Langfuse Tracing](docs/screenshots/langfuse-tracing.png) 
 

@@ -17,7 +17,6 @@ const PHASE_ORDER: BusinessPhase[] = [
   'GOODS',
   'LOGISTICS',
   'PROCEDURAL',
-  'HOLISTIC',
 ];
 
 const PHASE_LABEL: Record<BusinessPhase, string> = {
@@ -26,7 +25,6 @@ const PHASE_LABEL: Record<BusinessPhase, string> = {
   GOODS:      'Goods',
   LOGISTICS:  'Logistics',
   PROCEDURAL: 'Procedural',
-  HOLISTIC:   'Holistic',
 };
 
 const PHASE_HINT: Record<BusinessPhase, string> = {
@@ -35,7 +33,6 @@ const PHASE_HINT: Record<BusinessPhase, string> = {
   GOODS:      'Description · quantity · origin',
   LOGISTICS:  'Trade term · ports',
   PROCEDURAL: 'Dates · signature · LC#',
-  HOLISTIC:   'Cross-document non-contradiction',
 };
 
 type PhaseTally = {

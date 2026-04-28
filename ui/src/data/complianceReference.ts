@@ -11,7 +11,7 @@
 
 export type RuleType = 'PROGRAMMATIC' | 'AGENT' | 'AGENT+TOOL';
 export type RuleStatus = 'enabled' | 'disabled' | 'not_modeled';
-export type BusinessPhase = 'PARTIES' | 'MONEY' | 'GOODS' | 'LOGISTICS' | 'PROCEDURAL' | 'HOLISTIC';
+export type BusinessPhase = 'PARTIES' | 'MONEY' | 'GOODS' | 'LOGISTICS' | 'PROCEDURAL';
 export type DisabledReason =
   | 'CONDITIONAL_ON_DOC'
   | 'MULTI_INVOICE_DEFERRED'
@@ -47,7 +47,7 @@ export const COMPLIANCE_MATRIX: UcpIsbpEntry[] = [
   { article: 'UCP 600 Art. 14(a)', title: 'Standard for Examination',                status: 'not_modeled', disabledReason: 'COVERED_ELSEWHERE', coveredBy: 'All rules enforce face-value compliance', note: 'Implicitly enforced by every Art. 18 rule.' },
   { article: 'UCP 600 Art. 14(b)', title: 'Examination Period (5 banking days)',     status: 'not_modeled', disabledReason: 'OUT_OF_SCOPE', note: 'Bank internal SLA — not an invoice content check.' },
   { article: 'UCP 600 Art. 14(c)', title: '21-Day Presentation Window',               status: 'enabled', ruleId: 'UCP-14c', type: 'PROGRAMMATIC', phase: 'PROCEDURAL', note: 'Active as invoice-proxy: invoice_date + 21 days ≤ expiry_date. Exact version (needs B/L date) = UCP-14c-exact (DISABLED).' },
-  { article: 'UCP 600 Art. 14(d)', title: 'Non-Contradiction Rule',                  status: 'disabled', ruleId: 'UCP-14d', type: 'AGENT', phase: 'HOLISTIC', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Needs at least one additional stipulated document (B/L, packing list, CoO).' },
+  { article: 'UCP 600 Art. 14(d)', title: 'Non-Contradiction Rule',                  status: 'disabled', ruleId: 'UCP-14d', type: 'AGENT', phase: 'PROCEDURAL', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Needs at least one additional stipulated document (B/L, packing list, CoO).' },
   { article: 'UCP 600 Art. 14(e)', title: 'Address Country Consistency',              status: 'enabled', ruleId: 'UCP-14e', type: 'AGENT', phase: 'PARTIES' },
   { article: 'UCP 600 Art. 14(f)', title: 'Non-Required Documents',               status: 'not_modeled', disabledReason: 'META', note: 'Framework — banks ignore documents not stipulated in the LC.' },
   { article: 'UCP 600 Art. 14(h)', title: 'Document Dating',                        status: 'enabled', ruleId: 'UCP-14h', type: 'PROGRAMMATIC', phase: 'PROCEDURAL' },
@@ -64,7 +64,7 @@ export const COMPLIANCE_MATRIX: UcpIsbpEntry[] = [
   { article: 'UCP 600 Art. 18(d)', title: 'Invoice Signature Not Required',        status: 'enabled', ruleId: 'ISBP-C2', type: 'AGENT', phase: 'PROCEDURAL' },
 
   // ── UCP 600 Art. 28 — Insurance ────────────────────────────────────────
-  { article: 'UCP 600 Art. 28(f)', title: 'Insurance Coverage ≥ 110% CIF/CIP',    status: 'disabled', ruleId: 'UCP-28f', type: 'AGENT', phase: 'HOLISTIC', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires insurance certificate/policy. Insured amount comes from the insurance document.' },
+  { article: 'UCP 600 Art. 28(f)', title: 'Insurance Coverage ≥ 110% CIF/CIP',    status: 'disabled', ruleId: 'UCP-28f', type: 'AGENT', phase: 'GOODS', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires insurance certificate/policy. Insured amount comes from the insurance document.' },
 
   // ── UCP 600 Art. 30 — Quantity & Drawing Tolerances ──────────────────────
   { article: 'UCP 600 Art. 30(a)', title: 'Quantity Tolerance — "about" ±10%',    status: 'enabled', ruleId: 'UCP-30a', type: 'AGENT', phase: 'MONEY' },
@@ -97,10 +97,10 @@ export const COMPLIANCE_MATRIX: UcpIsbpEntry[] = [
   { article: 'ISBP 821 Para. D1–D10', title: 'Transport Document vs Invoice Consistency', status: 'disabled', ruleId: 'ISBP-D1', type: 'AGENT', phase: 'LOGISTICS', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires bill of lading or other transport document.' },
 
   // ── ISBP 821 — E-series (Insurance Documents) ─────────────────────────────
-  { article: 'ISBP 821 Para. E1–E10', title: 'Insurance Document vs Invoice Consistency', status: 'disabled', ruleId: 'ISBP-E1', type: 'AGENT', phase: 'HOLISTIC', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires insurance certificate/policy. Insured amount comes from insurance document.' },
+  { article: 'ISBP 821 Para. E1–E10', title: 'Insurance Document vs Invoice Consistency', status: 'disabled', ruleId: 'ISBP-E1', type: 'AGENT', phase: 'GOODS', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires insurance certificate/policy. Insured amount comes from insurance document.' },
 
   // ── ISBP 821 — K-series (Certificates of Origin) ──────────────────────────
-  { article: 'ISBP 821 Para. K1–K6', title: 'Certificate of Origin vs Invoice Consistency', status: 'disabled', ruleId: 'ISBP-K1', type: 'AGENT', phase: 'HOLISTIC', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires certificate of origin. Activates when V1.5 ingests CoO documents.' },
+  { article: 'ISBP 821 Para. K1–K6', title: 'Certificate of Origin vs Invoice Consistency', status: 'disabled', ruleId: 'ISBP-K1', type: 'AGENT', phase: 'PROCEDURAL', disabledReason: 'CONDITIONAL_ON_DOC', disabledDetail: 'Requires certificate of origin. Activates when V1.5 ingests CoO documents.' },
 
   // ── Bank Policy ───────────────────────────────────────────────────────────
   { article: 'BANK-001', title: 'Invoice Language Requirement (English)',         status: 'disabled', ruleId: 'BANK-001', type: 'AGENT', phase: 'PROCEDURAL', disabledReason: 'BANK_OPTIONAL', disabledDetail: 'Per-deployment bank policy. Enable in catalog per institution.' },
@@ -112,7 +112,6 @@ export const PHASE_LABELS: Record<BusinessPhase, string> = {
   GOODS:      'Goods',
   LOGISTICS:  'Logistics',
   PROCEDURAL: 'Procedural',
-  HOLISTIC:   'Holistic',
 };
 
 export const STATUS_LABELS: Record<string, string> = {

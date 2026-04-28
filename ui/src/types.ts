@@ -19,8 +19,7 @@ export type BusinessPhase =
   | 'MONEY'
   | 'GOODS'
   | 'LOGISTICS'
-  | 'PROCEDURAL'
-  | 'HOLISTIC';
+  | 'PROCEDURAL';
 
 // ─── Unified envelope (single SSE / trace shape) ──────────────────────────
 

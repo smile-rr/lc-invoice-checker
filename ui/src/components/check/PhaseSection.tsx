@@ -18,7 +18,6 @@ const PHASE_ORDER: BusinessPhase[] = [
   'GOODS',
   'LOGISTICS',
   'PROCEDURAL',
-  'HOLISTIC',
 ];
 
 const LABEL: Record<BusinessPhase, string> = {
@@ -27,7 +26,6 @@ const LABEL: Record<BusinessPhase, string> = {
   GOODS:      'Goods',
   LOGISTICS:  'Logistics',
   PROCEDURAL: 'Procedural',
-  HOLISTIC:   'Holistic',
 };
 
 const HINT: Record<BusinessPhase, string> = {
@@ -36,7 +34,6 @@ const HINT: Record<BusinessPhase, string> = {
   GOODS:      'Description · quantity · origin',
   LOGISTICS:  'Trade term · ports',
   PROCEDURAL: 'Dates · signature · LC#',
-  HOLISTIC:   'Cross-document non-contradiction',
 };
 
 /**
@@ -88,31 +85,9 @@ export function PhaseSection({
               No rules match the current filter in this phase.
             </div>
           ) : totalRulesInPhase === 0 ? (
-            phase === 'HOLISTIC' ? (
-              <div className="px-1 space-y-2">
-                <div className="font-sans text-xs text-muted leading-relaxed">
-                  <span className="font-semibold text-navy-1">Cross-document consistency check</span>
-                  {' '}— not yet included (requires B/L, packing list, and/or certificate of origin input).
-                </div>
-                <div className="font-sans text-xs text-muted/70 leading-relaxed">
-                  Per{' '}
-                  <span className="font-mono text-[10px]">UCP 600 Art. 14(d)</span>
-                  {': '}data in any presented document must not contradict data in the credit
-                  or in other stipulated documents (B/L, packing list, certificate of origin).
-                </div>
-                <div className="flex items-start gap-2 mt-2 px-3 py-2 rounded border border-status-gold/30 bg-status-goldSoft/40">
-                  <span className="text-status-gold text-[13px] leading-none mt-0.5 shrink-0">⏳</span>
-                  <div className="font-sans text-xs text-status-gold leading-relaxed">
-                    <span className="font-semibold">Pending input:</span>
-                    {' '}Bill of Lading, Packing List, Certificate of Origin
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="font-sans text-xs text-muted italic px-1">
-                No rules in this phase yet.
-              </div>
-            )
+            <div className="font-sans text-xs text-muted italic px-1">
+              No rules in this phase yet.
+            </div>
           ) : (
             <div>{children}</div>
           )}
