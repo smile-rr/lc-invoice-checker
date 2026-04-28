@@ -1,17 +1,14 @@
 # LC Invoice Checker — Solution Document
 
----
 
 
-> ### System Links
->
-> **UI** 	 : https://lccheck.moments-plus.com/  <br>
-> **API**	: https://lccheck.moments-plus.com/api <br>
-> **TRACE**: <u>https://langfuse-infra.moments-plus.com</u>/project/cmognu1es00y1qm07ck0jof88/traces <br>
+- **UI** 	 : https://lccheck.moments-plus.com/ 
 
+- **API**	: https://lccheck.moments-plus.com/api 
 
+- **TRACE**: https://langfuse-infra.moments-plus.com/project/cmognu1es00y1qm07ck0jof88/traces 
 
-
+  
 
 
 ## Major Considerations
