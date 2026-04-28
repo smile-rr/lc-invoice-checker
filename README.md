@@ -20,7 +20,7 @@ So **decouple submission from processing is needed.** This lets the system scale
 
 The vision and language models are black boxes to us. We need to see what goes in and what comes out. That visibility is how we close the accuracy gap. Frameworks like SpringAI, LangChain are convenient — but they hide the details.
 
-We still need to **inspect the raw LLM API request and response** for judging and tuning LLM Performance.
+That's why we need to **inspect the raw LLM API request and response** for judging and tuning LLM Performance.
 
 
 
