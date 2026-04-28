@@ -130,8 +130,6 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
 ![Deployment Architecture](docs/diagrams/deploy-architecture.png)
 
-![Architecture (Excalidraw)](docs/diagrams/architecture-local.excalidraw)
-
 
 
 ## Performance and Optimization
