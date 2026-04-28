@@ -3,7 +3,6 @@ import { HealthIndicator } from './components/shell/HealthIndicator';
 import { TopNav } from './components/shell/TopNav';
 import { UploadPage } from './pages/UploadPage';
 import { SessionPage } from './pages/SessionPage';
-import { ApiProgressBar } from './components/shell/ApiProgressBar';
 
 /**
  * Wrap SessionPage so React unmounts and remounts when the {@code :id} param
@@ -20,7 +19,6 @@ export function App() {
   return (
     <div className="h-dvh flex flex-col overflow-hidden">
       <TopNav />
-      <ApiProgressBar />
       <HealthIndicator />
       <main className="flex-1 min-h-0 overflow-hidden">
         <Routes>

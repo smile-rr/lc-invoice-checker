@@ -1,25 +1,21 @@
 import { useApiProgress } from '../../hooks/useApiProgress';
 
 /**
- * A thin, fixed progress bar at the very top of the viewport.
+ * An inline progress bar rendered below the PipelineFlow section.
  * Animates in when any API request is in-flight and fades out when all
- * requests complete — giving the user immediate feedback that their action
- * triggered a backend call.
+ * requests complete — giving the user immediate visual feedback that their
+ * action triggered a backend call.
  *
- * Placed inside App.tsx so it covers the entire app.
+ * Placed inline in UploadPage and SessionPage, immediately after PipelineFlow.
  */
 export function ApiProgressBar() {
   const active = useApiProgress();
 
   return (
     <div
-      className="fixed inset-x-0 top-10 z-100 h-0.5 overflow-hidden"
+      className="relative h-1.5 w-full overflow-hidden bg-slate2"
       aria-hidden="true"
-      style={{ pointerEvents: 'none' }}
     >
-      {/* Background track */}
-      <div className="absolute inset-0 bg-[#22c55e] opacity-10" />
-
       {/* Bright green wave sweeping left to right */}
       <div
         className="absolute inset-y-0 left-0 transition-opacity duration-200"
