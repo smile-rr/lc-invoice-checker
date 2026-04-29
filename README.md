@@ -11,19 +11,25 @@
 
 ### **Output Accuracy**
 
-Accuracy is the most important consideration. Any missed issue means immediate financial loss — LC funds go to the beneficiary and cannot be recovered.
+Accuracy is the most important consideration. Any missed discrepancy means immediate financial loss — LC funds go to the beneficiary and cannot be recovered.
 
-Hence each stage of **LLM agent output must be right.** Human review remains the final gate as LLM didn't reach that stage yet.
+Hence each stage of **LLM agent output must be right.** Human review remains the final gate as LLM didn't reach that standard yet.
+
+### **Compliance and Regulatory**
+
+Banks are a highly regulated industry. Data has country boundaries. AI model selection and training datasets are also regulated.
+
+So according to business scope and covered markets, model selection, deployment datacenter and training dataset **must consider the regulation law**s **in each market** as baseline. And follow the bank's own compliance rules as the higher standard.
 
 ### **Workload Decoupling**
 
-Banks have 5 days to check LC and invoice. But document submission can happen anytime, in any volume. Also the LLM inference engine have capacity limits processing paralel request.
+Banks have 5 days to check LC and invoice. But document submission can happen anytime, in any volume. Also the LLM inference engine **has** capacity limits processing parallel requests
 
 So **decouple submission from processing is needed.** This lets the system scale freely without concurrency failures.
 
 ### **Observation Capability**
 
-The vision and language models are black boxes to us. We need to see what goes in and what comes out. That visibility is how we close the accuracy gap. Frameworks like SpringAI, LangChain are convenient — but they hide the details.
+The vision and language models are black boxes to us. We need to see what goes in and what comes out. That visibility is how we close the accuracy gap. Frameworks like SpringAI, LangChain are convenient - but they abstract away the details.
 
 That's why we need to **inspect the raw LLM API request and response** for judging and tuning LLM Performance.
 
@@ -105,6 +111,38 @@ sequenceDiagram
     API-->>C: SSE: DONE + report
 ```
 
+
+
+## Deployment Architecture
+
+![Deployment Architecture](docs/diagrams/deploy-architecture.png)
+
+
+
+## Project Structure
+
+```text
+lc-cheker-solution/
+├── extractors/                     # Python microservices (docling + mineru PDF extractors)
+├── infra/                          # docker-compose, postgres schema, scripts
+├── lc-checker-svc/									# SpringBoot microservice
+│   └── src/main/java/com/lc/checker/
+│       ├── api/                    # Controllers + error handling
+│       ├── domain/                 # Domain models (LC doc, invoice, rules, results, sessions)
+│       ├── infra/                  # Config, persistence, queue, storage, observability
+│       ├── pipeline/               # LC Check Pipeline (stages, flow, context)
+│       ├── stage/                  # Stage implementations (parse, extract, check, assemble)
+│       └── tools/                  # LLM agent @Tool definitions
+│   └── src/main/resources/
+│       ├── fields/                 # LC, Invoice Fields registries (field-pool, lc-tag-mapping)
+│       ├── prompts/                # LLM prompt templates (extract + check)
+│       └── rules/                  # LC Check Rule catalog YAML
+├── ui/                             # React frontend
+└── README.md
+```
+
+
+
 ## Config-Driven Design
 
 ### **LC MT700 Parsing** 
@@ -130,10 +168,6 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
   - **PROGRAMMATIC**: 4 rules — straightforward logic via SpEL, no LLM
   - **AGENT**: 12 rules — prompt-driven checks via [`prompts/check/`](lc-checker-svc/src/main/resources/prompts/check/) templates
   - **AGENT+TOOLS**: 2 rules — LLM calls Java tool for computation. [`prompts/check/`](lc-checker-svc/src/main/resources/prompts/check/) templates
-
-## Deployment Architecture
-
-![Deployment Architecture](docs/diagrams/deploy-architecture.png)
 
 
 
@@ -172,6 +206,10 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
 **Pipeline Total Tokens:**  ~40,000 input / ~3,500 output   
 
+Local deployment may be required for compliance, but total infrastructure cost can exceed cloud-hosted pricing. 
+
+Market LLM pricing serves as a useful benchmark.
+
 | Model             | Total Cost | $/1M input · output |
 | ----------------- | ---------- | ------------------- |
 | GPT-5.5           | $0.305     | $5 · $30            |
@@ -191,7 +229,7 @@ Rules are defined in [`catalog.yml`](lc-checker-svc/src/main/resources/rules/cat
 
 ## Screenshots & Live Demo
 
-**Live Demo:** [https://lcheck.moments-plus.com](https://lcheck.moments-plus.com)
+**Live Demo:** [https://lccheck.moments-plus.com](https://lccheck.moments-plus.com)
 
 ### 00 — Landing Page
 
