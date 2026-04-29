@@ -15,15 +15,19 @@ import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.domain.session.enums.StageStatus;
 import com.lc.checker.infra.persistence.CheckSessionStore;
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import javax.sql.DataSource;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -165,6 +169,49 @@ public class JdbcCheckSessionStore implements CheckSessionStore {
                 resultJson, resultJson, error);
         log.debug("putStep: session={} stage={} step={} status={} dur={}ms",
                 sessionId, stage, key, status, durationMs);
+    }
+
+    private static final String PUT_STEP_SQL = """
+            INSERT INTO pipeline_steps
+                (session_id, stage, step_key, status, started_at, completed_at, duration_ms, result, error)
+            VALUES
+                (?::uuid, ?, ?, ?, ?, ?, ?,
+                 CASE WHEN ?::text IS NULL THEN NULL ELSE to_jsonb(?::json) END,
+                 ?)
+            ON CONFLICT (session_id, stage, step_key) DO UPDATE SET
+                status       = EXCLUDED.status,
+                started_at   = EXCLUDED.started_at,
+                completed_at = EXCLUDED.completed_at,
+                duration_ms  = EXCLUDED.duration_ms,
+                result       = EXCLUDED.result,
+                error        = EXCLUDED.error
+            """;
+
+    @Override
+    public void putSteps(List<StepEntry> entries) {
+        if (entries.isEmpty()) return;
+        int[] counts = jdbc.batchUpdate(PUT_STEP_SQL, new BatchPreparedStatementSetter() {
+            @Override public void setValues(PreparedStatement ps, int i) throws java.sql.SQLException {
+                StepEntry e = entries.get(i);
+                ps.setObject(1, UUID.fromString(e.sessionId()));
+                ps.setString(2, e.stage());
+                ps.setString(3, e.stepKey() == null || e.stepKey().isBlank() ? "-" : e.stepKey());
+                ps.setString(4, e.status());
+                ps.setTimestamp(5, e.startedAt() == null ? new Timestamp(System.currentTimeMillis())
+                        : Timestamp.from(e.startedAt()));
+                ps.setTimestamp(6, e.completedAt() == null ? null : Timestamp.from(e.completedAt()));
+                long dur = (e.startedAt() == null || e.completedAt() == null) ? 0
+                        : e.completedAt().toEpochMilli() - e.startedAt().toEpochMilli();
+                ps.setLong(7, dur);
+                String resultJson = e.result() == null ? null : toJson(e.result());
+                ps.setString(8, resultJson);
+                ps.setString(9, resultJson);
+                ps.setString(10, e.error());
+            }
+            @Override public int getBatchSize() { return entries.size(); }
+        });
+        log.debug("putSteps: {} rows batch-inserted for session={}",
+                counts.length, entries.get(0).sessionId());
     }
 
     @Override
