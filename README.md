@@ -2,7 +2,7 @@
 
 
 
-> **System URL** : https://lccheck.moments-plus.com/
+> **System URL** : https://lccheck.moments-plus.com/.    Passcode shared in mail seperately
 
 ## Table of Contents
 
