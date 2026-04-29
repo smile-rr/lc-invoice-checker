@@ -58,47 +58,29 @@ public class LcParseStage implements Stage {
 
     @Override
     public void execute(StageContext ctx) {
-        // Named span for the parse stage. Input = LC text preview + length;
-        // output = the structured LcDocument summary so a Langfuse reviewer
-        // can confirm parsing without diving into the trace endpoint.
-        Span span = LangfuseTags.applySession(tracer.nextSpan())
-                .name("lc-parse")
-                // Deterministic regex/Prowide parse — Langfuse type "span".
-                .tag("langfuse.observation.type", "span")
-                .tag("stage", name())
-                .tag("langfuse.observation.input", toJson(Map.of(
-                        "lc_text_length", ctx.lcText.length(),
-                        "lc_text_preview", preview(ctx.lcText, 280))))
-                .start();
+        // ── Setup: metrics timer + Langfuse span ──────────────────────────────
         long t0 = System.currentTimeMillis();
+        Span span = traceSpanStart(ctx.lcText);
         ctx.publisher.status(name(), "started", "Parsing MT700");
         try (Tracer.SpanInScope ws = tracer.withSpan(span)) {
             MDC.put(MdcKeys.STAGE, name());
+
+            // ═══════════════════════════════════════════════════════════════════
+            // CORE: MT700 → LcDocument (regex / Prowide only, no LLM)
+            // ═══════════════════════════════════════════════════════════════════
             LcDocument lc = parser.parse(ctx.lcText);
             long dur = System.currentTimeMillis() - t0;
+
+            // ── Post-parse: populate context + emit events ───────────────────
             ctx.lc = lc;
             ctx.lcParseTrace = new StageTrace(name(), StageStatus.SUCCESS,
                     Instant.now(), dur, lc, List.of(), null);
             metrics.recordStage(PipelineMetrics.TIMER_PARSE, dur, "success");
             ctx.publisher.status(name(), "completed",
                     "MT700 parsed (LC " + lc.lcNumber() + ")", lc);
-
-            Map<String, Object> output = new LinkedHashMap<>();
-            output.put("lc_number", lc.lcNumber());
-            output.put("currency", lc.currency());
-            output.put("amount", lc.amount());
-            output.put("expiry_date", lc.expiryDate());
-            output.put("applicant_name", lc.applicantName());
-            output.put("beneficiary_name", lc.beneficiaryName());
-            output.put("incoterms", lc.envelope() == null ? null : lc.envelope().fields().get("incoterms"));
-            output.put("port_of_loading", lc.portOfLoading());
-            output.put("port_of_discharge", lc.portOfDischarge());
-            output.put("duration_ms", dur);
-            span.tag("langfuse.observation.output", toJson(output));
-            span.tag("lc.number", String.valueOf(lc.lcNumber()));
+            traceSpanEnd(span, lc, dur);
         } catch (RuntimeException e) {
-            long dur = System.currentTimeMillis() - t0;
-            metrics.recordStage(PipelineMetrics.TIMER_PARSE, dur, "failed");
+            metrics.recordStage(PipelineMetrics.TIMER_PARSE, System.currentTimeMillis() - t0, "failed");
             log.error("Stage 1a (lc_parse) failed before session persistence: {}", e.getMessage());
             ctx.publisher.error(name(), String.valueOf(e.getMessage()));
             span.error(e);
@@ -108,14 +90,40 @@ public class LcParseStage implements Stage {
             span.end();
         }
 
-        // Session row creation — moved here from the runner because it depends on
-        // the just-parsed LC scalars and only makes sense once parse has succeeded.
+        // ── DB persistence: session row + pipeline_steps ───────────────────
         store.createSession(ctx.sessionId, ctx.lc.lcNumber(),
                 ctx.lc.beneficiaryName(), ctx.lc.applicantName());
         store.putStep(ctx.sessionId, name(), "-", "SUCCESS",
                 Instant.ofEpochMilli(t0), Instant.now(),
                 Map.of("lc_output", ctx.lc), null);
         log.debug("Stage 1a complete: lc_parse recorded");
+    }
+
+    private Span traceSpanStart(String lcText) {
+        return LangfuseTags.applySession(tracer.nextSpan())
+                .name("lc-parse")
+                .tag("langfuse.observation.type", "span")
+                .tag("stage", name())
+                .tag("langfuse.observation.input", toJson(Map.of(
+                        "lc_text_length", lcText.length(),
+                        "lc_text_preview", preview(lcText, 280))))
+                .start();
+    }
+
+    private void traceSpanEnd(Span span, LcDocument lc, long dur) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("lc_number", lc.lcNumber());
+        output.put("currency", lc.currency());
+        output.put("amount", lc.amount());
+        output.put("expiry_date", lc.expiryDate());
+        output.put("applicant_name", lc.applicantName());
+        output.put("beneficiary_name", lc.beneficiaryName());
+        output.put("incoterms", lc.envelope() == null ? null : lc.envelope().fields().get("incoterms"));
+        output.put("port_of_loading", lc.portOfLoading());
+        output.put("port_of_discharge", lc.portOfDischarge());
+        output.put("duration_ms", dur);
+        span.tag("langfuse.observation.output", toJson(output));
+        span.tag("lc.number", String.valueOf(lc.lcNumber()));
     }
 
     private String toJson(Object o) {
