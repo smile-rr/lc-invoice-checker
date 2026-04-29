@@ -15,6 +15,9 @@ credentials.json
 .claude/
 CLAUDE.md
 
+# Local docs / analysis notes (not committed)
+docs/key-insights.md
+
 # UI build artifacts
 ui/node_modules/
 ui/dist/
