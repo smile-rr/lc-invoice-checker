@@ -251,9 +251,9 @@ Market LLM pricing serves as a useful benchmark.
 
 ![Landing Page](docs/screenshots/00.landing-page.jpg)
 
-### 01 — LC MT700 Parser
+### 01 — Original LC File and Invoice Preview
 
-![LC MT700 Parser](docs/screenshots/01.landing-page-preview.jpg)
+![Landing Page preview](docs/screenshots/01.landing-page-preview.jpg)
 
 ### 02 — LC Parser Result
 
