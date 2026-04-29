@@ -177,14 +177,17 @@ public class LcCheckStreamController {
 
     @GetMapping(path = "/{sessionId}/lc-raw", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> lcRaw(@PathVariable String sessionId) {
-        // Hot path: in-process cache populated on /start.
+        // Hot path: in-process cache populated on /start. Only short-circuit
+        // when the cached entry actually carries lcText — a partial entry
+        // (e.g. invoice put after lc) falls through to the cold path.
         SessionFiles f = filesBySession.getIfPresent(sessionId);
-        if (f != null) {
+        if (f != null && f.lcText() != null) {
             return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(f.lcText());
         }
-        // Cold path: server restarted. Derive the MinIO key from the SHA-256
-        // stored in the DB. Catches MinioAccessException (connection failure)
-        // and surfaces it as HTTP 503 so the UI shows a meaningful error.
+        // Cold path: server restarted, or cache evicted, or hot entry is
+        // partial. Derive the MinIO key from the SHA-256 stored in the DB.
+        // Catches MinioAccessException (connection failure) and surfaces it
+        // as HTTP 503 so the UI shows a meaningful error.
         return store.findSessionFiles(sessionId)
                 .map(SessionFileRefs::lcSha256)
                 .filter(s -> s != null && !s.isBlank())
@@ -216,9 +219,12 @@ public class LcCheckStreamController {
 
     @GetMapping(path = "/{sessionId}/invoice")
     public ResponseEntity<byte[]> invoice(@PathVariable String sessionId) {
-        // Hot path: in-process cache.
+        // Hot path: in-process cache. Only short-circuit when the cached
+        // entry actually carries invoice bytes — a partial entry (e.g. the
+        // sample-with-MinIO-healthy case caches only lcText) falls through
+        // to the cold path.
         SessionFiles f = filesBySession.getIfPresent(sessionId);
-        if (f != null) {
+        if (f != null && f.invoiceBytes() != null) {
             return pdfResponse(f.invoiceBytes(), f.invoiceFilename());
         }
         // Cold path: session is in DB (SHA recorded) but bytes are not in the
@@ -290,16 +296,15 @@ public class LcCheckStreamController {
         String variant  = (body.variant() == null || body.variant().isBlank()) ? "pass" : body.variant();
         String lcFilename = sampleRef.getLcFilename(sampleId, variant).orElse("lc.txt");
 
-        // Always read sample LC bytes first and cache the text in the hot
-        // session store so /lc-raw answers from memory on every subsequent
-        // request — MinIO is the durable backing store, not the primary path.
+        // Resolve LC bytes (always from sample). Hot-cache write is deferred
+        // to the bottom of this method so a single SessionFiles entry carries
+        // both lcText AND invoice bytes — earlier code did two puts and the
+        // second silently nulled out lcText, breaking /lc-raw.
         byte[] lcBytes = sampleRef.getLcBytes(sampleId, variant)
                 .orElseThrow(() -> new IllegalStateException(
                         "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
+        String lcText = new String(lcBytes, StandardCharsets.UTF_8);
         String lcSha = Sha256.hex(lcBytes);
-        filesBySession.put(sessionId,
-                new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8),
-                        null, null));
 
         // MinIO upload: dedup upload so future sessions with the same content
         // hit the same blob. No-op if already present (content-addressed PUT).
@@ -314,6 +319,10 @@ public class LcCheckStreamController {
         String invoiceSha;
         String invoiceFilename;
         long   invoiceBytes;
+        // Bytes to seed the hot cache when we have them in memory (custom upload
+        // or MinIO-down sample). When MinIO is healthy and the invoice is a
+        // sample, we leave this null — /invoice resolves via the cold path.
+        byte[] hotInvoiceBytes = null;
         if (invoice != null && !invoice.isEmpty()) {
             // Custom invoice — validate, upload, and record like /start.
             byte[] pdfBytes = invoice.getBytes();
@@ -321,8 +330,7 @@ public class LcCheckStreamController {
             invoiceSha      = Sha256.hex(pdfBytes);
             invoiceFilename = invoice.getOriginalFilename();
             invoiceBytes    = pdfBytes.length;
-            filesBySession.put(sessionId,
-                    new SessionFiles(null, invoiceFilename, pdfBytes));
+            hotInvoiceBytes = pdfBytes;
             if (fileStore.isEnabled() && !fileStore.putInvoiceIfAbsent(invoiceSha, invoiceFilename, pdfBytes)) {
                 log.error("MinIO upload failed for custom invoice sessionId={}", sessionId);
                 return ResponseEntity.status(503)
@@ -332,28 +340,27 @@ public class LcCheckStreamController {
         } else {
             // Use sample invoice — resolve via SampleRefStore.
             invoiceFilename = sampleRef.getInvoiceFilename(sampleId).orElse("invoice.pdf");
+            invoiceSha = sampleRef.getInvoiceSha256(sampleId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Sample invoice not available: sampleId=" + sampleId));
             if (fileStore.isEnabled()) {
-                invoiceSha = sampleRef.getInvoiceSha256(sampleId)
-                        .orElseThrow(() -> new IllegalStateException(
-                                "Sample invoice not available: sampleId=" + sampleId));
                 invoiceBytes = fileStore.getInvoice(invoiceSha)
                         .map(bytes -> (long) bytes.length)
                         .orElseThrow(() -> new IllegalStateException(
                                 "Sample invoice bytes missing in storage: sampleId=" + sampleId));
             } else {
-                // MinIO down: cache sample invoice bytes in-process.
-                invoiceSha = sampleRef.getInvoiceSha256(sampleId)
-                        .orElseThrow(() -> new IllegalStateException(
-                                "Sample invoice not available: sampleId=" + sampleId));
-                // Store the SHA so the session row is consistent; actual bytes come from hot cache.
-                var cachedInvoiceBytes = sampleRef.getInvoiceBytes(sampleId)
+                // MinIO down: cache sample invoice bytes in-process so /invoice
+                // can answer without storage.
+                hotInvoiceBytes = sampleRef.getInvoiceBytes(sampleId)
                         .orElseThrow(() -> new IllegalStateException(
                                 "Sample invoice bytes not on classpath: sampleId=" + sampleId));
-                invoiceBytes = cachedInvoiceBytes.length;
-                filesBySession.put(sessionId,
-                        new SessionFiles(null, invoiceFilename, cachedInvoiceBytes));
+                invoiceBytes = hotInvoiceBytes.length;
             }
         }
+
+        // Single hot-cache write: lcText is always populated; invoice bytes
+        // are populated when we hold them in memory.
+        filesBySession.put(sessionId, new SessionFiles(lcText, invoiceFilename, hotInvoiceBytes));
 
         store.enqueueSession(sessionId);
         store.recordSessionFiles(sessionId, lcFilename, lcSha, invoiceFilename, invoiceSha);
