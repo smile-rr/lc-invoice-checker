@@ -23,7 +23,7 @@ So according to business scope and covered markets, model selection, deployment 
 
 ### **Workload Decoupling**
 
-Banks have 5 days to check LC and invoice. But document submission can happen anytime, in any volume. Also the LLM inference engine **has** capacity limits processing parallel requests
+Banks have 5 days to check LC and invoice. But document submission can happen anytime, in any volume. Also the LLM inference engine has capacity limits processing parallel requests
 
 So **decouple submission from processing is needed.** This lets the system scale freely without concurrency failures.
 
