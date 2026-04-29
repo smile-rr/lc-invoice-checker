@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import type { SessionState } from '../../hooks/useCheckSession';
+import { strField } from '../../lib/envelope';
 import type { StageName } from '../../types';
 
 export type StepKey = 'upload' | 'lc' | 'invoice' | 'check' | 'review';
@@ -100,7 +101,8 @@ export function viewForStep(
     case 'lc': {
       const stg = s.stages.lc_parse;
       const status: StepStatus = s.lc ? 'done' : stg.status;
-      const metric = s.lc?.lc_number ? s.lc.lc_number : status === 'done' ? 'parsed' : null;
+      const lcNumber = strField(s.lc?.envelope, 'lc_number');
+      const metric = lcNumber ?? (status === 'done' ? 'parsed' : null);
       return { status, metric };
     }
     case 'invoice': {

@@ -1,4 +1,5 @@
 import type { SessionState } from '../../hooks/useCheckSession';
+import { numField, strField } from '../../lib/envelope';
 
 interface Props {
   state: SessionState;
@@ -75,20 +76,31 @@ export function SessionStrip({ state }: Props) {
       )}
 
       {/* Compact session line */}
-      <div className="flex items-baseline gap-3 min-w-0 flex-1">
-        <span className="font-serif text-[13px] text-navy-1 truncate">
-          {lc?.lc_number ?? <span className="text-muted">Loading…</span>}
-        </span>
-        {lc?.beneficiary_name && lc?.applicant_name && (
-          <span className="font-sans text-[11px] text-muted truncate">
-            {lc.beneficiary_name} → {lc.applicant_name}
-          </span>
-        )}
-        <span className="font-mono text-[10px] text-muted whitespace-nowrap">
-          {lc?.currency && lc?.amount != null && `${lc.currency} ${fmtNum(lc.amount)}`}
-          {lc?.expiry_date && <span>{lc?.currency ? ' · ' : ''}exp {lc.expiry_date}</span>}
-        </span>
-      </div>
+      {(() => {
+        const env = lc?.envelope;
+        const lcNumber = strField(env, 'lc_number');
+        const beneficiary = strField(env, 'beneficiary_name');
+        const applicant = strField(env, 'applicant_name');
+        const currency = strField(env, 'credit_currency');
+        const amount = numField(env, 'credit_amount');
+        const expiryDate = strField(env, 'expiry_date');
+        return (
+          <div className="flex items-baseline gap-3 min-w-0 flex-1">
+            <span className="font-serif text-[13px] text-navy-1 truncate">
+              {lcNumber ?? <span className="text-muted">Loading…</span>}
+            </span>
+            {beneficiary && applicant && (
+              <span className="font-sans text-[11px] text-muted truncate">
+                {beneficiary} → {applicant}
+              </span>
+            )}
+            <span className="font-mono text-[10px] text-muted whitespace-nowrap">
+              {currency && amount != null && `${currency} ${fmtNum(amount)}`}
+              {expiryDate && <span>{currency ? ' · ' : ''}exp {expiryDate}</span>}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* Session id — short label; click to copy the full UUID for log /
           Langfuse correlation. */}

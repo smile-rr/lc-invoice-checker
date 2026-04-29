@@ -348,11 +348,11 @@ public class AgentStrategy implements CheckStrategy {
         sb.append("UNIT: ").append(nullToEmpty(inv.unit())).append('\n');
         sb.append("UNIT PRICE: ")
                 .append(inv.unitPrice() == null ? "" : inv.unitPrice().toPlainString()).append('\n');
-        sb.append("SELLER: ").append(nullToEmpty(inv.sellerName()))
+        sb.append("BENEFICIARY: ").append(nullToEmpty(inv.sellerName()))
                 .append(" | ").append(nullToEmpty(inv.sellerAddress())).append('\n');
-        sb.append("BUYER: ").append(nullToEmpty(inv.buyerName()))
+        sb.append("APPLICANT: ").append(nullToEmpty(inv.buyerName()))
                 .append(" | ").append(nullToEmpty(inv.buyerAddress())).append('\n');
-        sb.append("TRADE TERMS: ").append(nullToEmpty(inv.tradeTerms())).append('\n');
+        sb.append("INCOTERMS: ").append(nullToEmpty(inv.tradeTerms())).append('\n');
         sb.append("PORT OF LOADING: ").append(nullToEmpty(inv.portOfLoading())).append('\n');
         sb.append("PORT OF DISCHARGE: ").append(nullToEmpty(inv.portOfDischarge())).append('\n');
         sb.append("COUNTRY OF ORIGIN: ").append(nullToEmpty(inv.countryOfOrigin())).append('\n');

@@ -124,60 +124,29 @@ export interface ParsedRow {
   sort_key: string;
 }
 
+/**
+ * Wire shape mirrors the Java {@code LcDocument} record exactly: every parsed
+ * field lives inside {@link envelope}.fields keyed by its canonical name from
+ * field-pool.yaml. Display panels render from {@link parsed_rows}; rules read
+ * from envelope.fields.
+ */
 export interface LcDocument {
-  lc_number: string | null;
-  issue_date: string | null;
-  expiry_date: string | null;
-  expiry_place: string | null;
-  currency: string | null;
-  amount: string | number | null;
-  tolerance_plus: number;
-  tolerance_minus: number;
-  max_amount_flag: string | null;
-  partial_shipment: string | null;
-  transhipment: string | null;
-  place_of_receipt: string | null;
-  place_of_delivery: string | null;
-  latest_shipment_date: string | null;
-  shipment_period: string | null;
-  port_of_loading: string | null;
-  port_of_discharge: string | null;
-  presentation_days: number;
-  applicable_rules: string | null;
-  applicant_name: string | null;
-  applicant_address: string | null;
-  beneficiary_name: string | null;
-  beneficiary_address: string | null;
-  field_45_a_raw: string | null;
-  field_46_a_raw: string | null;
-  field_47_a_raw: string | null;
   raw_fields: Record<string, string>;
-  /** Generic registry-keyed view. Prefer this in new UI. */
+  header_fields: Record<string, string>;
   envelope: FieldEnvelope;
   documents_required: DocumentRequirement[];
   /** Display-ready rows for the parsed pane — backend already grouped, formatted, ordered. */
   parsed_rows: ParsedRow[];
 }
 
+/**
+ * Wire shape mirrors the Java {@code InvoiceDocument} record exactly:
+ * scalar fields live inside {@link envelope}.fields keyed by their canonical
+ * name from field-pool.yaml. {@link parsed_rows} carries the display-ready
+ * panel; the remaining fields are extractor provenance.
+ */
 export interface InvoiceDocument {
-  invoice_number: string | null;
-  invoice_date: string | null;
-  seller_name: string | null;
-  seller_address: string | null;
-  buyer_name: string | null;
-  buyer_address: string | null;
-  goods_description: string | null;
-  quantity: string | number | null;
-  unit: string | null;
-  unit_price: string | number | null;
-  total_amount: string | number | null;
-  currency: string | null;
-  lc_reference: string | null;
-  trade_terms: string | null;
-  port_of_loading: string | null;
-  port_of_discharge: string | null;
-  country_of_origin: string | null;
-  signed: boolean | null;
+  envelope: FieldEnvelope;
   extractor_used: string;
   extractor_confidence: number;
   image_based: boolean;
@@ -185,7 +154,6 @@ export interface InvoiceDocument {
   extraction_ms: number;
   raw_markdown: string | null;
   raw_text: string | null;
-  envelope: FieldEnvelope;
   parsed_rows: ParsedRow[];
 }
 

@@ -96,12 +96,6 @@ POST /api/v1/files/upload
   → 200 { fileKey, filename }
 ```
 
-**Dev-only debug** (plain text responses; don't hit in production):
-```
-POST /api/v1/debug/mt700/parse            # Stage 1a dump
-POST /api/v1/debug/invoice/compare        # Stage 1b — every source side-by-side
-```
-
 ---
 
 ## Configuration

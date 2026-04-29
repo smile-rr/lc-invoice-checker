@@ -20,7 +20,7 @@ Applicability — UCP 600 Art. 18(a) / ISBP 821 Para. C6:
 - Either side missing → DOUBTS, never NOT_REQUIRED.
 
 Verdict criteria:
-- Invoice `seller_name` corresponds to LC :59: beneficiary. Allow:
+- Invoice `beneficiary_name` corresponds to LC :59: beneficiary. Allow:
   - ISBP A14 abbreviations (Co. = Company, Ltd. = Limited, Corp. =
     Corporation, Inc. = Incorporated)
   - Word reordering, punctuation differences

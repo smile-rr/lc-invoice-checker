@@ -2,11 +2,16 @@ package com.lc.checker.api.controller;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lc.checker.domain.common.FieldEnvelope;
+import com.lc.checker.domain.common.ParsedRow;
+import com.lc.checker.domain.lc.LcDocument;
 import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.persistence.CheckSessionStore.QueueSnapshot;
 import com.lc.checker.infra.queue.QueueSnapshotCache;
 import com.lc.checker.infra.stream.CheckEvent;
 import java.util.List;
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;

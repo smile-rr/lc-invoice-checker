@@ -151,8 +151,8 @@ storage:
     endpoint:   ${MINIO_ENDPOINT:http://192.168.31.214:9000}
     bucket:     ${MINIO_BUCKET:lc-pdfs}
     region:     ${MINIO_REGION:us-east-1}
-    access-key: ${MINIO_ACCESS_KEY:minioadmin}
-    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    access-key: ${MINIO_ACCESS_KEY:QSnSYAf8nSpa3mbNUdv5}
+    secret-key: ${MINIO_SECRET_KEY:BwvRQ5FbVXDv7DdSi7cND8AVawh196KK1uqlgt0n}
     path-style: ${MINIO_PATH_STYLE:true}
     # Hard ceiling for synchronous put/get on the request thread. 30s gives enough
     # headroom for a remote MinIO across LAN/WAN on first connection after restart.

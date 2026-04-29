@@ -21,7 +21,7 @@ Applicability — UCP 600 Art. 18(a) / ISBP 821 Para. C5:
   applies (we cannot verify identity without both names).
 
 Verdict criteria:
-- Invoice `buyer_name` corresponds to LC :50: applicant. Allow ISBP A14
+- Invoice `applicant_name` corresponds to LC :50: applicant. Allow ISBP A14
   abbreviations and minor formatting differences.
 - Names refer to the same entity (modulo ISBP A14 / B1–B5 tolerances) → PASS.
 - Names refer to clearly different entities → FAIL. Standing rule 3 applies:

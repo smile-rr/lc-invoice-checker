@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { CheckResult, DiscrepancyReport, InvoiceDocument, LcDocument } from '../../types';
+import { intField, numField, strField } from '../../lib/envelope';
 import { SourceDrawer, type DrawerTarget } from '../check/SourceDrawer';
 
 interface Props {
@@ -329,31 +330,44 @@ function SummaryCard({ title, body }: { title: string; body: React.ReactNode }) 
 
 function lcSummary(lc: LcDocument | undefined): React.ReactNode {
   if (!lc) return <span className="text-muted italic">unavailable</span>;
+  const env = lc.envelope;
+  const currency = strField(env, 'credit_currency');
+  const amount = numField(env, 'credit_amount');
+  const tolP = intField(env, 'tolerance_plus');
+  const tolM = intField(env, 'tolerance_minus');
+  const expiryDate = strField(env, 'expiry_date');
+  const expiryPlace = strField(env, 'expiry_place');
+  const portLoad = strField(env, 'port_of_loading');
+  const portDisch = strField(env, 'port_of_discharge');
   return (
     <>
-      <KV label="LC No."            value={lc.lc_number} />
-      <KV label="Amount"            value={lc.currency && lc.amount != null ? `${lc.currency} ${fmtNum(lc.amount)} (+${lc.tolerance_plus}/-${lc.tolerance_minus}%)` : null} />
-      <KV label="Beneficiary"       value={lc.beneficiary_name} />
-      <KV label="Applicant"         value={lc.applicant_name} />
-      <KV label="Expiry"            value={lc.expiry_date && lc.expiry_place ? `${lc.expiry_date} ${lc.expiry_place}` : lc.expiry_date} />
-      <KV label="Latest shipment"   value={lc.latest_shipment_date} />
-      <KV label="Loading/Discharge" value={lc.port_of_loading && lc.port_of_discharge ? `${lc.port_of_loading} → ${lc.port_of_discharge}` : null} />
+      <KV label="LC No."            value={strField(env, 'lc_number')} />
+      <KV label="Amount"            value={currency && amount != null ? `${currency} ${fmtNum(amount)} (+${tolP}/-${tolM}%)` : null} />
+      <KV label="Beneficiary"       value={strField(env, 'beneficiary_name')} />
+      <KV label="Applicant"         value={strField(env, 'applicant_name')} />
+      <KV label="Expiry"            value={expiryDate && expiryPlace ? `${expiryDate} ${expiryPlace}` : expiryDate} />
+      <KV label="Latest shipment"   value={strField(env, 'latest_shipment_date')} />
+      <KV label="Loading/Discharge" value={portLoad && portDisch ? `${portLoad} → ${portDisch}` : null} />
     </>
   );
 }
 
 function invoiceSummary(inv: InvoiceDocument | undefined): React.ReactNode {
   if (!inv) return <span className="text-muted italic">unavailable</span>;
+  const env = inv.envelope;
+  const goods = strField(env, 'goods_description');
+  const total = numField(env, 'credit_amount');
+  const currency = strField(env, 'credit_currency');
   return (
     <>
-      <KV label="Invoice No."  value={inv.invoice_number} />
-      <KV label="Issued"       value={inv.invoice_date} />
-      <KV label="Seller"       value={inv.seller_name} />
-      <KV label="Buyer"        value={inv.buyer_name} />
-      <KV label="Goods"        value={inv.goods_description ? inv.goods_description.length > 60 ? inv.goods_description.slice(0, 57) + '…' : inv.goods_description : null} />
-      <KV label="Total"        value={inv.total_amount != null && inv.currency ? `${inv.currency} ${fmtNum(inv.total_amount)}` : null} />
-      <KV label="Trade terms"  value={inv.trade_terms} />
-      <KV label="LC ref on inv" value={inv.lc_reference} />
+      <KV label="Invoice No."  value={strField(env, 'invoice_number')} />
+      <KV label="Issued"       value={strField(env, 'invoice_date')} />
+      <KV label="Seller"       value={strField(env, 'beneficiary_name')} />
+      <KV label="Buyer"        value={strField(env, 'applicant_name')} />
+      <KV label="Goods"        value={goods ? goods.length > 60 ? goods.slice(0, 57) + '…' : goods : null} />
+      <KV label="Total"        value={total != null && currency ? `${currency} ${fmtNum(total)}` : null} />
+      <KV label="Trade terms"  value={strField(env, 'incoterms')} />
+      <KV label="LC ref on inv" value={strField(env, 'lc_number')} />
     </>
   );
 }

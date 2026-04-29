@@ -2,6 +2,7 @@ package com.lc.checker.domain.invoice;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.lc.checker.domain.common.FieldCoercion;
 import com.lc.checker.domain.common.FieldEnvelope;
 import com.lc.checker.domain.common.ParsedRow;
 import java.math.BigDecimal;
@@ -9,47 +10,25 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Parsed commercial invoice, populated by the vision LLM extractor or one of the
- * HTTP extractors (docling/mineru). All scalar fields are nullable — extractors
- * guarantee keys but not values.
+ * Parsed commercial invoice. The {@link FieldEnvelope} is the single source of
+ * truth; the typed accessors below ({@code totalAmount()}, {@code currency()},
+ * …) are derived on demand.
  *
- * <p>Two parallel views, mirroring the LC side:
- * <ul>
- *   <li>The typed scalar accessors below ({@code invoiceNumber()}, {@code totalAmount()}, ...)
- *       — kept for back-compat with rules that reference {@code inv.totalAmount},
- *       {@code inv.currency}, etc.</li>
- *   <li>{@link #envelope} — generic registry-keyed map from {@code field-pool.yaml}.
- *       New rules and the API/UI layer should prefer this view; unknown extractor keys
- *       (a Bangladeshi exporter's {@code chamber_seal_no}, an Italian invoice's
- *       {@code partita_iva}) land in {@code envelope.extras} verbatim instead of
- *       being silently dropped.</li>
- * </ul>
+ * <p>Wire JSON shape (snake_case via {@link JsonNaming}):
+ * <pre>
+ * { envelope, extractor_used, extractor_confidence, image_based, pages,
+ *   extraction_ms, raw_markdown, raw_text, parsed_rows }
+ * </pre>
  *
- * <p>{@link #rawMarkdown()} and {@link #rawText()} are preserved verbatim so Type-B
- * semantic checks can re-read the source when structured fields are insufficient.
+ * <p>Jackson serialises only the record components — the typed accessors below
+ * are NOT emitted as top-level keys (they exist for SpEL +
+ * {@code AgentStrategy.renderInvoice()}). All scalar canonical fields live
+ * inside {@code envelope.fields}; rules should prefer
+ * {@code #invoiceFields['credit_amount']} over {@code inv.totalAmount()}.
  */
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record InvoiceDocument(
-        String invoiceNumber,
-        LocalDate invoiceDate,
-        String sellerName,
-        String sellerAddress,
-        String buyerName,
-        String buyerAddress,
-        String goodsDescription,
-        BigDecimal quantity,
-        String unit,
-        BigDecimal unitPrice,
-        BigDecimal totalAmount,
-        String currency,
-        String lcReference,
-        String tradeTerms,
-        String portOfLoading,
-        String portOfDischarge,
-        String countryOfOrigin,
-        Boolean signed,
-
-        // --- Extractor provenance (for /trace + fallback decisions) ---
+        FieldEnvelope envelope,
         String extractorUsed,
         double extractorConfidence,
         boolean imageBased,
@@ -57,11 +36,6 @@ public record InvoiceDocument(
         long extractionMs,
         String rawMarkdown,
         String rawText,
-
-        // --- Generic envelope (canonical-keyed map; extras preserve unknown keys) ---
-        FieldEnvelope envelope,
-
-        // --- Display-ready rows for the invoice fields panel ---
         List<ParsedRow> parsedRows
 ) {
 
@@ -71,4 +45,31 @@ public record InvoiceDocument(
         }
         parsedRows = parsedRows == null ? List.of() : List.copyOf(parsedRows);
     }
+
+    // ── Typed envelope-derived accessors (SpEL + plain-text prompt rendering) ──
+
+    public String     invoiceNumber()    { return str("invoice_number"); }
+    public LocalDate  invoiceDate()      { return date("invoice_date"); }
+    public String     sellerName()       { return str("beneficiary_name"); }
+    public String     sellerAddress()    { return str("beneficiary_address"); }
+    public String     buyerName()        { return str("applicant_name"); }
+    public String     buyerAddress()     { return str("applicant_address"); }
+    public String     goodsDescription() { return str("goods_description"); }
+    public BigDecimal quantity()         { return amt("quantity"); }
+    public String     unit()             { return str("unit"); }
+    public BigDecimal unitPrice()        { return amt("unit_price"); }
+    public BigDecimal totalAmount()      { return amt("credit_amount"); }
+    public String     currency()         { return str("credit_currency"); }
+    public String     lcReference()      { return str("lc_number"); }
+    public String     tradeTerms()       { return str("incoterms"); }
+    public String     portOfLoading()    { return str("port_of_loading"); }
+    public String     portOfDischarge()  { return str("port_of_discharge"); }
+    public String     countryOfOrigin()  { return str("country_of_origin"); }
+    public Boolean    signed()           { return FieldCoercion.asBoolean(envelope.fields().get("signed")); }
+
+    // ── Coercion helpers ──────────────────────────────────────────────────────
+
+    private String     str(String key)  { return FieldCoercion.asString(envelope.fields().get(key)); }
+    private LocalDate  date(String key) { return FieldCoercion.asDate(envelope.fields().get(key)); }
+    private BigDecimal amt(String key)  { return FieldCoercion.asDecimal(envelope.fields().get(key)); }
 }

@@ -52,7 +52,7 @@ mt700:
     "44D": { field_keys: [shipment_period],                 parser: MULTILINE_FULL,       mandatory: false }
     "44E": { field_keys: [port_of_loading],                 parser: SIMPLE_STRING,        mandatory: false }
     "44F": { field_keys: [port_of_discharge],               parser: SIMPLE_STRING,        mandatory: false }
-    "45A": { field_keys: [goods_description, incoterms],    parser: MULTILINE_FULL,       mandatory: true,  validation: { min_length: 1 } }
+    "45A": { field_keys: [goods_description, incoterms],    parser: INCOTERMS_EXTRACT,    mandatory: true,  validation: { min_length: 1 } }
     "46A": { field_keys: [documents_required],              parser: DOCUMENT_LIST,        mandatory: false }
     "47A": { field_keys: [additional_conditions],           parser: MULTILINE_FULL,       mandatory: false }
     "48":  { field_keys: [presentation_days],               parser: INT_BEFORE_SLASH,     mandatory: false, defaults: { presentation_days: 21 } }

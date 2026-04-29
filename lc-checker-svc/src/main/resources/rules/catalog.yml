@@ -52,7 +52,8 @@ rules:
     field_keys: [ credit_currency ]
     missing_invoice_action: FAIL
     severity_on_fail: MAJOR
-    expression: "inv.currency != null && inv.currency.equalsIgnoreCase(lc.currency)"
+    # YAML-driven: canonical names from field-pool.yaml (no typed getters needed)
+    expression: "#invoiceFields['credit_currency'] != null && #invoiceFields['credit_currency'].equalsIgnoreCase(#fields['credit_currency'])"
 
   - id: UCP-14h
     name: Document dating no later than presentation
@@ -87,7 +88,10 @@ rules:
     field_keys: [ invoice_date, expiry_date ]
     missing_invoice_action: DOUBTS
     severity_on_fail: MAJOR
-    expression: "inv.invoiceDate != null && !inv.invoiceDate.isAfter(lc.expiryDate)"
+    # YAML-driven: canonical names from field-pool.yaml
+    expression: >-
+      #invoiceFields['invoice_date'] != null
+      && !#invoiceFields['invoice_date'].isAfter(#fields['expiry_date'])
 
   - id: UCP-30c
     name: Underdrawing permitted

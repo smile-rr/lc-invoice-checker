@@ -319,27 +319,20 @@ public class ProgrammaticStrategy implements CheckStrategy {
         return true;
     }
 
-    /** Snapshot of the LC + invoice fields the rule actually reads — sized for the trace. */
+    /** Snapshot of the LC + invoice fields the rule actually read — derived entirely from
+     *  the YAML-driven canonical envelopes so the trace always contains exactly what the
+     *  rule saw, regardless of which SpEL access path (typed getter or #fields[...]). */
     private Map<String, Object> bind(LcDocument lc, InvoiceDocument inv) {
         Map<String, Object> m = new LinkedHashMap<>();
-        if (lc != null) {
-            m.put("lc.amount", lc.amount());
-            m.put("lc.currency", lc.currency());
-            m.put("lc.tolerancePlus", lc.tolerancePlus());
-            m.put("lc.toleranceMinus", lc.toleranceMinus());
-            m.put("lc.lcNumber", lc.lcNumber());
-            m.put("lc.expiryDate", lc.expiryDate());
-            m.put("lc.presentationDays", lc.presentationDays());
+        if (lc != null && lc.envelope() != null) {
+            for (var e : lc.envelope().fields().entrySet()) {
+                m.put("lc." + e.getKey(), e.getValue());
+            }
         }
-        if (inv != null) {
-            m.put("inv.totalAmount", inv.totalAmount());
-            m.put("inv.currency", inv.currency());
-            m.put("inv.lcReference", inv.lcReference());
-            m.put("inv.invoiceDate", inv.invoiceDate());
-            m.put("inv.quantity", inv.quantity());
-            m.put("inv.unitPrice", inv.unitPrice());
-            m.put("inv.sellerName", inv.sellerName());
-            m.put("inv.buyerName", inv.buyerName());
+        if (inv != null && inv.envelope() != null) {
+            for (var e : inv.envelope().fields().entrySet()) {
+                m.put("inv." + e.getKey(), e.getValue());
+            }
         }
         return m;
     }
@@ -360,27 +353,27 @@ public class ProgrammaticStrategy implements CheckStrategy {
 
         // Currency / string equality
         if (expr.contains("equalsIgnoreCase")) {
-            Object inv = firstNonNull(bound, "inv.currency", "inv.lcReference");
-            Object lcv = firstNonNull(bound, "lc.currency", "lc.lcNumber");
+            Object inv = firstNonNull(bound, "inv.credit_currency", "inv.lc_number");
+            Object lcv = firstNonNull(bound, "lc.credit_currency", "lc.lc_number");
             return "Invoice " + outputField + " '" + inv + "' does not match LC value '" + lcv + "'";
         }
 
         // Date compare
         if (expr.contains("isAfter") || expr.contains("isBefore")) {
-            return "Invoice date " + bound.get("inv.invoiceDate")
-                    + " is after LC expiry " + bound.get("lc.expiryDate");
+            return "Invoice date " + bound.get("inv.invoice_date")
+                    + " is after LC expiry " + bound.get("lc.expiry_date");
         }
 
         // Numeric range — amount within tolerance
         if (expr.contains("compareTo") && expr.contains("multiply")) {
-            return "Invoice " + outputField + " " + bound.get("inv.totalAmount")
-                    + " is outside the LC tolerance range around " + bound.get("lc.amount");
+            return "Invoice " + outputField + " " + bound.get("inv.credit_amount")
+                    + " is outside the LC tolerance range around " + bound.get("lc.credit_amount");
         }
 
         // Internal arithmetic (qty * price = total)
-        if (expr.contains("inv.quantity") && expr.contains("inv.unitPrice")
-                && expr.contains("inv.totalAmount")) {
-            return "Invoice arithmetic inconsistent: quantity × unit_price ≠ total_amount";
+        if (expr.contains("inv.quantity") && expr.contains("inv.unit_price")
+                && expr.contains("inv.credit_amount")) {
+            return "Invoice arithmetic inconsistent: quantity × unit_price ≠ credit_amount";
         }
 
         return rule.name() + " failed (" + bound + ")";
