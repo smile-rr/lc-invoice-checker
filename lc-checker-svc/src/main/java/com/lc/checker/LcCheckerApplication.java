@@ -27,25 +27,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableConfigurationProperties(QueueProperties.class)
-@OpenAPIDefinition(
-        info = @Info(
-                title = "LC Invoice Checker API",
-                version = "0.0.1-SNAPSHOT",
-                description = """
-                        Trade-finance backend that checks a commercial invoice (PDF) against
-                        a SWIFT MT700 Letter of Credit (plain text) using UCP 600 / ISBP 821.
-
-                        Pipeline: LC parse → multi-source invoice extract
-                        (vision + docling + mineru) → rule activation → tiered rule check
-                        (Tier 1 Type A, Tier 2 Type B, Tier 3 Type AB) → report assembly.
-
-                        Every run is persisted to the unified `pipeline_steps` table —
-                        query `v_latest_*` views for step-by-step forensics.
-                        """,
-                contact = @Contact(name = "lc-checker-svc")),
-        servers = {
-                @Server(url = "http://localhost:8080", description = "Local dev")
-        })
 public class LcCheckerApplication {
 
     public static void main(String[] args) {
