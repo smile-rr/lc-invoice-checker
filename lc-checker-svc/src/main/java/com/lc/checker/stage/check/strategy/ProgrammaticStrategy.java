@@ -174,7 +174,12 @@ public class ProgrammaticStrategy implements CheckStrategy {
                         + " — rule does not apply";
             } else {
                 fallbackStatus = mapMissingAction(rule);
-                fallbackDesc = "Expression evaluation failed: " + e.getMessage();
+                // Don't leak raw exception text into the verdict description —
+                // it's confusing to a reviewer and exposes Java internals.
+                String outField = rule.outputField() == null ? rule.id() : rule.outputField();
+                fallbackDesc = "Cannot verify " + outField + " — required "
+                        + describeFields(rule) + " is missing or invalid";
+                log.debug("Rule {} expression error suppressed from UI: {}", rule.id(), e.toString());
             }
             return outcome(rule, fallbackStatus, vp,
                     new ExpressionTrace(rule.expression(), bound, null, e.getMessage()),
@@ -367,8 +372,15 @@ public class ProgrammaticStrategy implements CheckStrategy {
 
         // Date compare
         if (expr.contains("isAfter") || expr.contains("isBefore")) {
-            return "Invoice date " + bound.get("inv.invoiceDate")
-                    + " is after LC expiry " + bound.get("lc.expiryDate");
+            Object invDate = bound.get("inv.invoiceDate");
+            Object lcExpiry = bound.get("lc.expiryDate");
+            if (invDate == null || lcExpiry == null) {
+                String missing = invDate == null && lcExpiry == null
+                        ? "invoice date and LC expiry date"
+                        : invDate == null ? "invoice date" : "LC expiry date";
+                return "Cannot verify " + outputField + " — " + missing + " is missing";
+            }
+            return "Invoice date " + invDate + " is after LC expiry " + lcExpiry;
         }
 
         // Numeric range — amount within tolerance

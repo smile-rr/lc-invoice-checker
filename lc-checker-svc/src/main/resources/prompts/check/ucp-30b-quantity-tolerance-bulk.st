@@ -18,21 +18,33 @@ LC FIELDS THIS RULE READS: {lcRelevantFields}
 INVOICE FIELDS THIS RULE READS: {invoiceRelevantFields}
 
 Applicability — UCP 600 Art. 30(b):
-- APPLICABLE only when ALL THREE of the following hold:
-  1. LC :45A: describes goods in BULK — NOT in a stipulated number of
-     packing units or individual items. Bulk = "kg", "MT", "litres",
-     "barrels"; stipulated units = "1000 cartons", "500 pcs", "1000 UNITS".
-  2. The total amount of the drawings does not exceed the amount of the
-     credit.
-  3. "ABOUT" or "APPROXIMATELY" is NOT used (those would trigger UCP-30a's
-     ±10% rule, not this ±5% rule).
-- Any condition fails → NOT_REQUIRED. The reason MUST cite UCP 600
-  Art. 30(b) AND name the failing condition with the observed LC value
-  (e.g. "LC :45A: stipulates '1000 UNITS' (individual-item count), so
-  UCP 30(b) ±5% does not apply.").
+UCP 30(b) governs how invoice quantity may deviate from the quantity stated
+in the LC. Branch on how the LC :45A: expresses the quantity:
 
-Verdict criteria when applicable:
-- ±5% tolerance on goods quantity only.
-- Invoice quantity within the ±5% band → PASS.
-- Invoice quantity outside the ±5% band → FAIL.
-- LC quantity unit cannot be classified as bulk-vs-piece → DOUBTS.
+A) BULK quantity (e.g. "kg", "MT", "litres", "barrels"), AND
+   "ABOUT"/"APPROXIMATELY" is NOT used, AND total drawings do not exceed
+   the LC amount:
+   - ±5% tolerance applies to the goods quantity.
+   - Invoice quantity within ±5% band → PASS.
+   - Invoice quantity outside ±5% band → FAIL.
+
+B) STIPULATED COUNT of packing units or individual items
+   (e.g. "1000 cartons", "500 pcs", "TOTAL 30 UNITS"):
+   - UCP 30(b) explicitly disallows the ±5% tolerance. The stipulated
+     count must therefore be presented EXACTLY.
+   - Invoice quantity exactly equals the LC stipulated count → PASS.
+   - Invoice quantity differs from the LC stipulated count → FAIL.
+     Reason MUST quote the LC :45A: phrase and the invoice quantity, e.g.
+     "LC :45A: stipulates 'TOTAL 30 UNITS' (individual-item count, no
+     tolerance under UCP 30(b)); invoice presents quantity 500 — exact
+     match required, discrepancy."
+
+C) "ABOUT" or "APPROXIMATELY" is used in :45A: for the quantity:
+   - That triggers UCP-30a's ±10% rule, not this ±5% rule. Emit
+     NOT_REQUIRED and cite UCP 600 Art. 30(a) overlap.
+
+D) LC quantity unit cannot be classified as bulk-vs-piece, or the LC
+   :45A: does not state a quantity at all → DOUBTS.
+
+Always cite UCP 600 Art. 30(b) in the reason and name the LC phrase you
+relied on.

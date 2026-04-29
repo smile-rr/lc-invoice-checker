@@ -87,7 +87,12 @@ rules:
     field_keys: [ invoice_date, expiry_date ]
     missing_invoice_action: DOUBTS
     severity_on_fail: MAJOR
-    expression: "inv.invoiceDate != null && !inv.invoiceDate.isAfter(lc.expiryDate)"
+    # Both dates must be present; LocalDate.isAfter(null) NPEs, which would
+    # surface as a tech-stack leak in the verdict description.
+    expression: >-
+      inv.invoiceDate != null
+      && lc.expiryDate != null
+      && !inv.invoiceDate.isAfter(lc.expiryDate)
 
   - id: UCP-30c
     name: Underdrawing permitted
@@ -288,7 +293,7 @@ rules:
 
   - id: UCP-30b
     name: Quantity tolerance — ±5% bulk goods
-    description: "A tolerance of ±5% in quantity is allowed when goods are not stated in specific packing units and the drawing does not exceed the LC amount."
+    description: "Bulk goods get ±5%; stipulated unit counts must match exactly. Invoice quantity is checked against the LC :45A: quantity per UCP 30(b)."
     business_phase: MONEY
     check_type: AGENT
     invoice_field: F16
