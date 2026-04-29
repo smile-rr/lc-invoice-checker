@@ -1,13 +1,14 @@
 package com.lc.checker.infra.storage;
 
-import java.util.Map;
+import java.time.Duration;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.exception.SdkServiceException;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -23,8 +24,9 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
  * {@code Content-Disposition} on download.
  *
  * <p>Hot-cache fallback: when MinIO is unreachable, bytes are kept in an
- * in-process {@link ConcurrentHashMap} (keyed by content-addressed key).
- * This lets the dispatcher retrieve session bytes even when MinIO is down.
+ * in-process {@link Cache} (Caffeine, keyed by content-addressed key).
+ * Allows the dispatcher to retrieve session bytes even when MinIO is
+ * temporarily unreachable. Maximum 500 entries / 30 min TTL prevents OOM.
  * The cache is populated on every successful MinIO PUT/GET and on every
  * failed PUT (so the controller can cache bytes directly without MinIO).
  *
@@ -47,12 +49,12 @@ public final class MinioFileStore implements InvoiceFileStore {
 
     private final S3Client s3;
     private final StorageProperties.Minio cfg;
-    /**
-     * In-process hot cache: populated on every MinIO write (success or failure)
-     * and checked on every MinIO read. Allows the dispatcher to serve session
-     * bytes even when MinIO is temporarily unreachable.
-     */
-    private final Map<String, byte[]> hotCache = new ConcurrentHashMap<>();
+    /** Caffeine cache: max 500 entries, TTL 30 min. Backs up MinIO for fault tolerance. */
+    private final Cache<String, byte[]> hotCache = Caffeine.newBuilder()
+            .maximumSize(500)
+            .expireAfterWrite(Duration.ofMinutes(30))
+            .recordStats()
+            .build();
 
     MinioFileStore(S3Client s3, StorageProperties.Minio cfg) {
         this.s3 = s3;
@@ -140,7 +142,7 @@ public final class MinioFileStore implements InvoiceFileStore {
 
     private Optional<byte[]> get(String key) {
         // Hot cache first — always checked before MinIO.
-        byte[] cached = hotCache.get(key);
+        byte[] cached = hotCache.getIfPresent(key);
         if (cached != null) {
             log.debug("MinIO hot-cache hit: key={}", key);
             return Optional.of(cached);
