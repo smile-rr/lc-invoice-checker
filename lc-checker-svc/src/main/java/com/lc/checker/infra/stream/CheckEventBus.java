@@ -62,8 +62,11 @@ public class CheckEventBus {
                         .name(event.type().wireName())
                         .data(event));
             } catch (IOException e) {
+                // Don't call completeWithError() here — it would trigger onError()
+                // again (already invoked by the container on IOException), which races
+                // against the container closing the AsyncContext. Let the container
+                // handle completion; just remove the emitter so we stop trying to send.
                 log.debug("SSE send failed for session={} — client likely disconnected", sessionId);
-                emitter.completeWithError(e);
                 ch.emitters.remove(emitter);
             }
         }
