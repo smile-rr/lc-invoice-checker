@@ -24,8 +24,8 @@ import org.springframework.stereotype.Component;
  * <p><b>Output contract.</b> {@code discrepancies[]} contains only
  * {@link CheckStatus#FAIL} items in the spec-shape
  * {@code {field, lc_value, presented_value, rule_reference, description}}.
- * Compliance is determined ONLY by the FAIL bucket — DOUBTS and NOT_REQUIRED
- * never flip {@code compliant} (Art 16 protocol).
+ * Compliance is determined by both FAIL and DOUBTS buckets — NOT_REQUIRED
+ * never flips {@code compliant} (Art 16 protocol).
  *
  * <p>Three rules use bespoke formatters to preserve the locked sample-output
  * text (UCP-18b-amount, ISBP-C3, ISBP-C1). Every other rule uses the generic
@@ -74,8 +74,8 @@ public class ReportAssembler {
             }
         }
 
-        // Compliance flips only on FAIL. DOUBTS and NOT_REQUIRED never do.
-        boolean compliant = failed.isEmpty();
+        // Compliance flips on FAIL or DOUBTS. NOT_REQUIRED never does.
+        boolean compliant = failed.isEmpty() && doubts.isEmpty();
 
         Summary summary = new Summary(
                 checks.size(),

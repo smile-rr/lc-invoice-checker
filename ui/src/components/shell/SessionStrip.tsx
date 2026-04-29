@@ -42,18 +42,26 @@ export function SessionStrip({ state }: Props) {
   return (
     <div className="bg-paper px-6 h-10 border-b border-line flex items-center gap-4 text-xs">
       {/* Verdict */}
-      {report ? (
-        <span
-          className={[
-            'px-2 py-0.5 rounded font-mono text-[10px] font-bold',
-            report.compliant
-              ? 'bg-status-greenSoft text-status-green'
-              : 'bg-status-redSoft text-status-red',
-          ].join(' ')}
-        >
-          {report.compliant ? 'PASS' : 'FAIL'}
-        </span>
-      ) : running ? (
+      {report ? (() => {
+        const displayVerdict: 'PASS' | 'FAIL' | 'DOUBTS' =
+          report.failed.length > 0 ? 'FAIL'
+          : report.doubts.length > 0 ? 'DOUBTS'
+          : 'PASS';
+        return (
+          <span
+            className={[
+              'px-2 py-0.5 rounded font-mono text-[10px] font-bold',
+              displayVerdict === 'FAIL'
+                ? 'bg-status-redSoft text-status-red'
+                : displayVerdict === 'DOUBTS'
+                ? 'bg-status-goldSoft text-status-gold'
+                : 'bg-status-greenSoft text-status-green',
+            ].join(' ')}
+          >
+            {displayVerdict}
+          </span>
+        );
+      })() : running ? (
         <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-status-goldSoft text-status-gold inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-status-gold animate-blink" />
           RUNNING

@@ -44,6 +44,12 @@ export function ReviewTab({ sessionId, lc, invoice, checks, report }: Props) {
   const unverified = checks.filter((c) => c.status === 'DOUBTS');
   const notReq = checks.filter((c) => c.status === 'NOT_REQUIRED');
 
+  // Display verdict: FAIL if any discrepancy, DOUBTS if any unverified (no FAIL),
+  // PASS only when no FAIL and no DOUBTS. Overrides report.compliant which only
+  // reflects FAIL count.
+  const displayVerdict: 'PASS' | 'FAIL' | 'DOUBTS' =
+    discs.length > 0 ? 'FAIL' : unverified.length > 0 ? 'DOUBTS' : 'PASS';
+
   return (
     <div className="px-6 py-6">
       <div className="review-print max-w-[1100px] mx-auto bg-paper rounded-card border border-line shadow-sm">
@@ -70,18 +76,24 @@ export function ReviewTab({ sessionId, lc, invoice, checks, report }: Props) {
         <div
           className={[
             'px-6 py-4 border-b border-line flex items-center gap-4',
-            report.compliant ? 'bg-status-greenSoft' : 'bg-status-redSoft',
+            displayVerdict === 'FAIL'
+              ? 'bg-status-redSoft'
+              : displayVerdict === 'DOUBTS'
+              ? 'bg-status-goldSoft'
+              : 'bg-status-greenSoft',
           ].join(' ')}
         >
           <span
             className={[
               'px-3 py-1.5 rounded font-mono text-[12px] font-bold',
-              report.compliant
-                ? 'bg-status-green text-white'
-                : 'bg-status-red text-white',
+              displayVerdict === 'FAIL'
+                ? 'bg-status-red text-white'
+                : displayVerdict === 'DOUBTS'
+                ? 'bg-status-gold text-white'
+                : 'bg-status-green text-white',
             ].join(' ')}
           >
-            {report.compliant ? 'PASS' : 'FAIL'}
+            {displayVerdict}
           </span>
           <div className="text-sm">
             <span className="font-semibold text-navy-1">
