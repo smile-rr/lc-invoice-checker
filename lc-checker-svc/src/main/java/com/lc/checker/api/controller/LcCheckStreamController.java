@@ -2,6 +2,8 @@ package com.lc.checker.api.controller;
 
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.lc.checker.api.error.StorageUnavailableException;
 import com.lc.checker.infra.observability.MdcKeys;
 import com.lc.checker.infra.persistence.CheckSessionStore;
@@ -76,7 +78,11 @@ public class LcCheckStreamController {
      */
     public record SessionFiles(String lcText, String invoiceFilename, byte[] invoiceBytes) {}
 
-    private final java.util.Map<String, SessionFiles> filesBySession = new ConcurrentHashMap<>();
+    private final Cache<String, SessionFiles> filesBySession = Caffeine.newBuilder()
+            .maximumSize(200)
+            .expireAfterWrite(java.time.Duration.ofMinutes(10))
+            .recordStats()
+            .build();
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record StartResponse(
@@ -172,7 +178,7 @@ public class LcCheckStreamController {
     @GetMapping(path = "/{sessionId}/lc-raw", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> lcRaw(@PathVariable String sessionId) {
         // Hot path: in-process cache populated on /start.
-        SessionFiles f = filesBySession.get(sessionId);
+        SessionFiles f = filesBySession.getIfPresent(sessionId);
         if (f != null) {
             return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(f.lcText());
         }
@@ -211,7 +217,7 @@ public class LcCheckStreamController {
     @GetMapping(path = "/{sessionId}/invoice")
     public ResponseEntity<byte[]> invoice(@PathVariable String sessionId) {
         // Hot path: in-process cache.
-        SessionFiles f = filesBySession.get(sessionId);
+        SessionFiles f = filesBySession.getIfPresent(sessionId);
         if (f != null) {
             return pdfResponse(f.invoiceBytes(), f.invoiceFilename());
         }
@@ -291,11 +297,9 @@ public class LcCheckStreamController {
                 .orElseThrow(() -> new IllegalStateException(
                         "Sample LC not available: sampleId=" + sampleId + " variant=" + variant));
         String lcSha = Sha256.hex(lcBytes);
-        filesBySession.compute(sessionId, (key, existing) ->
-                existing == null
-                        ? new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8), null, null)
-                        : new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8),
-                                existing.invoiceFilename(), existing.invoiceBytes()));
+        filesBySession.put(sessionId,
+                new SessionFiles(new String(lcBytes, StandardCharsets.UTF_8),
+                        null, null));
 
         // MinIO upload: dedup upload so future sessions with the same content
         // hit the same blob. No-op if already present (content-addressed PUT).
@@ -317,10 +321,8 @@ public class LcCheckStreamController {
             invoiceSha      = Sha256.hex(pdfBytes);
             invoiceFilename = invoice.getOriginalFilename();
             invoiceBytes    = pdfBytes.length;
-            filesBySession.compute(sessionId, (key, existing) ->
-                    existing == null
-                            ? new SessionFiles(null, invoiceFilename, pdfBytes)
-                            : new SessionFiles(existing.lcText(), invoiceFilename, pdfBytes));
+            filesBySession.put(sessionId,
+                    new SessionFiles(null, invoiceFilename, pdfBytes));
             if (fileStore.isEnabled() && !fileStore.putInvoiceIfAbsent(invoiceSha, invoiceFilename, pdfBytes)) {
                 log.error("MinIO upload failed for custom invoice sessionId={}", sessionId);
                 return ResponseEntity.status(503)
@@ -348,10 +350,8 @@ public class LcCheckStreamController {
                         .orElseThrow(() -> new IllegalStateException(
                                 "Sample invoice bytes not on classpath: sampleId=" + sampleId));
                 invoiceBytes = cachedInvoiceBytes.length;
-                filesBySession.compute(sessionId, (k, existing) ->
-                        existing == null
-                                ? new SessionFiles(null, invoiceFilename, cachedInvoiceBytes)
-                                : new SessionFiles(existing.lcText(), invoiceFilename, cachedInvoiceBytes));
+                filesBySession.put(sessionId,
+                        new SessionFiles(null, invoiceFilename, cachedInvoiceBytes));
             }
         }
 

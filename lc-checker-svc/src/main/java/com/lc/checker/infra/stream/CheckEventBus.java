@@ -63,7 +63,6 @@ public class CheckEventBus {
                         .data(event));
             } catch (IOException e) {
                 log.debug("SSE send failed for session={} — client likely disconnected", sessionId);
-                emitter.completeWithError(e);
                 ch.emitters.remove(emitter);
             }
         }
