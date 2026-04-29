@@ -13,6 +13,7 @@ credentials.json
 
 # Claude Code
 .claude/
+CLAUDE.md
 
 # UI build artifacts
 ui/node_modules/
