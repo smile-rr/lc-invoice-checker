@@ -108,6 +108,21 @@ public interface CheckSessionStore {
                  String error);
 
     /**
+     * Batch upsert of pipeline-step rows. Executes a single JDBC batch for all
+     * entries — one DB round-trip instead of N.
+     */
+    default void putSteps(List<StepEntry> entries) {
+        for (StepEntry e : entries) {
+            putStep(e.sessionId(), e.stage(), e.stepKey(), e.status(),
+                    e.startedAt(), e.completedAt(), e.result(), e.error());
+        }
+    }
+
+    /** Record style entry for {@link #putSteps(List)}. */
+    record StepEntry(String sessionId, String stage, String stepKey, String status,
+                     Instant startedAt, Instant completedAt, Object result, String error) {}
+
+    /**
      * Mark exactly one {@code invoice_extract} row (by source) as selected and clear
      * the flag on any other source. No-op if the stage row isn't present yet.
      */
