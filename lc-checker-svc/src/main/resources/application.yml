@@ -237,6 +237,11 @@ logging:
     root: INFO
     com.lc.checker: DEBUG
     org.springframework.ai: INFO
+    # OTel exporter prints a full stack trace on every retryable network blip
+    # (e.g. transient "No route to host" while the Mac roams Wi-Fi). The
+    # batch processor still retries and delivers traces, so demote to WARN
+    # to keep logs readable.
+    io.opentelemetry.exporter.internal.http: WARN
   pattern:
     # MDC keys carried: sessionId, stage, ruleId, checkType, llmModel.
     # See logback-spring.xml / logback-json.xml for concrete encoders.

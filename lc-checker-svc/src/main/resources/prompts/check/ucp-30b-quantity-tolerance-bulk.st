@@ -32,12 +32,21 @@ B) STIPULATED COUNT of packing units or individual items
    (e.g. "1000 cartons", "500 pcs", "TOTAL 30 UNITS"):
    - UCP 30(b) explicitly disallows the ±5% tolerance. The stipulated
      count must therefore be presented EXACTLY.
-   - Invoice quantity exactly equals the LC stipulated count → PASS.
-   - Invoice quantity differs from the LC stipulated count → FAIL.
-     Reason MUST quote the LC :45A: phrase and the invoice quantity, e.g.
+   - Compare quantities NUMERICALLY, not as strings. Strip the unit word
+     ("UNITS", "pcs", "cartons", etc.) from the LC phrase, parse both
+     sides as numbers, and ignore trailing zeros / decimal formatting.
+     Examples that MUST be treated as exact-match (PASS):
+       LC "500 UNITS"   ≡ invoice 500     ≡ invoice 500.0   ≡ invoice 500.00
+       LC "TOTAL 1,000 CARTONS" ≡ invoice 1000 ≡ invoice 1000.0
+     Only a real numeric difference is a discrepancy:
+       LC "500 UNITS" vs invoice 499 or 501 → FAIL.
+   - Numbers equal after normalisation → PASS. Reason names the LC phrase
+     and confirms the match.
+   - Numbers unequal after normalisation → FAIL. Reason quotes the LC
+     :45A: phrase and the invoice quantity, e.g.
      "LC :45A: stipulates 'TOTAL 30 UNITS' (individual-item count, no
-     tolerance under UCP 30(b)); invoice presents quantity 500 — exact
-     match required, discrepancy."
+     tolerance under UCP 30(b)); invoice presents 500 — exact match
+     required, discrepancy."
 
 C) "ABOUT" or "APPROXIMATELY" is used in :45A: for the quantity:
    - That triggers UCP-30a's ±10% rule, not this ±5% rule. Emit
