@@ -10,11 +10,14 @@ import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.domain.rule.enums.MissingInvoiceAction;
 import com.lc.checker.infra.fields.FieldDefinition;
 import com.lc.checker.infra.fields.FieldPoolRegistry;
+import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.infra.stream.CheckEventPublisher;
 import com.lc.checker.stage.check.strategy.CheckStrategy;
 import com.lc.checker.stage.check.strategy.CheckStrategy.StrategyOutcome;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -44,19 +47,27 @@ public class CheckExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(CheckExecutor.class);
 
+    /** Stage name used for per-rule rows in {@code pipeline_steps}. Matches the
+     *  reader contract in {@code JdbcCheckSessionStore} (STAGE_LC_CHECK = "lc_check"). */
+    private static final String STEP_STAGE_LC_CHECK = "lc_check";
+
     private final Map<CheckType, CheckStrategy> strategies;
     private final FieldPoolRegistry fieldPool;
+    private final CheckSessionStore store;
 
-    public CheckExecutor(List<CheckStrategy> strategyBeans, FieldPoolRegistry fieldPool) {
+    public CheckExecutor(List<CheckStrategy> strategyBeans, FieldPoolRegistry fieldPool,
+                         CheckSessionStore store) {
         this.strategies = new EnumMap<>(CheckType.class);
         for (CheckStrategy s : strategyBeans) {
             this.strategies.put(s.type(), s);
         }
         this.fieldPool = fieldPool;
+        this.store = store;
         log.info("CheckExecutor initialised: strategies={}", strategies.keySet());
     }
 
-    public Result run(String stageName, List<Rule> rules, LcDocument lc, InvoiceDocument inv,
+    public Result run(String stageName, String sessionId, List<Rule> rules,
+                      LcDocument lc, InvoiceDocument inv,
                       CheckEventPublisher publisher) {
         List<CheckResult> results = new ArrayList<>(rules.size());
         List<CheckTrace> traces = new ArrayList<>(rules.size());
@@ -77,6 +88,7 @@ public class CheckExecutor {
                             "index", idx,
                             "total", total));
 
+            Instant ruleStart = Instant.now();
             long start = System.currentTimeMillis();
             StrategyOutcome outcome;
             try {
@@ -96,8 +108,29 @@ public class CheckExecutor {
                         Map.of(), null, null, duration, e.getMessage());
                 outcome = new StrategyOutcome(result, trace);
             }
+            Instant ruleEnd = Instant.now();
             results.add(outcome.result());
             traces.add(outcome.trace());
+
+            // Persist this rule outcome to pipeline_steps under stage="lc_check".
+            // Matches the reader contract in JdbcCheckSessionStore.loadRuleChecks
+            // and the rules_run / discrepancies counts in findRecent. Failure
+            // here MUST NOT break the pipeline — log and move on.
+            try {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("result", outcome.result());
+                payload.put("trace",  outcome.trace());
+                payload.put("check_type",
+                        rule.checkType() == null ? null : rule.checkType().name());
+                String errorMsg = outcome.trace() == null ? null : outcome.trace().error();
+                store.putStep(sessionId, STEP_STAGE_LC_CHECK, rule.id(),
+                        outcome.result().status().name(),
+                        ruleStart, ruleEnd, payload, errorMsg);
+            } catch (Exception persistFail) {
+                log.warn("Persisting rule step {} failed (non-fatal): {}",
+                        rule.id(), persistFail.getMessage());
+            }
+
             publisher.rule(outcome.result());
         }
         return new Result(results, traces);

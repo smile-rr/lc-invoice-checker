@@ -6,11 +6,14 @@ import com.lc.checker.domain.rule.enums.CheckStatus;
 import com.lc.checker.domain.rule.enums.CheckType;
 import com.lc.checker.infra.observability.LangfuseTags;
 import com.lc.checker.infra.observability.MdcKeys;
+import com.lc.checker.infra.persistence.CheckSessionStore;
 import com.lc.checker.pipeline.Stage;
 import com.lc.checker.pipeline.StageContext;
 import com.lc.checker.stage.check.CheckExecutor;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -31,11 +34,14 @@ public class AgentChecksStage implements Stage {
     private final RuleCatalog catalog;
     private final CheckExecutor executor;
     private final Tracer tracer;
+    private final CheckSessionStore store;
 
-    public AgentChecksStage(RuleCatalog catalog, CheckExecutor executor, Tracer tracer) {
+    public AgentChecksStage(RuleCatalog catalog, CheckExecutor executor,
+                            Tracer tracer, CheckSessionStore store) {
         this.catalog = catalog;
         this.executor = executor;
         this.tracer = tracer;
+        this.store = store;
     }
 
     @Override
@@ -46,6 +52,7 @@ public class AgentChecksStage implements Stage {
     @Override
     public void execute(StageContext ctx) {
         long t0 = System.currentTimeMillis();
+        Instant startedAt = Instant.now();
         List<Rule> rules = catalog.enabled().stream()
                 .filter(r -> r.checkType() == CheckType.AGENT)
                 .toList();
@@ -63,13 +70,15 @@ public class AgentChecksStage implements Stage {
 
         try (Tracer.SpanInScope ws = tracer.withSpan(subStageSpan)) {
             MDC.put(MdcKeys.STAGE, name());
-            CheckExecutor.Result r = executor.run(name(), rules, ctx.lc, ctx.invoice, ctx.publisher);
+            CheckExecutor.Result r = executor.run(name(), ctx.sessionId, rules,
+                    ctx.lc, ctx.invoice, ctx.publisher);
             ctx.checkResults.addAll(r.results());
             ctx.checkTraces.addAll(r.traces());
             long dur = System.currentTimeMillis() - t0;
             int passed = count(r.results(), CheckStatus.PASS);
             int failed = count(r.results(), CheckStatus.FAIL);
             int doubts = count(r.results(), CheckStatus.DOUBTS);
+            int notReq = count(r.results(), CheckStatus.NOT_REQUIRED);
             ctx.publisher.status(name(), "completed",
                     summary(r.results()),
                     Map.of(
@@ -77,7 +86,7 @@ public class AgentChecksStage implements Stage {
                             "passed", passed,
                             "failed", failed,
                             "doubts", doubts,
-                            "notRequired", count(r.results(), CheckStatus.NOT_REQUIRED),
+                            "notRequired", notReq,
                             "durationMs", dur));
             subStageSpan.tag("rules.passed", String.valueOf(passed));
             subStageSpan.tag("rules.failed", String.valueOf(failed));
@@ -85,6 +94,22 @@ public class AgentChecksStage implements Stage {
             subStageSpan.tag("duration.ms", String.valueOf(dur));
             log.debug("Stage 3 (agent) complete: {} rule(s) in {}ms",
                     r.results().size(), dur);
+
+            // Phase summary row (step_key = "phase:agent"). loadRuleChecks
+            // filters these out so the trace view sees only per-rule rows.
+            try {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("ran", r.results().size());
+                payload.put("passed", passed);
+                payload.put("failed", failed);
+                payload.put("doubts", doubts);
+                payload.put("notRequired", notReq);
+                store.putStep(ctx.sessionId, "lc_check", "phase:" + name(),
+                        "SUCCESS", startedAt, Instant.now(), payload, null);
+            } catch (Exception persistFail) {
+                log.warn("Persisting phase row for {} failed (non-fatal): {}",
+                        name(), persistFail.getMessage());
+            }
         } finally {
             MDC.remove(MdcKeys.STAGE);
             subStageSpan.end();
