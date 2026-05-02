@@ -482,3 +482,40 @@ _ui-install:
         _docling-install _mineru-install _ui-install \
         llm llm-up llm-down llm-vl llm-vl-up llm-vl-down llm-restart llm-vl-restart \
         llm-restart-extractors _llm-check
+
+# =============================================================================
+# Ubuntu Docker deployment targets
+# Works in any repo that has docker-compose.yml with ui + lc-checker-svc
+# =============================================================================
+#   make pull       git pull latest
+#   make dep-ui     build + deploy UI
+#   make dep-svc    build + deploy SVC
+#   make dep-all    build + deploy both
+#   make ps         show containers
+#   make health     check via Traefik
+# =============================================================================
+
+COMPOSE := docker compose
+
+pull:  ## git pull latest
+	git pull --ff-only origin main
+
+dep-ui:  ## build + deploy UI
+	$(COMPOSE) build ui && $(COMPOSE) up -d ui
+	@echo "UI: http://lccheck.infra.local/"
+
+dep-svc:  ## build + deploy SVC
+	$(COMPOSE) build lc-checker-svc && $(COMPOSE) up -d lc-checker-svc
+	@echo "SVC: lc-checker-svc running"
+
+dep-all: dep-ui dep-svc  ## build + deploy both
+
+ps:  ## show container status
+	@docker ps --filter "name=lc-checker" --format "table {{.Names}}\t{{.Status}}"
+
+health:  ## check health via Traefik
+	@echo -n "UI:   "; curl -s -o /dev/null -w "%{http_code}" http://lccheck.infra.local/ || echo "FAIL"
+	@echo -n "API:  "; curl -s http://lccheck.infra.local/api/v1/sessions | python3 -c "import sys,json; print('OK:', len(json.load(sys.stdin)), 'sessions')" 2>/dev/null || echo "FAIL"
+	@echo -n "SVC:  "; docker exec lc-checker-svc wget -qO- http://localhost:8080/actuator/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" || echo "FAIL"
+
+.PHONY: pull dep-ui dep-svc dep-all ps health

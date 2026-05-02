@@ -25,8 +25,7 @@ services:
       context: ./lc-checker-svc
     image: lc-checker-svc:v1
     container_name: lc-checker-svc
-    ports:
-      - "${API_PORT:-8080}:8080"
+    # No host port: only reachable from ui container via lc-checker-net
     env_file: .env.ubuntu
     volumes:
       - ./test/golden:/opt/samples:ro
@@ -46,7 +45,22 @@ services:
     restart: unless-stopped
     networks:
       - lc-checker-net
+      - shared
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=shared-infra"
+      - "traefik.http.services.lc-ui.loadbalancer.server.port=80"
+      - "traefik.http.routers.lc-ui-local.rule=Host(`lccheck.infra.local`)"
+      - "traefik.http.routers.lc-ui-local.entrypoints=web"
+      - "traefik.http.routers.lc-ui-local.service=lc-ui"
+      - "traefik.http.routers.lc-ui-public.rule=Host(`lccheck.moments-plus.com`)"
+      - "traefik.http.routers.lc-ui-public.entrypoints=web,websecure"
+      - "traefik.http.routers.lc-ui-public.middlewares=passcode-auth@docker"
+      - "traefik.http.routers.lc-ui-public.service=lc-ui"
 
 networks:
   lc-checker-net:
     driver: bridge
+  shared:
+    name: shared-infra
+    external: true
