@@ -1,45 +1,50 @@
-# lc-checker — Postgres only (dev / local workflow)
+# lc-checker — Ubuntu production deployment
 #
-# Only PostgreSQL runs in Docker. The Java service (lc-checker-svc) and the
-# Python parsers (docling-svc / mineru-svc) run directly on the host — see the
-# per-module READMEs for how to start them locally.
+# Runs lc-checker-svc (Java Spring Boot) + ui (React/nginx) together.
+# PostgreSQL is NOT included here — the shared instance at 192.168.31.214:5436
+# is used instead (see .env.ubuntu for DB_HOST / DB_PORT).
 #
-# Data persistence:
-#   The `postgres-data` named volume survives `docker compose restart`,
-#   `docker compose stop/start`, and `docker compose down` + `up`. Data is
-#   ONLY lost when you explicitly run `docker compose down -v` (which removes
-#   the volume) OR `docker volume rm lc-checker-postgres-data`.
+# Usage (on Ubuntu):
+#   docker compose build
+#   docker compose up -d
 #
-# Schema:
-#   ./infra/postgres/init/01-schema.sql is bind-mounted into
-#   /docker-entrypoint-initdb.d and auto-runs on first cluster init (empty volume).
-#   To reapply after edits: `docker compose down -v && docker compose up -d`.
+# To rebuild a single service without touching the other:
+#   docker compose build lc-checker-svc && docker compose up -d lc-checker-svc
+#
+# Networking:
+#   Both services join lc-checker-net. nginx resolves the backend by the
+#   service name "lc-checker-svc" — no hardcoded IP needed.
 # ---------------------------------------------------------------------------
 
 name: lc-checker
 
 services:
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: lc-checker-postgres
+  lc-checker-svc:
+    build:
+      context: ./lc-checker-svc
+    image: lc-checker-svc:v1
+    container_name: lc-checker-svc
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    environment:
-      POSTGRES_DB: lc_checker
-      POSTGRES_USER: lcuser
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-lcpass123}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lcuser -d lc_checker"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      - "${API_PORT:-8080}:8080"
+    env_file: .env.ubuntu
     restart: unless-stopped
+    networks:
+      - lc-checker-net
 
-volumes:
-  postgres-data:
-    name: lc-checker-postgres-data
+  ui:
+    build:
+      context: ./ui
+    image: lc-checker-ui:v1
+    container_name: lc-checker-ui
+    ports:
+      - "${UI_PORT:-8083}:80"
+    depends_on:
+      - lc-checker-svc
+    restart: unless-stopped
+    networks:
+      - lc-checker-net
+
+networks:
+  lc-checker-net:
+    driver: bridge

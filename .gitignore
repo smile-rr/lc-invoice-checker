@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.ubuntu
 *.pem
 *.key
 credentials.json
@@ -51,6 +52,9 @@ build/
 
 # Docker
 docker-compose.override.yml
+
+# PostgreSQL data directory (runtime data, never commit)
+infra/postgres/data/
 
 # Logs
 *.log
