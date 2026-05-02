@@ -105,37 +105,10 @@ status:  ## show one-line status (host:port, up/down, url) for each component
 	 fi; \
 	 printf '  %-12s %-24s %-8s %s\n' "$$label" "$$host:$$port" "$$state" "postgres://$$host:$$port"
 
-health:  ## hit each /health endpoint and report actual responsiveness (deeper than status)
-	@printf '  %-10s %-6s %-12s %s\n' service port health detail
-	@printf '  %-10s %-6s %-12s %s\n' ---------- ------ ------------ ------
-	@for entry in svc:8080:/actuator/health docling:8081:/health mineru:8082:/health ui:5173:/; do \
-	   svc=$${entry%%:*}; rest=$${entry#*:}; port=$${rest%%:*}; path=$${rest#*:}; \
-	   if ! lsof -i tcp:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
-	     printf '  %-10s %-6s %-12s %s\n' "$$svc" "$$port" "·" "(port not bound)"; \
-	     continue; \
-	   fi; \
-	   resp=$$(curl -sS --max-time 2 -o /tmp/.lc-health.$$svc -w '%{http_code}' "http://127.0.0.1:$$port$$path" 2>/dev/null); \
-	   if [ "$$resp" = "200" ]; then \
-	     body=$$(head -c 80 /tmp/.lc-health.$$svc 2>/dev/null | tr -d '\n' | tr -d '\r' || true); \
-	     printf '  %-10s %-6s %-12s %s\n' "$$svc" "$$port" "✓ healthy" "$$body"; \
-	   elif [ -n "$$resp" ]; then \
-	     printf '  %-10s %-6s %-12s %s\n' "$$svc" "$$port" "⚠ http $$resp" "(port up, /health not 200)"; \
-	   else \
-	     printf '  %-10s %-6s %-12s %s\n' "$$svc" "$$port" "⚠ no resp" "(port up but /health timed out)"; \
-	   fi; \
-	   rm -f /tmp/.lc-health.$$svc; \
-	 done
-	@if command -v nc >/dev/null 2>&1; then \
-	   if [ -f .env ] && grep -q '^DB_HOST=' .env; then \
-	     host=$$(grep '^DB_HOST=' .env | cut -d= -f2); \
-	     port=$$(grep '^DB_PORT=' .env | cut -d= -f2); \
-	     if nc -z -w 2 "$$host" "$$port" 2>/dev/null; then \
-	       printf '  %-10s %-6s %-12s %s\n' "db" "$$port" "✓ healthy" "tcp reachable at $$host:$$port"; \
-	     else \
-	       printf '  %-10s %-6s %-12s %s\n' "db" "$$port" "·" "tcp unreachable at $$host:$$port"; \
-	     fi; \
-	   fi; \
-	 fi
+health:  ## check health via Traefik (UI + API)
+	@echo -n "UI:   "; curl -s -o /dev/null -w "%{http_code}" http://lccheck.infra.local/ || echo "FAIL"
+	@echo -n "API:  "; curl -s http://lccheck.infra.local/api/v1/sessions | python3 -c "import sys,json; print('OK:', len(json.load(sys.stdin)), 'sessions')" 2>/dev/null || echo "FAIL"
+	@echo -n "SVC:  "; docker exec lc-checker-svc wget -qO- http://localhost:8080/actuator/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" || echo "FAIL"
 
 # private bg helpers — invoked by `all`, not in user-facing help
 _db-bg:
@@ -512,10 +485,5 @@ dep-all: dep-ui dep-svc  ## build + deploy both
 
 ps:  ## show container status
 	@docker ps --filter "name=lc-checker" --format "table {{.Names}}\t{{.Status}}"
-
-health:  ## check health via Traefik
-	@echo -n "UI:   "; curl -s -o /dev/null -w "%{http_code}" http://lccheck.infra.local/ || echo "FAIL"
-	@echo -n "API:  "; curl -s http://lccheck.infra.local/api/v1/sessions | python3 -c "import sys,json; print('OK:', len(json.load(sys.stdin)), 'sessions')" 2>/dev/null || echo "FAIL"
-	@echo -n "SVC:  "; docker exec lc-checker-svc wget -qO- http://localhost:8080/actuator/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" || echo "FAIL"
 
 .PHONY: pull dep-ui dep-svc dep-all ps health
