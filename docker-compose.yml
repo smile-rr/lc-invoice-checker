@@ -28,6 +28,8 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
     env_file: .env.ubuntu
+    volumes:
+      - ./test/golden:/opt/samples:ro
     restart: unless-stopped
     networks:
       - lc-checker-net

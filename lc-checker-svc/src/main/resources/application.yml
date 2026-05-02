@@ -7,6 +7,11 @@
 #   prod    — JSON logging (logback-json.xml), for Loki/ELK ingest
 
 spring:
+  config:
+    import:
+      # Load .env from the project root (one level up from lc-checker-svc/).
+      # optional: means the app starts fine when .env is absent (Docker uses env_file).
+      - optional:file:../.env[.properties]
   application:
     name: lc-checker-api
   profiles:
@@ -62,7 +67,10 @@ spring:
 # Run the app from the project root so this resolves correctly.
 # Override SAMPLES_FILES_PATH env var for different setups (e.g. /opt/lc-checker/golden/).
 samples:
-  files-path: ${SAMPLES_FILES_PATH:file:/Users/pc-rn/ws/ai-lab/lc-cheker-solution/test/golden/}
+  # Relative to JVM working directory (user.dir). When running from lc-checker-svc/
+  # via `make svc` or IDE, ${user.dir}/../test/golden/ resolves to v1-invoice-check/test/golden/.
+  # Docker: set SAMPLES_FILES_PATH=file:/opt/samples/ and mount ./test/golden → /opt/samples.
+  files-path: ${SAMPLES_FILES_PATH:file:${user.dir}/../test/golden/}
 
 server:
   port: ${SERVER_PORT:8080}
