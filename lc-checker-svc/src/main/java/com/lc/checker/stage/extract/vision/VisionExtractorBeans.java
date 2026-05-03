@@ -11,109 +11,107 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
 /**
- * Spring wiring for up to four vision-LLM invoice extractors.
+ * Spring wiring for up to four vision-LLM invoice extractors (slots 1–4).
  *
- * <p>Priority order (first SUCCESS wins): local → cloud → cloud2 → cloud3.
+ * <p>All slots share identical config structure — the only difference is the
+ * provider URL and whether an api-key is needed (local Ollama = no key;
+ * cloud providers = set {@code VISION_N_API_KEY}).
+ *
+ * <p>Priority order (first SUCCESS wins): slot 1 → 2 → 3 → 4.
  * Non-selected results are persisted and shown as reference in the UI.
  *
- * <ul>
- *   <li>{@code localLlmVlExtractor} — Ollama on this host; default winner.</li>
- *   <li>{@code cloudLlmVlExtractor} — cloud slot 1; always-on fallback.</li>
- *   <li>{@code cloudLlmVl2Extractor} — cloud slot 2; optional reference.</li>
- *   <li>{@code cloudLlmVl3Extractor} — cloud slot 3; disabled by default (cost guard).</li>
- * </ul>
- *
- * <p>Source names follow the pattern {@code <model>_local}, {@code <model>_cloud},
- * {@code <model>_cloud2}, {@code <model>_cloud3} — the UI uses the suffix to
- * determine display label and markdown-tab visibility.
+ * <p>Source names follow the pattern {@code <model>_<slot>}
+ * (e.g. {@code qwen3-vl:4b-instruct_1}, {@code qwen3.6-plus_2}).
+ * Enable/disable per slot via {@code vision-llm.slot-N.enabled} /
+ * {@code VISION_N_ENABLED} env var.
  */
 @Configuration
 public class VisionExtractorBeans {
 
-    @Bean(name = "localLlmVlExtractor")
-    @ConditionalOnProperty(name = "extractor.local-llm-vl-enabled", havingValue = "true")
-    public VisionLlmExtractor localLlmVlExtractor(
+    @Bean(name = "visionSlot1")
+    @ConditionalOnProperty(name = "vision-llm.slot-1.enabled", havingValue = "true", matchIfMissing = true)
+    public VisionLlmExtractor visionSlot1(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
             Tracer tracer,
-            @Value("${local-llm-vl.base-url:http://localhost:11434/v1}") String baseUrl,
-            @Value("${local-llm-vl.api-key:}") String apiKey,
-            @Value("${local-llm-vl.model:qwen3-vl:4b-instruct}") String model,
-            @Value("${local-llm-vl.render-dpi:200}") int renderDpi,
-            @Value("${local-llm-vl.max-pages:10}") int maxPages,
-            @Value("${local-llm-vl.max-long-edge-px:2048}") int maxLongEdgePx,
-            @Value("${local-llm-vl.timeout-seconds:300}") int timeoutSeconds) {
+            @Value("${vision-llm.slot-1.base-url:http://localhost:11434/v1}") String baseUrl,
+            @Value("${vision-llm.slot-1.api-key:}") String apiKey,
+            @Value("${vision-llm.slot-1.model:qwen3-vl:4b-instruct}") String model,
+            @Value("${vision-llm.slot-1.render-dpi:200}") int renderDpi,
+            @Value("${vision-llm.slot-1.max-pages:10}") int maxPages,
+            @Value("${vision-llm.slot-1.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${vision-llm.slot-1.timeout-seconds:300}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                model + "_local", baseUrl, apiKey, model,
+                model + "_1", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }
 
-    @Bean(name = "cloudLlmVlExtractor")
-    @ConditionalOnProperty(name = "extractor.cloud-llm-vl-enabled", havingValue = "true", matchIfMissing = true)
-    public VisionLlmExtractor cloudLlmVlExtractor(
+    @Bean(name = "visionSlot2")
+    @ConditionalOnProperty(name = "vision-llm.slot-2.enabled", havingValue = "true", matchIfMissing = true)
+    public VisionLlmExtractor visionSlot2(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
             Tracer tracer,
-            @Value("${cloud-llm-vl.base-url}") String baseUrl,
-            @Value("${cloud-llm-vl.api-key:}") String apiKey,
-            @Value("${cloud-llm-vl.model}") String model,
-            @Value("${cloud-llm-vl.render-dpi:200}") int renderDpi,
-            @Value("${cloud-llm-vl.max-pages:10}") int maxPages,
-            @Value("${cloud-llm-vl.max-long-edge-px:2048}") int maxLongEdgePx,
-            @Value("${cloud-llm-vl.timeout-seconds:120}") int timeoutSeconds) {
+            @Value("${vision-llm.slot-2.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+            @Value("${vision-llm.slot-2.api-key:}") String apiKey,
+            @Value("${vision-llm.slot-2.model:qwen3.6-plus-2026-04-02}") String model,
+            @Value("${vision-llm.slot-2.render-dpi:200}") int renderDpi,
+            @Value("${vision-llm.slot-2.max-pages:10}") int maxPages,
+            @Value("${vision-llm.slot-2.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${vision-llm.slot-2.timeout-seconds:120}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                model + "_cloud", baseUrl, apiKey, model,
+                model + "_2", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }
 
-    @Bean(name = "cloudLlmVl2Extractor")
-    @ConditionalOnProperty(name = "extractor.cloud-llm-vl-2-enabled", havingValue = "true")
-    public VisionLlmExtractor cloudLlmVl2Extractor(
+    @Bean(name = "visionSlot3")
+    @ConditionalOnProperty(name = "vision-llm.slot-3.enabled", havingValue = "true")
+    public VisionLlmExtractor visionSlot3(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
             Tracer tracer,
-            @Value("${cloud-llm-vl-2.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
-            @Value("${cloud-llm-vl-2.api-key:}") String apiKey,
-            @Value("${cloud-llm-vl-2.model:qwen-vl-plus}") String model,
-            @Value("${cloud-llm-vl-2.render-dpi:200}") int renderDpi,
-            @Value("${cloud-llm-vl-2.max-pages:10}") int maxPages,
-            @Value("${cloud-llm-vl-2.max-long-edge-px:2048}") int maxLongEdgePx,
-            @Value("${cloud-llm-vl-2.timeout-seconds:120}") int timeoutSeconds) {
+            @Value("${vision-llm.slot-3.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+            @Value("${vision-llm.slot-3.api-key:}") String apiKey,
+            @Value("${vision-llm.slot-3.model:qwen3.6-flash}") String model,
+            @Value("${vision-llm.slot-3.render-dpi:200}") int renderDpi,
+            @Value("${vision-llm.slot-3.max-pages:10}") int maxPages,
+            @Value("${vision-llm.slot-3.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${vision-llm.slot-3.timeout-seconds:120}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                model + "_cloud2", baseUrl, apiKey, model,
+                model + "_3", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }
 
-    @Bean(name = "cloudLlmVl3Extractor")
-    @ConditionalOnProperty(name = "extractor.cloud-llm-vl-3-enabled", havingValue = "true")
-    public VisionLlmExtractor cloudLlmVl3Extractor(
+    @Bean(name = "visionSlot4")
+    @ConditionalOnProperty(name = "vision-llm.slot-4.enabled", havingValue = "true")
+    public VisionLlmExtractor visionSlot4(
             RestClient.Builder restClientBuilder,
             PdfRenderer renderer,
             InvoiceFieldMapper mapper,
             ObjectMapper json,
             PromptBuilder promptBuilder,
             Tracer tracer,
-            @Value("${cloud-llm-vl-3.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
-            @Value("${cloud-llm-vl-3.api-key:}") String apiKey,
-            @Value("${cloud-llm-vl-3.model:qwen3-vl-flash}") String model,
-            @Value("${cloud-llm-vl-3.render-dpi:200}") int renderDpi,
-            @Value("${cloud-llm-vl-3.max-pages:10}") int maxPages,
-            @Value("${cloud-llm-vl-3.max-long-edge-px:2048}") int maxLongEdgePx,
-            @Value("${cloud-llm-vl-3.timeout-seconds:120}") int timeoutSeconds) {
+            @Value("${vision-llm.slot-4.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+            @Value("${vision-llm.slot-4.api-key:}") String apiKey,
+            @Value("${vision-llm.slot-4.model:qwen3.6-27b}") String model,
+            @Value("${vision-llm.slot-4.render-dpi:200}") int renderDpi,
+            @Value("${vision-llm.slot-4.max-pages:10}") int maxPages,
+            @Value("${vision-llm.slot-4.max-long-edge-px:2048}") int maxLongEdgePx,
+            @Value("${vision-llm.slot-4.timeout-seconds:120}") int timeoutSeconds) {
         VisionExtractorConfig cfg = new VisionExtractorConfig(
-                model + "_cloud3", baseUrl, apiKey, model,
+                model + "_4", baseUrl, apiKey, model,
                 renderDpi, maxPages, maxLongEdgePx, timeoutSeconds);
         return new VisionLlmExtractor(restClientBuilder, cfg, renderer, mapper, json, promptBuilder, tracer);
     }

@@ -29,11 +29,10 @@ import org.springframework.stereotype.Component;
  * same PDF, persists one {@code pipeline_steps} row per source, then marks one
  * row as {@code is_selected=true} to drive downstream rule checks.
  *
- * <p><b>Selection chain</b> (priority order):
- * {@code [local_llm_vl, cloud_llm_vl, cloud_llm_vl_2, cloud_llm_vl_3]}.
+ * <p><b>Selection chain</b> (priority order): slot 1 → 2 → 3 → 4.
  * Selection rule: <b>first SUCCESS in chain order</b>. Confidence threshold is a
- * {@code WARN}-only signal, not a gate. By default Ollama (local) wins; cloud
- * slots run in parallel and their results are shown as reference in the UI.
+ * {@code WARN}-only signal, not a gate. By default slot 1 (local Ollama) wins;
+ * remaining slots run in parallel and their results are shown as reference in the UI.
  *
  * <p><b>Supplementary sources</b>: {@code [docling, mineru]} (when enabled). They
  * run in parallel and their results are persisted for display in the UI, but they
@@ -61,19 +60,15 @@ public class InvoiceExtractionOrchestrator {
     private volatile String lastUsed = "";
 
     public InvoiceExtractionOrchestrator(
-            @Qualifier("localLlmVlExtractor")   ObjectProvider<InvoiceExtractor> localLlmVlProvider,
-            @Qualifier("cloudLlmVlExtractor")   ObjectProvider<InvoiceExtractor> cloudLlmVlProvider,
-            @Qualifier("cloudLlmVl2Extractor")  ObjectProvider<InvoiceExtractor> cloudLlmVl2Provider,
-            @Qualifier("cloudLlmVl3Extractor")  ObjectProvider<InvoiceExtractor> cloudLlmVl3Provider,
+            @Qualifier("visionSlot1") ObjectProvider<InvoiceExtractor> slot1Provider,
+            @Qualifier("visionSlot2") ObjectProvider<InvoiceExtractor> slot2Provider,
+            @Qualifier("visionSlot3") ObjectProvider<InvoiceExtractor> slot3Provider,
+            @Qualifier("visionSlot4") ObjectProvider<InvoiceExtractor> slot4Provider,
             @Qualifier("doclingExtractorClient") ObjectProvider<InvoiceExtractor> doclingProvider,
             @Qualifier("mineruExtractorClient")  ObjectProvider<InvoiceExtractor> mineruProvider,
             CheckSessionStore store,
             @Qualifier("lcCheckExecutor") Executor executor,
             @Value("${extractor.confidence-threshold:0.80}") double confidenceThreshold,
-            @Value("${extractor.local-llm-vl-enabled:true}")    boolean localLlmVlEnabled,
-            @Value("${extractor.cloud-llm-vl-enabled:true}")    boolean cloudLlmVlEnabled,
-            @Value("${extractor.cloud-llm-vl-2-enabled:false}") boolean cloudLlmVl2Enabled,
-            @Value("${extractor.cloud-llm-vl-3-enabled:false}") boolean cloudLlmVl3Enabled,
             @Value("${extractor.docling-enabled:false}") boolean doclingEnabled,
             @Value("${extractor.mineru-enabled:false}")  boolean mineruEnabled) {
 
@@ -81,16 +76,16 @@ public class InvoiceExtractionOrchestrator {
         this.executor = executor;
         this.confidenceThreshold = confidenceThreshold;
 
-        // Selection chain priority: local → cloud → cloud2 → cloud3.
-        // First SUCCESS in this order is marked is_selected for rule checks.
-        addIfEnabled("extractor.local-llm-vl-enabled",   localLlmVlEnabled,   localLlmVlProvider);
-        addIfEnabled("extractor.cloud-llm-vl-enabled",   cloudLlmVlEnabled,   cloudLlmVlProvider);
-        addIfEnabled("extractor.cloud-llm-vl-2-enabled", cloudLlmVl2Enabled,  cloudLlmVl2Provider);
-        addIfEnabled("extractor.cloud-llm-vl-3-enabled", cloudLlmVl3Enabled,  cloudLlmVl3Provider);
+        // Selection chain priority: slot 1 → 2 → 3 → 4.
+        // Bean presence = enabled; @ConditionalOnProperty on each bean controls creation.
+        addIfPresent(slot1Provider);
+        addIfPresent(slot2Provider);
+        addIfPresent(slot3Provider);
+        addIfPresent(slot4Provider);
 
         if (selectionChain.isEmpty()) {
             throw new IllegalStateException(
-                    "At least one vision extractor must be enabled.");
+                    "At least one vision slot must be enabled (vision-llm.slot-1 … slot-4).");
         }
 
         // Supplementary sources: run in parallel, persist, never selected.
@@ -111,16 +106,9 @@ public class InvoiceExtractionOrchestrator {
                 confidenceThreshold);
     }
 
-    private void addIfEnabled(String propertyName, boolean enabled,
-                              ObjectProvider<InvoiceExtractor> provider) {
-        if (!enabled) return;
-        InvoiceExtractor extractor = provider.getIfAvailable();
-        if (extractor == null) {
-            throw new IllegalStateException(
-                    propertyName + "=true but the corresponding bean was not created. "
-                    + "Check the @ConditionalOnProperty wiring and config block.");
-        }
-        selectionChain.add(extractor);
+    private void addIfPresent(ObjectProvider<InvoiceExtractor> provider) {
+        InvoiceExtractor e = provider.getIfAvailable();
+        if (e != null) selectionChain.add(e);
     }
 
     /** Per-source extraction outcome — produced by {@link #runAndPersistOne}. */

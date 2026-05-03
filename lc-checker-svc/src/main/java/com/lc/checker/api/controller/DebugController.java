@@ -43,9 +43,9 @@ public class DebugController {
     public DebugController(Mt700Parser mt700Parser,
                            InvoiceExtractionOrchestrator extractionOrchestrator,
                            RestClient.Builder restClientBuilder,
-                           @Value("${local-llm-vl.base-url:http://127.0.0.1:11434/v1}") String localVisionBaseUrl,
-                           @Value("${local-llm-vl.api-key:}") String localVisionApiKey,
-                           @Value("${local-llm-vl.model:qwen3-vl:4b-instruct}") String localVisionModel) {
+                           @Value("${vision-llm.slot-1.base-url:http://127.0.0.1:11434/v1}") String localVisionBaseUrl,
+                           @Value("${vision-llm.slot-1.api-key:}") String localVisionApiKey,
+                           @Value("${vision-llm.slot-1.model:qwen3-vl:4b-instruct}") String localVisionModel) {
         this.mt700Parser = mt700Parser;
         this.extractionOrchestrator = extractionOrchestrator;
         this.restClientBuilder = restClientBuilder;
