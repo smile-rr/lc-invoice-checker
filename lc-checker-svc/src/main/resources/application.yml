@@ -29,11 +29,6 @@ spring:
         options:
           model: ${LLM_MODEL:qwen-turbo}
           temperature: 0.0
-          # Suppress Qwen3-family thinking tokens (qwen3.5-flash, qwen3.5-plus, etc.)
-          # so the model returns raw JSON directly. Ignored as a no-op by Qwen2
-          # (qwen-turbo, qwen-plus), DeepSeek, and Ollama — safe for all providers.
-          additional-model-request-fields:
-            enable_thinking: false
 
   # Multipart limits for /api/v1/lc-check (20MB PDF cap per InputValidator).
   servlet:

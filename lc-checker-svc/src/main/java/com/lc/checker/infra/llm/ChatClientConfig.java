@@ -5,6 +5,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -60,17 +61,23 @@ public class ChatClientConfig {
     }
 
     @Bean
-    public ChatClient chatClient(ChatClient.Builder builder) {
-        return builder
-                .defaultSystem(DEFAULT_SYSTEM)
-                // Suppress Qwen3-family thinking tokens so the model returns raw JSON directly.
-                // Qwen3 models (qwen3.5-flash, qwen3.5-plus, etc.) emit <think>…</think>
-                // preambles by default, breaking the strict JSON contract in AgentStrategy.
-                // Setting enable_thinking=false cuts cost and removes the wrapping.
-                // Ignored as a no-op by Qwen2 (qwen-turbo), DeepSeek, and Ollama.
-                .defaultOptions(OpenAiChatOptions.builder()
-                        .extraBody(Map.of("enable_thinking", false))
-                        .build())
-                .build();
+    public ChatClient chatClient(
+            ChatClient.Builder builder,
+            @Value("${spring.ai.openai.chat.options.model:}") String model) {
+        ChatClient.Builder b = builder.defaultSystem(DEFAULT_SYSTEM);
+        if (isQwenFamily(model)) {
+            // Qwen3-family models emit <think>…</think> reasoning tokens by default,
+            // breaking AgentStrategy's strict JSON contract and inflating token cost.
+            // enable_thinking=false is Qwen-proprietary — GLM, Kimi, and MiniMax reject
+            // it with HTTP 400 when routed through the DashScope compatible endpoint.
+            b = b.defaultOptions(OpenAiChatOptions.builder()
+                    .extraBody(Map.of("enable_thinking", false))
+                    .build());
+        }
+        return b.build();
+    }
+
+    private static boolean isQwenFamily(String model) {
+        return model != null && model.toLowerCase().startsWith("qwen");
     }
 }
