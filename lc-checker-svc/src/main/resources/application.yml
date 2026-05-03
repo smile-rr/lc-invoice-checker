@@ -19,7 +19,7 @@ spring:
   ai:
     openai:
       api-key: ${LLM_API_KEY:}
-      base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+      base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       chat:
         # base-url already includes /v1 per OpenAI-compatible endpoint convention
         # (Qwen Bailian, OpenAI, DeepSeek, Ollama). Override Spring AI's default
@@ -27,8 +27,13 @@ spring:
         # with a double-/v1/ path.
         completions-path: /chat/completions
         options:
-          model: ${LLM_MODEL:deepseek-chat}
+          model: ${LLM_MODEL:qwen-turbo}
           temperature: 0.0
+          # Suppress Qwen3-family thinking tokens (qwen3.5-flash, qwen3.5-plus, etc.)
+          # so the model returns raw JSON directly. Ignored as a no-op by Qwen2
+          # (qwen-turbo, qwen-plus), DeepSeek, and Ollama — safe for all providers.
+          additional-model-request-fields:
+            enable_thinking: false
 
   # Multipart limits for /api/v1/lc-check (20MB PDF cap per InputValidator).
   servlet:
@@ -85,15 +90,17 @@ server:
 # locally by setting EXTRACTOR_DOCLING_ENABLED=true and starting the full profile:
 #   docker compose --profile full up -d
 extractor:
-  # Two independent vision-LLM sources fire in parallel against the same PDF.
-  # Selection rule: first SUCCESS in chain priority order — local first, cloud second.
-  cloud-llm-vl-enabled:  ${EXTRACTOR_CLOUD_LLM_VL_ENABLED:true}   # hosted vision LLM
-  local-llm-vl-enabled:  ${EXTRACTOR_LOCAL_LLM_VL_ENABLED:false}  # local vision LLM (MLX / Ollama)
-  confidence-threshold:  ${EXTRACTOR_CONFIDENCE_THRESHOLD:0.80}
-  # Supplementary text-layout sources — run in parallel, results persisted for UI
-  # display, but never selected as the winner for rule checks.
-  docling-enabled:       ${EXTRACTOR_DOCLING_ENABLED:false}
-  mineru-enabled:        ${EXTRACTOR_MINERU_ENABLED:false}
+  # Vision-LLM sources fire in parallel against the same PDF.
+  # Selection rule: first SUCCESS in chain priority order — local → cloud → cloud2 → cloud3.
+  # Non-selected results are persisted as reference and shown in the UI.
+  local-llm-vl-enabled:   ${EXTRACTOR_LOCAL_LLM_VL_ENABLED:true}   # Ollama (default winner)
+  cloud-llm-vl-enabled:   ${EXTRACTOR_CLOUD_LLM_VL_ENABLED:true}   # cloud slot 1 (reference)
+  cloud-llm-vl-2-enabled: ${EXTRACTOR_CLOUD_LLM_VL2_ENABLED:false}  # cloud slot 2 (reference)
+  cloud-llm-vl-3-enabled: ${EXTRACTOR_CLOUD_LLM_VL3_ENABLED:false}  # cloud slot 3 (disabled — cost guard)
+  confidence-threshold:   ${EXTRACTOR_CONFIDENCE_THRESHOLD:0.80}
+  # Supplementary text-layout sources — kept wired for future re-enable.
+  docling-enabled:        ${EXTRACTOR_DOCLING_ENABLED:false}
+  mineru-enabled:         ${EXTRACTOR_MINERU_ENABLED:false}
 
 # --- Cloud vision-language LLM (hosted commercial / paid API) ----------------
 # OpenAI-compatible /chat/completions. Provider switch is config-only:
@@ -110,15 +117,38 @@ cloud-llm-vl:
   timeout-seconds:    ${CLOUD_LLM_VL_TIMEOUT_SECONDS:120}
 
 # --- Local vision-language LLM (MLX server / Ollama on this host) ------------
-# Runs in parallel with the cloud call. Wins selection whenever it succeeds.
+# Runs in parallel. Default winner — local Ollama (free, no cloud spend).
 local-llm-vl:
   base-url:           ${LOCAL_LLM_VL_BASE_URL:http://localhost:11434/v1}
   api-key:            ${LOCAL_LLM_VL_API_KEY:}
-  model:              ${LOCAL_LLM_VL_MODEL:qwen2.5vl}
+  model:              ${LOCAL_LLM_VL_MODEL:qwen3-vl:4b-instruct}
   render-dpi:         ${LOCAL_LLM_VL_RENDER_DPI:200}
   max-pages:          ${LOCAL_LLM_VL_MAX_PAGES:10}
   max-long-edge-px:   ${LOCAL_LLM_VL_MAX_LONG_EDGE_PX:2048}
   timeout-seconds:    ${LOCAL_LLM_VL_TIMEOUT_SECONDS:300}
+
+# --- Cloud vision-language LLM slot 2 (reference, optional) ------------------
+# Enable with EXTRACTOR_CLOUD_LLM_VL2_ENABLED=true.
+# Free/cheap options: qwen-vl-plus (Qwen2 VL), qwen3-vl-flash (Qwen3 VL fast)
+cloud-llm-vl-2:
+  base-url:           ${CLOUD_LLM_VL2_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  api-key:            ${CLOUD_LLM_VL2_API_KEY:}
+  model:              ${CLOUD_LLM_VL2_MODEL:qwen-vl-plus}
+  render-dpi:         ${CLOUD_LLM_VL2_RENDER_DPI:200}
+  max-pages:          ${CLOUD_LLM_VL2_MAX_PAGES:10}
+  max-long-edge-px:   ${CLOUD_LLM_VL2_MAX_LONG_EDGE_PX:2048}
+  timeout-seconds:    ${CLOUD_LLM_VL2_TIMEOUT_SECONDS:120}
+
+# --- Cloud vision-language LLM slot 3 (reference, disabled by default) -------
+# Enable with EXTRACTOR_CLOUD_LLM_VL3_ENABLED=true when cost allows.
+cloud-llm-vl-3:
+  base-url:           ${CLOUD_LLM_VL3_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  api-key:            ${CLOUD_LLM_VL3_API_KEY:}
+  model:              ${CLOUD_LLM_VL3_MODEL:qwen3-vl-flash}
+  render-dpi:         ${CLOUD_LLM_VL3_RENDER_DPI:200}
+  max-pages:          ${CLOUD_LLM_VL3_MAX_PAGES:10}
+  max-long-edge-px:   ${CLOUD_LLM_VL3_MAX_LONG_EDGE_PX:2048}
+  timeout-seconds:    ${CLOUD_LLM_VL3_TIMEOUT_SECONDS:120}
 
 # --- Docling sidecar (text-layout extraction, supplementary source) -----------
 # Enable with EXTRACTOR_DOCLING_ENABLED=true + docker compose --profile full up -d

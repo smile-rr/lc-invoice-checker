@@ -278,6 +278,16 @@ public class VisionLlmExtractor implements InvoiceExtractor {
     /**
      * Build the OpenAI-compatible /v1/chat/completions request body.
      * Uses the array content format that both Ollama and OpenAI support.
+     *
+     * <p>Two fields are gated behind Qwen-family detection:
+     * <ul>
+     *   <li>{@code response_format: json_object} — DashScope/Qwen honour it; other
+     *       providers (MiniMax, GLM, Kimi) return 400 when they encounter it.</li>
+     *   <li>{@code enable_thinking: false} — Qwen3-proprietary; any non-Qwen model
+     *       that sees it will reject the request with 400.</li>
+     * </ul>
+     * Both are replaced by a strong JSON-only instruction in the prompt so output
+     * quality is preserved even without the API-level hints.
      */
     private Map<String, Object> buildOllamaRequest(List<byte[]> pages) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -289,17 +299,16 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         // out mid-JSON is the #1 cause of parse failures. 4096 fits even an
         // image-heavy multi-page invoice with comfortable margin.
         body.put("max_tokens", 4096);
-        // OpenAI-compatible JSON-mode hint. Honoured by DashScope (qwen-vl-plus,
-        // qwen-plus). The MLX server's pydantic-settings ignores unknown keys, so
-        // this is a safe no-op there — guarantees still come from the prompt.
-        body.put("response_format", Map.of("type", "json_object"));
-        // Disable Qwen3+ "thinking" mode. Without this, qwen3.6-plus / qwen3-vl-*
-        // emit hundreds of reasoning tokens (billed as completion) AND wrap the
-        // JSON in ```json …``` markdown fences, breaking strict parsing. Setting
-        // this to false: cuts cost ~30×, removes the markdown wrapping, leaves
-        // `content` as raw JSON. Ignored by Ollama (qwen3-vl:4b-instruct) and by
-        // older Qwen2-based models (qwen-vl-plus / qwen-vl-max) — safe no-op.
-        body.put("enable_thinking", false);
+        if (isQwenFamily(model)) {
+            // Qwen / DashScope: enable JSON mode and suppress thinking tokens.
+            // response_format is honoured by DashScope for Qwen models; sending it
+            // to MiniMax, GLM, or Kimi via DashScope causes 400.
+            body.put("response_format", Map.of("type", "json_object"));
+            // Without enable_thinking=false, Qwen3.x emits <think>…</think> reasoning
+            // tokens billed as completion AND wraps JSON in markdown fences, breaking
+            // parsing. Safe no-op for Ollama and Qwen2-based models.
+            body.put("enable_thinking", false);
+        }
 
         String promptText = loadPrompt();
 
@@ -349,6 +358,15 @@ public class VisionLlmExtractor implements InvoiceExtractor {
         if (v instanceof Number n) return n.doubleValue();
         try { return Double.parseDouble(String.valueOf(v)); }
         catch (Exception e) { return def; }
+    }
+
+    /**
+     * True for any Qwen-family model (qwen3-vl, qwen3.6-*, qwen3.5-*, etc.).
+     * Used to gate Qwen-proprietary request fields (enable_thinking, response_format)
+     * that cause 400 errors on other DashScope-hosted providers (MiniMax, GLM, Kimi).
+     */
+    private static boolean isQwenFamily(String model) {
+        return model != null && model.toLowerCase().startsWith("qwen");
     }
 
     /**

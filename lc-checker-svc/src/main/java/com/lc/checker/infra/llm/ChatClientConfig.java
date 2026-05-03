@@ -1,8 +1,9 @@
 package com.lc.checker.infra.llm;
 
+import java.util.Map;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -62,6 +63,14 @@ public class ChatClientConfig {
     public ChatClient chatClient(ChatClient.Builder builder) {
         return builder
                 .defaultSystem(DEFAULT_SYSTEM)
+                // Suppress Qwen3-family thinking tokens so the model returns raw JSON directly.
+                // Qwen3 models (qwen3.5-flash, qwen3.5-plus, etc.) emit <think>…</think>
+                // preambles by default, breaking the strict JSON contract in AgentStrategy.
+                // Setting enable_thinking=false cuts cost and removes the wrapping.
+                // Ignored as a no-op by Qwen2 (qwen-turbo), DeepSeek, and Ollama.
+                .defaultOptions(OpenAiChatOptions.builder()
+                        .extraBody(Map.of("enable_thinking", false))
+                        .build())
                 .build();
     }
 }

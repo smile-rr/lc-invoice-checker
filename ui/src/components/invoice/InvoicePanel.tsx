@@ -581,13 +581,23 @@ function JsonBody({ invoice }: { invoice: InvoiceDocument }) {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function isVisionSource(source: string): boolean {
-  return source.endsWith('_local') || source.endsWith('_cloud');
+  return source.endsWith('_local')
+    || source.endsWith('_cloud')
+    || source.endsWith('_cloud2')
+    || source.endsWith('_cloud3');
 }
 
-/** "qwen3-vl:4b-instruct_local" → "qwen3-vl:4b-instruct (Local)", "qwen-vl-plus_cloud" → "qwen-vl-plus (Cloud)". */
+/** Format extractor source name for display.
+ *  "qwen3-vl:4b-instruct_local"  → "qwen3-vl:4b-instruct (Local)"
+ *  "qwen3.6-plus_cloud"          → "qwen3.6-plus (Cloud)"
+ *  "qwen-vl-plus_cloud2"         → "qwen-vl-plus (Cloud 2)"
+ *  "qwen3-vl-flash_cloud3"       → "qwen3-vl-flash (Cloud 3)"
+ */
 export function fmtSource(s: string): string {
-  if (s.endsWith('_local')) return s.slice(0, -6) + ' (Local)';
-  if (s.endsWith('_cloud')) return s.slice(0, -6) + ' (Cloud)';
+  if (s.endsWith('_cloud3')) return s.slice(0, -7) + ' (Cloud 3)';
+  if (s.endsWith('_cloud2')) return s.slice(0, -7) + ' (Cloud 2)';
+  if (s.endsWith('_cloud'))  return s.slice(0, -6) + ' (Cloud)';
+  if (s.endsWith('_local'))  return s.slice(0, -6) + ' (Local)';
   return s;
 }
 

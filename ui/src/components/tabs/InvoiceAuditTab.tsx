@@ -126,22 +126,26 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
     return result;
   }, [pipeline.extractorSources, persisted, liveSources]);
 
+  const activeAttempt = useMemo(
+    () => attempts.find((a) => a.source === active) ?? null,
+    [attempts, active],
+  );
+
   // Auto-pick an active source: prefer the orchestrator's selected one;
   // else first SUCCESS; else first non-PENDING; else first.
+  // Re-evaluates as long as the current active card has no document yet —
+  // so if cloud fails first (active locked on failed card) and local later
+  // succeeds, we automatically switch to local rather than staying stuck on
+  // the failed card. Once a card has a document, user choice is respected.
   useEffect(() => {
-    if (active) return;
+    if (active && activeAttempt?.document) return;
     const cand =
       attempts.find((a) => a.is_selected) ??
       attempts.find((a) => a.status === 'SUCCESS') ??
       attempts.find((a) => a.status !== 'PENDING') ??
       attempts[0];
     if (cand) setActive(cand.source);
-  }, [attempts, active]);
-
-  const activeAttempt = useMemo(
-    () => attempts.find((a) => a.source === active) ?? null,
-    [attempts, active],
-  );
+  }, [attempts, active, activeAttempt]);
   const currentDoc: InvoiceDocument | null = activeAttempt?.document ?? invoice ?? null;
   const currentSource = activeAttempt?.source ?? invoice?.extractor_used ?? '';
 
@@ -174,22 +178,7 @@ export function InvoiceAuditTab({ sessionId, invoice }: Props) {
   );
 }
 
-/**
- * Expand the bare source name into a "pipeline kind" label for the
- * "Extracted output" section header. Vision LLMs (`*_local`, `*_cloud`)
- * keep the standard {@link fmtSource} rendering. Docling and MinerU are
- * tagged `(+llm)` because their sidecars run an LLM-first, regex-fallback
- * field-extraction pipeline (see `extractors/{docling,mineru}/app/main.py`
- * — `llm_extract_fields()` is tried first, with `extract_fields()` as the
- * fallback when LLM is unconfigured or fails).
- *
- * The text LLM the sidecars hit is `LLM_BASE_URL` / `LLM_MODEL` from .env
- * — currently the cloud DashScope model, not the local Ollama vision LLM.
- */
 function expandPipelineLabel(source: string): string {
-  if (source === 'docling' || source === 'mineru') {
-    return `${source} (+ qwen3:4b)`;
-  }
   return fmtSource(source);
 }
 
