@@ -27,7 +27,7 @@ spring:
         # with a double-/v1/ path.
         completions-path: /chat/completions
         options:
-          model: ${LLM_MODEL:qwen-turbo}
+          model: ${LLM_MODEL:qwen3.6-flash}
           temperature: 0.0
 
   # Multipart limits for /api/v1/lc-check (20MB PDF cap per InputValidator).
@@ -110,7 +110,7 @@ vision-llm:
     max-long-edge-px: ${VISION_1_MAX_LONG_EDGE_PX:2048}
     timeout-seconds:  ${VISION_1_TIMEOUT_SECONDS:300}
   slot-2:
-    enabled:          ${VISION_2_ENABLED:true}
+    enabled:          ${VISION_2_ENABLED:false}
     base-url:         ${VISION_2_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key:          ${VISION_2_API_KEY:}
     model:            ${VISION_2_MODEL:qwen3.6-plus-2026-04-02}
@@ -119,7 +119,7 @@ vision-llm:
     max-long-edge-px: ${VISION_2_MAX_LONG_EDGE_PX:2048}
     timeout-seconds:  ${VISION_2_TIMEOUT_SECONDS:120}
   slot-3:
-    enabled:          ${VISION_3_ENABLED:false}
+    enabled:          ${VISION_3_ENABLED:true}
     base-url:         ${VISION_3_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
     api-key:          ${VISION_3_API_KEY:}
     model:            ${VISION_3_MODEL:qwen3.6-flash}
