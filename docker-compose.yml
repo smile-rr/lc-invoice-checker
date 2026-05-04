@@ -53,13 +53,13 @@ services:
       - "traefik.http.routers.lc-ui-local.rule=Host(`lccheck.infra.local`)"
       - "traefik.http.routers.lc-ui-local.entrypoints=web"
       - "traefik.http.routers.lc-ui-local.service=lc-ui"
-      - "traefik.http.routers.lc-ui-public.rule=Host(`lccheck.moments-plus.com`) && !PathPrefix(`/api`)"
+      # Single public router — passcode-auth covers UI and /api on the same
+      # host; once the user logs in, the browser sends the auth cookie with
+      # /api/* XHRs automatically, so no separate API bypass is needed.
+      - "traefik.http.routers.lc-ui-public.rule=Host(`lccheck.moments-plus.com`)"
       - "traefik.http.routers.lc-ui-public.entrypoints=web,websecure"
       - "traefik.http.routers.lc-ui-public.middlewares=passcode-auth@docker"
       - "traefik.http.routers.lc-ui-public.service=lc-ui"
-      - "traefik.http.routers.lc-api-public.rule=Host(`lccheck.moments-plus.com`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.lc-api-public.entrypoints=web,websecure"
-      - "traefik.http.routers.lc-api-public.service=lc-ui"
 
 networks:
   lc-checker-net:
