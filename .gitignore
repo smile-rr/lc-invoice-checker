@@ -10,6 +10,7 @@ credentials.json
 # IDE
 .vscode/
 .idea/
+.gradle/
 *.iml
 
 # Claude Code
